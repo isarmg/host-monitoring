@@ -25,6 +25,11 @@
   `allow_insecure_http` 只允许操作者为显式本地开发配置启用。
 - Agent 配对凭据、客户端私钥、OTLP token 和本地 spool 均属于主机敏感数据；打包与服务账户
   必须保持平台文档规定的最小权限和原子状态更新语义。
+- 移动库不实现凭据持久化。Android 宿主必须使用 Keystore，iOS/iPadOS 宿主必须使用
+  Keychain，并在经验证的 HTTPS 请求中按需取用凭据；不得把 token 写入 JSON 遥测负载、普通
+  偏好设置、日志或崩溃报告。
+- Android/iOS/iPadOS 遥测只能处理当前应用沙箱和用户授权所暴露的信息。宿主不得通过
+  私有 API、提权或绕过系统后台限制来模仿桌面整机 daemon。
 
 生产部署必须由 Union 生成完整发行、覆盖所有外部内部头并终止 TLS。不得为 Worker 配置
 独立公网反向代理，也不得绕过 Manifest 网关。

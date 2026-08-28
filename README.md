@@ -12,7 +12,7 @@ Union 网关发起出站连接，不能直接访问 Worker 的 loopback 端口�
 
 | 路径 | 作用 |
 |---|---|
-| `agent/` | `unionc-agent`：跨 Linux、Windows、macOS 的只读主机遥测、配对、可靠投递、可选 OTLP 与原生安装包源码 |
+| `agent/` | `unionc-agent`：Linux、Windows、macOS 桌面 daemon，以及 Android、iOS/iPadOS 宿主驱动的只读遥测库 |
 | `host-monitoring-worker/` | `union-host-monitoring-worker`：私有 Backend、动态 Frontend、Manifest、权限、配置 Schema、PostgreSQL migration 和版本元数据 |
 | `protocol/` | `unionc-protocol`：Agent 与 Worker 共用的稳定 JSON DTO 和线级约束 |
 
@@ -30,6 +30,9 @@ Union 网关发起出站连接，不能直接访问 Worker 的 loopback 端口�
   Core 注入给 Worker 的私有进程凭据。
 - Agent 默认拒绝明文 HTTP。`allow_insecure_http` 只用于操作者明确选择的本地开发环境，正式
   部署必须使用 HTTPS。
+- Android 和 iOS/iPadOS 不运行桌面 daemon。原生宿主 App 决定调度与后台时间、只采集
+  沙箱可见信息、用 Android Keystore 或 Apple Keychain 管理凭据，并通过 HTTPS 发送库
+  生成的有界 JSON；本仓库不声称提供整机遥测或永久后台运行。
 - `unionc-protocol` 只定义序列化 DTO 和线级约束，不包含采集、HTTP、鉴权、数据库或进程
   管理逻辑。
 - 动态前端是 Builder 纳入 Union 发行的可信同源代码，不是第三方 JavaScript 沙箱。
@@ -53,16 +56,19 @@ node --test host-monitoring-worker/frontend/entry.test.mjs
 Agent 的可选能力和 Linux 打包契约：
 
 ```console
-cargo check --locked -p unionc-agent --no-default-features --all-targets
+cargo check --locked -p unionc-agent --no-default-features --lib
 cargo check --locked -p unionc-agent --no-default-features --features otlp --all-targets
 cargo check --locked -p unionc-agent --no-default-features --features nvidia --all-targets
 sh agent/packaging/linux/tests/test-lifecycle.sh
 sh agent/packaging/linux/tests/test-build-packages.sh
 ```
 
-CI 在 Linux、Windows 和 macOS 上分别编译并测试 Agent，验证 Linux 生命周期与包构建器、
-Windows PE/WiX/MSI、macOS 安装生命周期，并使用固定摘要的真实 OpenTelemetry Collector
-覆盖 OTLP 端到端路径。GitHub Actions、Rust 工具链和容器镜像均固定到不可变版本。
+CI 在 Linux、Windows 和 macOS 上分别编译并测试桌面 Agent，并对
+`aarch64-linux-android`、`aarch64-apple-ios` 和 `aarch64-apple-ios-sim` 执行无默认 feature 的
+移动库编译检查。iOS 与 iPadOS 共用 Apple device/simulator Rust target，产品身份由宿主
+显式传入。CI 同时验证 Linux 生命周期与包构建器、Windows PE/WiX/MSI、macOS 安装
+生命周期，并使用固定摘要的真实 OpenTelemetry Collector 覆盖 OTLP 端到端路径。
+GitHub Actions、runner 主版本、Rust 工具链和容器镜像均固定。
 
 ## 发布边界
 
