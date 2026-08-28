@@ -34,7 +34,7 @@ tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "rt-multi
 tower-http = { version = "0.6", features = ["trace"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-unionc-protocol = { path = "../protocol" }
+unionc-protocol.workspace = true
 sarmg-platform-gateway = { git = "https://github.com/isarmg/sarmg-platform.git", rev = "c788db2c349f159ad91df93f494c8ef72747a0d0" }
 uuid = { version = "1", features = ["serde", "v4"] }
 

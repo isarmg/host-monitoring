@@ -1,44 +1,46 @@
 # Union Host Monitoring
 
-Union Host Monitoring 是 Union 的主机配对与遥测业务模块源码仓库。仓库独立维护和版本化，
-但不构成可直接暴露到公网的独立产品：Union Builder 在发行构建阶段固定此仓库的不可变
-commit 并打包模块，Union Core 在运行阶段负责启动、监管和停止其私有 Worker。
+Union Host Monitoring 是 Union 主机监控领域的唯一源码仓库。它把主机侧 Agent、平台私有
+Host Worker 和双方共用的线协议放在同一个 Rust workspace 中统一版本化，避免 Agent 与
+Worker 分属不同仓库后出现协议漂移。
+
+本仓库不是可绕过 Union 独立暴露的服务。Union Core 仍是唯一公网入口；Union Builder 在
+发行构建阶段固定本仓库的不可变 commit，并把 Host Worker 纳入所选发行。远端 Agent 只向
+Union 网关发起出站连接，不能直接访问 Worker 的 loopback 端口。
 
 ## 仓库结构
 
 | 路径 | 作用 |
 |---|---|
-| `host-monitoring-worker/` | Backend、动态 Frontend、Manifest、权限、配置 Schema、PostgreSQL migration 和版本元数据 |
-| `protocol/` | `unionc-protocol`，远端 Union Agent 与 Host Worker 共用的稳定 JSON 线协议 |
+| `agent/` | `unionc-agent`：跨 Linux、Windows、macOS 的只读主机遥测、配对、可靠投递、可选 OTLP 与原生安装包源码 |
+| `host-monitoring-worker/` | `union-host-monitoring-worker`：私有 Backend、动态 Frontend、Manifest、权限、配置 Schema、PostgreSQL migration 和版本元数据 |
+| `protocol/` | `unionc-protocol`：Agent 与 Worker 共用的稳定 JSON DTO 和线级约束 |
 
-两个 crate 组成同一个 Rust workspace，版本均为 `0.5.0`。Worker 包名保持
-`union-host-monitoring-worker`；协议包名保持 `unionc-protocol`。Union Agent 应通过精确
-commit 固定协议依赖，例如：
+三个 crate 统一采用版本 `0.5.0`、Rust `1.98`、Apache-2.0 和单一作者
+`sarmg <isarmg@163.com>`。`unionc-agent` 与 Worker 均通过 workspace path 依赖
+`unionc-protocol`；仓库内部禁止通过 Git URL、分支或 tag 反向依赖自身。
 
-```toml
-unionc-protocol = { git = "https://github.com/isarmg/host-monitoring.git", rev = "<immutable-commit-sha>" }
-```
+## 运行与安全边界
 
-禁止使用分支或可移动 tag 作为发行依赖。协议 crate 只定义序列化 DTO 和线级约束，不包含
-采集、HTTP、鉴权或持久化逻辑。
-
-## 部署边界
-
-- Union Core 是唯一公网入口；Worker 只能监听 loopback，不能配置独立公网监听或反向代理站点。
-- Worker 只接受 Union 为当前进程生成并注入的 `gateway-v1` 身份，拥有独立 PostgreSQL
-  database/schema，不访问 Core 或其他模块的数据。
-- 管理台激活使用平台认证端点 `/agent/v2/activate-admin`；远端 Agent/Tray 使用模块能力端点
-  `/agent/v2/activate`。两者消费相同类型的一次性激活码，但鉴权边界不能合并。
-- Agent 报告、配对创建/读取/状态以及 Agent 激活保留模块领域认证；其他管理路由由 Union
-  会话、RBAC 与 CSRF 保护。
+- Union Core 负责公网 TLS、身份认证、RBAC、网关路由、进程监管、健康检查、审计和模块
+  生命周期；Host Worker 只能监听 loopback。
+- Host Worker 使用模块专属 PostgreSQL database/schema 和 migration，不访问 Core 或其他
+  模块的数据。
+- Agent 在被监控主机上独立运行，通过 Union 公网网关完成配对和报告；Agent 永远不会获得
+  Core 注入给 Worker 的私有进程凭据。
+- Agent 默认拒绝明文 HTTP。`allow_insecure_http` 只用于操作者明确选择的本地开发环境，正式
+  部署必须使用 HTTPS。
+- `unionc-protocol` 只定义序列化 DTO 和线级约束，不包含采集、HTTP、鉴权、数据库或进程
+  管理逻辑。
 - 动态前端是 Builder 纳入 Union 发行的可信同源代码，不是第三方 JavaScript 沙箱。
 
-完整运行契约、迁移和本地测试命令见
-[`host-monitoring-worker/README.md`](host-monitoring-worker/README.md)。
+Worker 的完整契约见
+[`host-monitoring-worker/README.md`](host-monitoring-worker/README.md)，Agent 的配置、功能和
+平台打包入口见 [`agent/README.md`](agent/README.md)。
 
 ## 验证
 
-本地使用仓库固定的 Rust 1.98 工具链兼容目标执行：
+本地基础验证：
 
 ```console
 cargo fmt --all -- --check
@@ -48,8 +50,25 @@ cargo clippy --locked --workspace --all-targets -- -D warnings
 node --test host-monitoring-worker/frontend/entry.test.mjs
 ```
 
-Rust 集成测试同时验证 Manifest 中的双激活端点、平台权限和五个模块认证路由。CI 固定
-Rust `1.98.0`，避免 `stable` 漂移改变构建结果。
+Agent 的可选能力和 Linux 打包契约：
+
+```console
+cargo check --locked -p unionc-agent --no-default-features --all-targets
+cargo check --locked -p unionc-agent --no-default-features --features otlp --all-targets
+cargo check --locked -p unionc-agent --no-default-features --features nvidia --all-targets
+sh agent/packaging/linux/tests/test-lifecycle.sh
+sh agent/packaging/linux/tests/test-build-packages.sh
+```
+
+CI 在 Linux、Windows 和 macOS 上分别编译并测试 Agent，验证 Linux 生命周期与包构建器、
+Windows PE/WiX/MSI、macOS 安装生命周期，并使用固定摘要的真实 OpenTelemetry Collector
+覆盖 OTLP 端到端路径。GitHub Actions、Rust 工具链和容器镜像均固定到不可变版本。
+
+## 发布边界
+
+本仓库 CI 验证源码和原生打包契约，但不会把 Worker 作为独立公网产品发布。Worker 的选择
+与交付由 Union Builder 的完整发行图负责。Agent 是远端配套程序，其安装介质如何随 Union
+发行交付属于上层发行策略；这里不建立第二套可独立演进的平台版本线。
 
 ## 许可证与安全
 

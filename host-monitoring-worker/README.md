@@ -98,8 +98,8 @@ SQLite copy; this tool correctly refuses to pretend that new PostgreSQL telemetr
 
 This crate is a member of the standalone `host-monitoring` source workspace; it is not a member of
 the Union Core repository. The sibling `../protocol` crate is the stable wire contract shared with
-the remotely deployed Union Agent. Agent consumers must pin the `host-monitoring` repository by an
-immutable commit rather than assuming a common source checkout.
+the remotely deployed Agent in `../agent`; both consume it through the same workspace path, making
+this repository the authoritative source for the complete Host Monitoring domain.
 
 Union Builder assembles this module through its Manifest-defined package. Union Core owns the
 public routes, generates the process credential, removes untrusted internal headers/cookies and
