@@ -15,3 +15,5 @@
   `aarch64-apple-ios-sim` 库编译矩阵；iOS 与 iPadOS 共用 Apple target。
 - Host Worker 保持独立 PostgreSQL 数据边界、loopback-only 私有进程和 Union-only 网关入口。
 - 明确本仓库不形成绕过 Union 的独立公网服务或第二套平台版本线。
+- Agent 客户端资产改由 Union Builder Release 统一发布：桌面端交付 Linux/Windows/macOS 安装
+  资产，Android/iOS/iPadOS 交付宿主集成用 Rust SDK 源码包；本仓库不创建独立 Agent Release。

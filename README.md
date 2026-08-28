@@ -73,8 +73,9 @@ GitHub Actions、runner 主版本、Rust 工具链和容器镜像均固定。
 ## 发布边界
 
 本仓库 CI 验证源码和原生打包契约，但不会把 Worker 作为独立公网产品发布。Worker 的选择
-与交付由 Union Builder 的完整发行图负责。Agent 是远端配套程序，其安装介质如何随 Union
-发行交付属于上层发行策略；这里不建立第二套可独立演进的平台版本线。
+与交付由 Union Builder 的完整发行图负责。Agent 是远端配套程序，其桌面安装资产与移动嵌入式
+Rust SDK 由 Union Builder Release 统一构建、校验和发布，并绑定本仓库不可变 revision；这里不
+建立第二套可独立演进的 Agent Release。移动 SDK 仍不是 APK/IPA，也不改变原生宿主责任边界。
 
 ## 许可证与安全
 
