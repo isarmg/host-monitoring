@@ -1,0 +1,15 @@
+//! Current JSON wire types shared by the remote Union Agent and Host worker.
+//!
+//! This crate deliberately contains no collection, validation, persistence, or HTTP logic. The
+//! Agent owns construction at platform boundaries and the Host worker owns trust-boundary
+//! validation; both sides use these exact DTOs so their wire representations cannot drift
+//! independently even though they live in separately versioned repositories.
+
+#![forbid(unsafe_code)]
+
+pub mod json_u64;
+mod pairing;
+mod report;
+
+pub use pairing::*;
+pub use report::*;
