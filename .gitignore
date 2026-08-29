@@ -14,3 +14,5 @@ Thumbs.db
 .idea/
 .vscode/
 *.swp
+module-web/node_modules/
+module-web/dist/

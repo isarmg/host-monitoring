@@ -1,4 +1,4 @@
-//! Current JSON wire types shared by the remote Union Agent and Host worker.
+//! Current JSON wire types shared by the remote host-m-agent and Host worker.
 //!
 //! This crate deliberately contains no collection, validation, persistence, or HTTP logic. The
 //! Agent owns construction at platform boundaries and the Host worker owns trust-boundary

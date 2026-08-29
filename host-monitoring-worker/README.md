@@ -6,7 +6,11 @@ The crate is `publish = false`; Builder packages it independently when the Union
 includes the module. Its business code is not linked into Core or Web Shell.
 
 The source package contract is described by `manifest.json`, `permissions.json`,
-`config/schema.json`, `version.json`, `frontend/` and the module-owned `migrations/`. Builder
+`config/schema.json`, `version.json`, `frontend/` and the module-owned `migrations/`.
+The checked-in `frontend/` assets are deterministically generated from the repository-level
+`module-web/` React/TypeScript project. It restores the original Union host cards, Agent invite
+flow, editable remarks, hardware detail tabs and metric history while continuing to use the
+dynamic module API; React is supplied by Web Shell and is not bundled a second time. Builder
 decides whether the package is included in an immutable Union release; Union Runtime decides
 whether that already-included private process is enabled. Runtime installation or downloading
 new business code is outside this contract.
@@ -98,7 +102,7 @@ SQLite copy; this tool correctly refuses to pretend that new PostgreSQL telemetr
 
 This crate is a member of the standalone `host-monitoring` source workspace; it is not a member of
 the Union Core repository. The sibling `../protocol` crate is the stable wire contract shared with
-the remotely deployed Agent in `../agent`; both consume it through the same workspace path, making
+the remotely deployed Agent in `../host-m-agent`; both consume it through the same workspace path, making
 this repository the authoritative source for the complete Host Monitoring domain.
 
 Union Builder assembles this module through its Manifest-defined package. Union Core owns the

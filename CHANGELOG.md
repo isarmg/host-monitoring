@@ -2,7 +2,10 @@
 
 ## 0.5.0 - Unreleased
 
-- 将 `unionc-agent` 的完整源码、配置、测试及 Linux、Windows、macOS 打包资产从 Union Core
+- 主机侧组件统一采用 `host-m-agent` 作为源码目录、Cargo package/crate、CLI、桌面服务、
+  安装包、移动 SDK、环境变量和管理界面产品名；设备协议的 `/agent/v1`、`/agent/v2`
+  路径保持稳定。
+- 将 `host-m-agent` 的完整源码、配置、测试及 Linux、Windows、macOS 打包资产从 Union Core
   仓库迁入 Host Monitoring，使本仓库成为 Host Worker、协议和 Agent 的唯一源码仓库。
 - Agent 与 Worker 改为通过 workspace path 使用同一 `unionc-protocol`，消除仓库内部 Git
   自依赖和跨仓协议版本漂移。
