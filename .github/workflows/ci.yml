@@ -30,24 +30,24 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          grep -Fx 'unionc-protocol = { path = "protocol" }' Cargo.toml
-          grep -Fx 'unionc-protocol.workspace = true' host-m-agent/Cargo.toml
-          grep -Fx 'unionc-protocol.workspace = true' host-monitoring-worker/Cargo.toml
-          if grep -RE 'unionc-protocol[[:space:]]*=.*(git|rev|branch|tag)[[:space:]]*=' \
-              -- Cargo.toml host-m-agent/Cargo.toml host-monitoring-worker/Cargo.toml; then
+          grep -Fx 'host-protocol = { path = "protocol" }' Cargo.toml
+          grep -Fx 'host-protocol.workspace = true' host-m-agent/Cargo.toml
+          grep -Fx 'host-protocol.workspace = true' host-monitoring-server/Cargo.toml
+          if grep -RE 'host-protocol[[:space:]]*=.*(git|rev|branch|tag)[[:space:]]*=' \
+              -- Cargo.toml host-m-agent/Cargo.toml host-monitoring-server/Cargo.toml; then
             echo 'Host components must use the authoritative workspace protocol path.' >&2
             exit 1
           fi
           cargo pkgid --locked -p host-m-agent | grep -F '#0.6.0'
-          cargo pkgid --locked -p union-host-monitoring-worker \
-            | grep -F '#union-host-monitoring-worker@0.6.0'
-          cargo pkgid --locked -p unionc-protocol | grep -F '#unionc-protocol@0.6.0'
+          cargo pkgid --locked -p host-monitoring-server \
+            | grep -F '#host-monitoring-server@0.6.0'
+          cargo pkgid --locked -p host-protocol | grep -F '#host-protocol@0.6.0'
       - name: Check worker and protocol
-        run: cargo check --locked -p union-host-monitoring-worker -p unionc-protocol --all-targets
+        run: cargo check --locked -p host-monitoring-server -p host-protocol --all-targets
       - name: Test worker, protocol, and Manifest contracts
-        run: cargo test --locked -p union-host-monitoring-worker -p unionc-protocol
+        run: cargo test --locked -p host-monitoring-server -p host-protocol
       - name: Clippy
-        run: cargo clippy --locked -p union-host-monitoring-worker -p unionc-protocol --all-targets -- -D warnings
+        run: cargo clippy --locked -p host-monitoring-server -p host-protocol --all-targets -- -D warnings
 
   host-m-agent:
     name: Desktop host-m-agent (${{ matrix.os }})
@@ -214,12 +214,12 @@ jobs:
         with:
           node-version: '26.7.0'
           cache: npm
-          cache-dependency-path: module-web/package-lock.json
+          cache-dependency-path: web/package.json
       - name: Install module frontend dependencies
-        working-directory: module-web
-        run: npm ci
+        working-directory: web
+        run: npm install
       - name: Build and test the dynamic frontend
-        working-directory: module-web
-        run: npm test
-      - name: Verify committed frontend artifacts are current
-        run: git diff --exit-code -- host-monitoring-worker/frontend
+        working-directory: web
+        run: npm run build
+      - name: Verify standalone web build
+        run: npm run build
