@@ -65,10 +65,17 @@ impl TokenBucket {
 }
 
 pub fn router(state: AppState) -> Router {
-    let console = Router::new()
-        .route("/api/v1/auth/login", post(login))
+    let public_auth = Router::new().route("/api/v1/auth/login", post(login));
+
+    let protected_auth = Router::new()
         .route("/api/v1/auth/logout", post(logout))
         .route("/api/v1/auth/session", get(session))
+        .route_layer(middleware::from_fn_with_state(
+            state.clone(),
+            console_admission,
+        ));
+
+    let console = Router::new()
         .route("/api/monitoring/hosts", get(list_hosts))
         .route("/api/monitoring/hosts/{host_id}", get(host_detail))
         .route("/api/monitoring/hosts/{host_id}/history", get(host_history))
@@ -110,10 +117,12 @@ pub fn router(state: AppState) -> Router {
         .route("/health", get(live))
         .route("/health/live", get(live))
         .route("/health/ready", get(ready))
+        .merge(public_auth)
+        .merge(protected_auth)
         .merge(console)
         .merge(agent)
         .fallback_service(ServeDir::new(
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("web/dist"),
+            std::env::var("HOST_MONITORING_STATIC_DIR").unwrap_or_else(|_| "web/dist".to_string()),
         ))
         .with_state(state)
 }
