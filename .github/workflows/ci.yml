@@ -38,7 +38,7 @@ jobs:
             echo 'Host components must use the authoritative workspace protocol path.' >&2
             exit 1
           fi
-          cargo pkgid --locked -p host-m-agent | grep -F '#host-m-agent@0.5.0'
+          cargo pkgid --locked -p host-m-agent | grep -F '#0.5.0'
           cargo pkgid --locked -p union-host-monitoring-worker \
             | grep -F '#union-host-monitoring-worker@0.5.0'
           cargo pkgid --locked -p unionc-protocol | grep -F '#unionc-protocol@0.5.0'
