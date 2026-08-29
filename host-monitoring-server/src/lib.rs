@@ -1,8 +1,13 @@
 pub mod auth;
+pub mod application;
+pub mod cli;
 pub mod config;
+pub mod domain;
 pub mod error;
 pub mod http;
+pub mod infrastructure;
 pub mod model;
+pub mod operations;
 pub mod store;
 
 use sha2::{Digest, Sha256};
