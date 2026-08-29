@@ -28,8 +28,8 @@ sqlx = { version = "0.8", default-features = false, features = [
   "json",
   "macros",
   "migrate",
-  "postgres",
-  "runtime-tokio-rustls",
+  "sqlite",
+  "runtime-tokio",
   "uuid",
 ] }
 thiserror = "2"

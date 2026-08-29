@@ -30,13 +30,13 @@ use crate::{
 
 #[derive(Clone)]
 pub struct AppState {
-    pub pool: sqlx::PgPool,
+    pub pool: sqlx::SqlitePool,
     pub auth: crate::auth::Auth,
     report_buckets: Arc<Mutex<HashMap<String, TokenBucket>>>,
 }
 
 impl AppState {
-    pub fn new(pool: sqlx::PgPool, auth: crate::auth::Auth) -> Self {
+    pub fn new(pool: sqlx::SqlitePool, auth: crate::auth::Auth) -> Self {
         Self {
             pool,
             auth,
@@ -172,12 +172,9 @@ async fn session(
     Extension(principal): Extension<Principal>,
 ) -> Result<Json<serde_json::Value>> {
     let user = sqlx::query_scalar::<_, String>(
-        "SELECT email FROM host_monitoring.auth_users WHERE user_id=$1 AND active=true",
+        "SELECT email FROM auth_users WHERE user_id=? AND active=true",
     )
-    .bind(
-        uuid::Uuid::parse_str(&principal.subject)
-            .map_err(|_| Error::Unauthorized)?,
-    )
+    .bind(&principal.subject)
     .fetch_one(&state.pool)
     .await
     .map_err(|_| Error::Unauthorized)?;
@@ -575,7 +572,7 @@ mod tests {
     use tower::ServiceExt;
 
     fn app() -> Router {
-        let pool = sqlx::postgres::PgPoolOptions::new()
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
             .connect_lazy("postgresql://localhost/unused")
             .unwrap();
         let auth = crate::auth::Auth::new(

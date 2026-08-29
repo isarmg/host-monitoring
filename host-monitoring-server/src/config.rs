@@ -81,10 +81,8 @@ pub struct ValidatedConfig {
 impl ValidatedConfig {
     pub fn from_runtime() -> anyhow::Result<Self> {
         let database_url = required("HOST_MONITORING_DATABASE_URL")?;
-        if !database_url.starts_with("postgresql://")
-            && !database_url.starts_with("postgres://")
-        {
-            anyhow::bail!("HOST_MONITORING_DATABASE_URL must be a PostgreSQL URL");
+        if !database_url.starts_with("sqlite:") && !database_url.starts_with("sqlite://") {
+            anyhow::bail!("HOST_MONITORING_DATABASE_URL must be a SQLite URL");
         }
         let session_secret = STANDARD
             .decode(required("HOST_MONITORING_SESSION_SECRET")?)

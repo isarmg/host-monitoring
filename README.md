@@ -19,7 +19,7 @@ cargo build --workspace --release
 ## Run the server
 
 ```text
-HOST_MONITORING_DATABASE_URL=postgresql://...
+HOST_MONITORING_DATABASE_URL=sqlite:///var/lib/isarmg/host-monitoring/db/app.db
 HOST_MONITORING_SESSION_SECRET=<base64 at least 32 bytes>
 HOST_MONITORING_BOOTSTRAP_ADMIN_EMAIL=admin@example.com
 HOST_MONITORING_BOOTSTRAP_ADMIN_PASSWORD=<initial admin password>

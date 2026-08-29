@@ -1,134 +1,100 @@
-CREATE SCHEMA IF NOT EXISTS host_monitoring;
-
-CREATE TABLE IF NOT EXISTS host_monitoring.monitored_hosts (
-    host_id                  uuid PRIMARY KEY,
-    name                     text NOT NULL CHECK (length(btrim(name)) BETWEEN 1 AND 255),
-    os                       text NOT NULL CHECK (length(btrim(os)) BETWEEN 1 AND 64),
-    os_version               text,
-    kernel_version           text,
-    arch                     text NOT NULL CHECK (length(btrim(arch)) BETWEEN 1 AND 64),
-    agent_version            text NOT NULL CHECK (length(btrim(agent_version)) BETWEEN 1 AND 128),
-    capabilities             jsonb NOT NULL DEFAULT '[]'::jsonb
-                                 CHECK (jsonb_typeof(capabilities) = 'array'),
-    registered_at            timestamptz NOT NULL DEFAULT now(),
-    last_seen_at             timestamptz NOT NULL DEFAULT now(),
-    latest_report_id         uuid,
-    latest_collected_at      timestamptz,
-    latest_interval_seconds  double precision,
-    lifecycle_status         text NOT NULL DEFAULT 'active'
-                                 CHECK (lifecycle_status IN ('active', 'revoked')),
-    revoked_at               timestamptz,
-    CHECK (latest_interval_seconds IS NULL OR
-           (latest_interval_seconds > 0 AND latest_interval_seconds <= 3600))
+CREATE TABLE monitored_hosts (
+    host_id                  TEXT PRIMARY KEY,
+    name                     TEXT NOT NULL,
+    os                       TEXT NOT NULL,
+    os_version               TEXT,
+    kernel_version           TEXT,
+    arch                     TEXT NOT NULL,
+    agent_version            TEXT NOT NULL,
+    capabilities             TEXT NOT NULL DEFAULT '[]',
+    registered_at            TEXT NOT NULL,
+    last_seen_at             TEXT NOT NULL,
+    latest_report_id         TEXT,
+    latest_collected_at      TEXT,
+    latest_interval_seconds  REAL,
+    lifecycle_status         TEXT NOT NULL DEFAULT 'active',
+    revoked_at               TEXT
 );
 
-CREATE INDEX IF NOT EXISTS monitored_hosts_registered
-    ON host_monitoring.monitored_hosts(registered_at, host_id);
-CREATE INDEX IF NOT EXISTS monitored_hosts_last_seen
-    ON host_monitoring.monitored_hosts(last_seen_at DESC);
+CREATE INDEX monitored_hosts_registered ON monitored_hosts(registered_at, host_id);
+CREATE INDEX monitored_hosts_last_seen ON monitored_hosts(last_seen_at DESC);
 
-CREATE TABLE IF NOT EXISTS host_monitoring.agent_metric_reports (
-    report_id                             uuid PRIMARY KEY,
-    host_id                               uuid NOT NULL
-                                             REFERENCES host_monitoring.monitored_hosts(host_id)
-                                             ON DELETE CASCADE,
-    schema_version                        integer NOT NULL CHECK (schema_version > 0),
-    collected_at                          timestamptz NOT NULL,
-    received_at                           timestamptz NOT NULL DEFAULT now(),
-    interval_seconds                      double precision NOT NULL
-                                             CHECK (interval_seconds > 0 AND interval_seconds <= 3600),
-    payload                               jsonb CHECK (payload IS NULL OR jsonb_typeof(payload) = 'object'),
-    cpu_usage_percent                     double precision,
-    memory_usage_percent                  double precision,
-    network_received_bytes_per_second     double precision,
-    network_transmitted_bytes_per_second  double precision,
-    disk_read_bytes_per_second            double precision,
-    disk_written_bytes_per_second         double precision,
-    max_temperature_celsius               double precision,
-    gpu_utilization_percent               double precision,
-    gpu_memory_usage_percent              double precision
+CREATE TABLE agent_metric_reports (
+    report_id                             TEXT PRIMARY KEY,
+    host_id                               TEXT NOT NULL REFERENCES monitored_hosts(host_id) ON DELETE CASCADE,
+    schema_version                        INTEGER NOT NULL,
+    collected_at                          TEXT NOT NULL,
+    received_at                           TEXT NOT NULL,
+    interval_seconds                      REAL NOT NULL,
+    payload                               TEXT,
+    cpu_usage_percent                     REAL,
+    memory_usage_percent                  REAL,
+    network_received_bytes_per_second     REAL,
+    network_transmitted_bytes_per_second  REAL,
+    disk_read_bytes_per_second            REAL,
+    disk_written_bytes_per_second         REAL,
+    max_temperature_celsius               REAL,
+    gpu_utilization_percent               REAL,
+    gpu_memory_usage_percent              REAL
 );
 
-CREATE INDEX IF NOT EXISTS agent_metric_reports_host_collected
-    ON host_monitoring.agent_metric_reports(host_id, collected_at DESC, report_id DESC);
-CREATE INDEX IF NOT EXISTS agent_metric_reports_received
-    ON host_monitoring.agent_metric_reports(received_at);
+CREATE INDEX agent_metric_reports_host_collected ON agent_metric_reports(host_id, collected_at DESC, report_id DESC);
+CREATE INDEX agent_metric_reports_received ON agent_metric_reports(received_at);
 
-CREATE TABLE IF NOT EXISTS host_monitoring.agent_credentials (
-    credential_id   uuid PRIMARY KEY,
-    host_id          uuid NOT NULL
-                         REFERENCES host_monitoring.monitored_hosts(host_id) ON DELETE CASCADE,
-    token_hash       text NOT NULL UNIQUE CHECK (token_hash ~ '^[0-9a-f]{64}$'),
-    issued_at        timestamptz NOT NULL DEFAULT now(),
-    last_used_at     timestamptz,
-    revoked_at       timestamptz
+CREATE TABLE agent_credentials (
+    credential_id   TEXT PRIMARY KEY,
+    host_id         TEXT NOT NULL REFERENCES monitored_hosts(host_id) ON DELETE CASCADE,
+    token_hash      TEXT NOT NULL UNIQUE,
+    issued_at       TEXT NOT NULL,
+    last_used_at    TEXT,
+    revoked_at      TEXT
 );
 
-CREATE INDEX IF NOT EXISTS agent_credentials_host
-    ON host_monitoring.agent_credentials(host_id);
-CREATE INDEX IF NOT EXISTS agent_credentials_active_token
-    ON host_monitoring.agent_credentials(token_hash) WHERE revoked_at IS NULL;
+CREATE INDEX agent_credentials_host ON agent_credentials(host_id);
+CREATE INDEX agent_credentials_active_token ON agent_credentials(token_hash) WHERE revoked_at IS NULL;
 
-CREATE TABLE IF NOT EXISTS host_monitoring.agent_instance_invites (
-    invite_id             uuid PRIMARY KEY,
-    instance_id           uuid NOT NULL,
-    activation_code_hash  text NOT NULL UNIQUE CHECK (activation_code_hash ~ '^[0-9a-f]{64}$'),
-    display_name          text NOT NULL CHECK (length(btrim(display_name)) BETWEEN 1 AND 255),
-    status                text NOT NULL DEFAULT 'pending'
-                               CHECK (status IN ('pending', 'active', 'cancelled')),
-    expires_at            timestamptz NOT NULL,
-    created_at            timestamptz NOT NULL DEFAULT now(),
-    activated_at          timestamptz,
-    cancelled_at          timestamptz,
-    CHECK (expires_at > created_at),
-    CHECK (
-      (status = 'pending' AND activated_at IS NULL AND cancelled_at IS NULL) OR
-      (status = 'active' AND activated_at IS NOT NULL AND cancelled_at IS NULL) OR
-      (status = 'cancelled' AND cancelled_at IS NOT NULL)
-    )
+CREATE TABLE agent_instance_invites (
+    invite_id             TEXT PRIMARY KEY,
+    instance_id           TEXT NOT NULL,
+    activation_code_hash  TEXT NOT NULL UNIQUE,
+    display_name          TEXT NOT NULL,
+    status                TEXT NOT NULL DEFAULT 'pending',
+    expires_at            TEXT NOT NULL,
+    created_at            TEXT NOT NULL,
+    activated_at          TEXT,
+    cancelled_at          TEXT
 );
 
-CREATE INDEX IF NOT EXISTS agent_instance_invites_created
-    ON host_monitoring.agent_instance_invites(created_at DESC);
-CREATE UNIQUE INDEX IF NOT EXISTS agent_instance_invites_one_pending
-    ON host_monitoring.agent_instance_invites(instance_id) WHERE status = 'pending';
+CREATE INDEX agent_instance_invites_created ON agent_instance_invites(created_at DESC);
+CREATE UNIQUE INDEX agent_instance_invites_one_pending ON agent_instance_invites(instance_id) WHERE status = 'pending';
 
-CREATE TABLE IF NOT EXISTS host_monitoring.agent_pairing_requests (
-    request_id           uuid PRIMARY KEY,
-    requested_host_id    uuid NOT NULL,
-    os                   text NOT NULL CHECK (length(btrim(os)) BETWEEN 1 AND 64),
-    os_version           text,
-    kernel_version       text,
-    arch                 text NOT NULL CHECK (length(btrim(arch)) BETWEEN 1 AND 64),
-    agent_version        text NOT NULL CHECK (length(btrim(agent_version)) BETWEEN 1 AND 128),
-    token_hash           text NOT NULL UNIQUE CHECK (token_hash ~ '^[0-9a-f]{64}$'),
-    polling_secret_hash  text NOT NULL UNIQUE CHECK (polling_secret_hash ~ '^[0-9a-f]{64}$'),
-    status               text NOT NULL DEFAULT 'pending'
-                              CHECK (status IN ('pending', 'active', 'denied')),
-    invite_id            uuid UNIQUE REFERENCES host_monitoring.agent_instance_invites(invite_id),
-    instance_id          uuid REFERENCES host_monitoring.monitored_hosts(host_id) ON DELETE CASCADE,
-    expires_at           timestamptz NOT NULL,
-    created_at           timestamptz NOT NULL DEFAULT now(),
-    activated_at         timestamptz,
-    CHECK (expires_at > created_at),
-    CHECK (
-      (status = 'pending' AND invite_id IS NULL AND instance_id IS NULL AND activated_at IS NULL) OR
-      (status = 'active' AND invite_id IS NOT NULL AND instance_id IS NOT NULL AND activated_at IS NOT NULL) OR
-      status = 'denied'
-    )
+CREATE TABLE agent_pairing_requests (
+    request_id           TEXT PRIMARY KEY,
+    requested_host_id    TEXT NOT NULL,
+    os                   TEXT NOT NULL,
+    os_version           TEXT,
+    kernel_version       TEXT,
+    arch                 TEXT NOT NULL,
+    agent_version        TEXT NOT NULL,
+    token_hash           TEXT NOT NULL UNIQUE,
+    polling_secret_hash  TEXT NOT NULL UNIQUE,
+    status               TEXT NOT NULL DEFAULT 'pending',
+    invite_id            TEXT UNIQUE,
+    instance_id          TEXT,
+    expires_at           TEXT NOT NULL,
+    created_at           TEXT NOT NULL,
+    activated_at         TEXT
 );
 
-CREATE INDEX IF NOT EXISTS agent_pairing_requests_expiry
-    ON host_monitoring.agent_pairing_requests(expires_at) WHERE status = 'pending';
+CREATE INDEX agent_pairing_requests_expiry ON agent_pairing_requests(expires_at) WHERE status = 'pending';
 
-CREATE TABLE IF NOT EXISTS host_monitoring.audit_events (
-    event_id      bigserial PRIMARY KEY,
-    action        text NOT NULL CHECK (length(action) BETWEEN 1 AND 128),
-    target        text NOT NULL CHECK (length(target) BETWEEN 1 AND 128),
-    detail        text,
-    actor         text NOT NULL,
-    created_at    timestamptz NOT NULL DEFAULT now()
+CREATE TABLE audit_events (
+    event_id      INTEGER PRIMARY KEY AUTOINCREMENT,
+    action        TEXT NOT NULL,
+    target        TEXT NOT NULL,
+    detail        TEXT,
+    actor         TEXT NOT NULL,
+    created_at    TEXT NOT NULL
 );
 
-CREATE INDEX IF NOT EXISTS audit_events_created
-    ON host_monitoring.audit_events(created_at DESC);
+CREATE INDEX audit_events_created ON audit_events(created_at DESC);
