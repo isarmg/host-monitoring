@@ -2,7 +2,7 @@
 resolver = "3"
 members = [
   "host-m-agent",
-  "host-monitoring-worker",
+  "host-monitoring-server",
   "protocol",
 ]
 

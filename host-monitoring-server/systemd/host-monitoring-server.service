@@ -1,0 +1,26 @@
+[Unit]
+Description=Host Monitoring Server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=isarmg-host
+Group=isarmg-host
+ExecStart=/opt/isarmg/host-monitoring/current/bin/host-monitoring-server serve
+StateDirectory=isarmg/host-monitoring
+RuntimeDirectory=isarmg/host-monitoring
+UMask=0077
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

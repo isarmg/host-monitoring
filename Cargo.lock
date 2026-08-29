@@ -916,6 +916,7 @@ dependencies = [
  "hmac",
  "host-protocol",
  "http-body-util",
+ "isarmg-auth",
  "mime",
  "serde",
  "serde_json",
@@ -1222,6 +1223,20 @@ name = "is_terminal_polyfill"
 version = "1.70.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a6cb138bb79a146c1bd460005623e142ef0181e3d0219cb493e02f7d08a35695"
+
+[[package]]
+name = "isarmg-auth"
+version = "0.1.0"
+source = "git+https://github.com/isarmg/isarmg-foundation.git?rev=a9a38c8f40ec6d17e482ffda25b455465ce2daf7#a9a38c8f40ec6d17e482ffda25b455465ce2daf7"
+dependencies = [
+ "anyhow",
+ "argon2",
+ "base64",
+ "hmac",
+ "http",
+ "sha2",
+ "thiserror 2.0.20",
+]
 
 [[package]]
 name = "itertools"

@@ -34,6 +34,28 @@ async fn main() -> anyhow::Result<()> {
             let pool = store::connect(&database.database_url).await?;
             store::migrate(&pool).await?;
         }
+        Command::AdminCreate(database) => {
+            let pool = store::connect(&database.database_url).await?;
+            store::migrate(&pool).await?;
+            let email = std::env::var("HOST_MONITORING_BOOTSTRAP_ADMIN_EMAIL")
+                .unwrap_or_else(|_| "admin@example.com".to_string());
+            let password = std::env::var("HOST_MONITORING_BOOTSTRAP_ADMIN_PASSWORD").ok();
+            store::ensure_admin_user(&pool, &email, password.as_deref()).await?;
+            println!("{{\"status\":\"admin-ready\",\"email\":{email:?}}}");
+        }
+        Command::Doctor => {
+            let config = host_monitoring_server::config::ValidatedConfig::from_runtime()?;
+            let pool = store::connect(&config.database_url).await?;
+            let database_ready = store::ready(&pool).await;
+            println!(
+                "{{\"status\":\"{}\",\"bind\":\"{}\",\"database_ready\":{database_ready}}}",
+                if database_ready { "ok" } else { "degraded" },
+                config.bind
+            );
+            if !database_ready {
+                anyhow::bail!("database is not ready");
+            }
+        }
     }
     Ok(())
 }

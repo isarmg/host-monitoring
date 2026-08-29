@@ -23,6 +23,10 @@ pub enum Command {
     Serve,
     /// Apply only this project's PostgreSQL migrations.
     Migrate(Database),
+    /// Run a deployment health check against the configured instance.
+    Doctor,
+    /// Create the initial local administrator in the configured database.
+    AdminCreate(Database),
 }
 
 #[derive(Debug, Clone, clap::Args)]
@@ -31,7 +35,7 @@ pub struct Database {
     pub database_url: String,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ValidatedConfig {
     pub bind: SocketAddr,
     pub database_url: String,
