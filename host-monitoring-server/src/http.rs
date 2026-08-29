@@ -409,7 +409,7 @@ async fn activate(
 }
 
 fn activation_url(request_id: uuid::Uuid) -> String {
-    format!("/modules/host-monitoring/activate/{request_id}")
+    format!("/activate/{request_id}")
 }
 
 async fn report(
@@ -586,7 +586,7 @@ mod tests {
         let request_id = uuid::Uuid::parse_str("00000000-0000-4000-8000-000000000001").unwrap();
         assert_eq!(
             activation_url(request_id),
-            "/modules/host-monitoring/activate/00000000-0000-4000-8000-000000000001"
+            "/activate/00000000-0000-4000-8000-000000000001"
         );
     }
 
