@@ -10,7 +10,7 @@ fn otlp_test_config(endpoint: String) -> (AgentConfig, std::path::PathBuf) {
     let instance_id = Uuid::new_v4();
     let request_id = Uuid::new_v4();
     let report_endpoint =
-        "https://unionc.example/api/modules/host-monitoring/host-m-agent/v1/report";
+        "https://host-monitoring.example/api/modules/host-monitoring/host-m-agent/v1/report";
     std::fs::write(state_dir.join("agent-token"), "test-only-host-token")
         .expect("seed paired test credential");
     std::fs::write(state_dir.join("host-id"), instance_id.to_string())
@@ -34,7 +34,7 @@ fn otlp_test_config(endpoint: String) -> (AgentConfig, std::path::PathBuf) {
             "generation": Uuid::new_v4(),
             "request_id": request_id,
             "activation_url": format!(
-                "https://unionc.example/modules/host-monitoring/activate/{request_id}"
+                "https://host-monitoring.example/modules/host-monitoring/activate/{request_id}"
             ),
             "instance_id": instance_id,
             "report_endpoint": report_endpoint,

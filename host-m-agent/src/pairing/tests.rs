@@ -13,7 +13,7 @@ mod tests {
     fn test_config(directory: PathBuf) -> AgentConfig {
         let config_path = directory.join("config.json");
         AgentConfig {
-            endpoint: "https://unionc.example/api/modules/host-monitoring/host-m-agent/v1/report".into(),
+            endpoint: "https://host-monitoring.example/api/modules/host-monitoring/host-m-agent/v1/report".into(),
             config_path: Some(config_path),
             state_dir: directory,
             ..AgentConfig::default()
@@ -35,20 +35,20 @@ mod tests {
     fn pairing_status_url_appends_path_segments_without_query_or_fragment_ambiguity() {
         let request_id = Uuid::new_v4();
         let endpoint = pairing_status_endpoint(
-            "https://unionc.example/api/modules/host-monitoring/host-m-agent/v1/pairing-requests/",
+            "https://host-monitoring.example/api/modules/host-monitoring/host-m-agent/v1/pairing-requests/",
             request_id,
         )
         .unwrap();
         assert_eq!(
             endpoint.as_str(),
             format!(
-                "https://unionc.example/api/modules/host-monitoring/host-m-agent/v1/pairing-requests/{request_id}/status"
+                "https://host-monitoring.example/api/modules/host-monitoring/host-m-agent/v1/pairing-requests/{request_id}/status"
             )
         );
 
         for invalid in [
-            "https://unionc.example/api/modules/host-monitoring/host-m-agent/v1/pairing-requests?tenant=one",
-            "https://unionc.example/api/modules/host-monitoring/host-m-agent/v1/pairing-requests#bootstrap",
+            "https://host-monitoring.example/api/modules/host-monitoring/host-m-agent/v1/pairing-requests?tenant=one",
+            "https://host-monitoring.example/api/modules/host-monitoring/host-m-agent/v1/pairing-requests#bootstrap",
         ] {
             assert!(pairing_status_endpoint(invalid, request_id).is_err());
         }
@@ -436,7 +436,7 @@ mod tests {
         assert!(
             serde_json::from_value::<CreatePairingResponse>(serde_json::json!({
                 "request_id": Uuid::new_v4(),
-                "activation_url": "https://unionc.example/agent/activate/request",
+                "activation_url": "https://host-monitoring.example/agent/activate/request",
                 "expires_in": 300,
                 "poll_interval": 2,
                 "enrollment_secret": "obsolete"
@@ -446,7 +446,7 @@ mod tests {
         assert!(
             serde_json::from_value::<CreatePairingResponse>(serde_json::json!({
                 "request_id": Uuid::new_v4().to_string().replace('-', ""),
-                "activation_url": "https://unionc.example/agent/activate/request",
+                "activation_url": "https://host-monitoring.example/agent/activate/request",
                 "expires_in": 300,
                 "poll_interval": 2
             }))
@@ -590,7 +590,7 @@ mod tests {
         let marker = "uci_SECRET_MARKER_MUST_NOT_LEAK";
         let body = format!(r#"{{"status":"{marker}"}}"#);
         let endpoint = format!(
-            "https://user:{marker}@unionc.example/api/modules/host-monitoring/host-m-agent/v1/pairing-requests?key={marker}#{marker}"
+            "https://user:{marker}@host-monitoring.example/api/modules/host-monitoring/host-m-agent/v1/pairing-requests?key={marker}#{marker}"
         );
         let error = parse_pairing_json::<PairingStatusResponse>(
             body.as_bytes(),
@@ -600,7 +600,7 @@ mod tests {
         )
         .expect_err("an unknown status must not be accepted");
         let rendered = format!("{error:#}");
-        assert!(rendered.contains("Server origin https://unionc.example"));
+        assert!(rendered.contains("Server origin https://host-monitoring.example"));
         assert!(rendered.contains("Content-Type: application/json"));
         assert!(!rendered.contains(marker));
         assert!(!rendered.contains("unknown variant"));
@@ -624,11 +624,11 @@ mod tests {
     fn relative_activation_url_is_resolved_to_the_console_origin() {
         assert_eq!(
             resolve_activation_url(
-                "https://unionc.example/api/modules/host-monitoring/host-m-agent/v1/pairing-requests",
+                "https://host-monitoring.example/api/modules/host-monitoring/host-m-agent/v1/pairing-requests",
                 "/modules/host-monitoring/activate/00000000-0000-4000-8000-000000000001",
             )
             .unwrap(),
-            "https://unionc.example/modules/host-monitoring/activate/00000000-0000-4000-8000-000000000001"
+            "https://host-monitoring.example/modules/host-monitoring/activate/00000000-0000-4000-8000-000000000001"
         );
     }
 
@@ -661,21 +661,21 @@ mod tests {
     fn activation_endpoint_and_public_url_stay_bound_to_the_pairing_origin() {
         let request_id = Uuid::new_v4();
         assert_eq!(
-            activation_endpoint("https://unionc.example/prefix/api/modules/host-monitoring/host-m-agent/v1/pairing-requests")
+            activation_endpoint("https://host-monitoring.example/prefix/api/modules/host-monitoring/host-m-agent/v1/pairing-requests")
                 .unwrap()
                 .as_str(),
-            "https://unionc.example/prefix/api/modules/host-monitoring/host-m-agent/v1/activate"
+            "https://host-monitoring.example/prefix/api/modules/host-monitoring/host-m-agent/v1/activate"
         );
         validate_activation_url_request(
-            &format!("https://unionc.example/modules/host-monitoring/activate/{request_id}"),
-            "https://unionc.example/prefix/api/modules/host-monitoring/host-m-agent/v1/pairing-requests",
+            &format!("https://host-monitoring.example/modules/host-monitoring/activate/{request_id}"),
+            "https://host-monitoring.example/prefix/api/modules/host-monitoring/host-m-agent/v1/pairing-requests",
             request_id,
         )
         .unwrap();
         assert!(
             validate_activation_url_request(
                 &format!("https://attacker.example/modules/host-monitoring/activate/{request_id}"),
-                "https://unionc.example/api/modules/host-monitoring/host-m-agent/v1/pairing-requests",
+                "https://host-monitoring.example/api/modules/host-monitoring/host-m-agent/v1/pairing-requests",
                 request_id,
             )
             .is_err()
@@ -758,7 +758,7 @@ mod tests {
             version: PAIRING_STATE_VERSION,
             generation: Uuid::new_v4(),
             request_id: Uuid::new_v4(),
-            activation_url: "https://unionc.example/agent/activate/test".into(),
+            activation_url: "https://host-monitoring.example/agent/activate/test".into(),
             expires_at: Utc::now(),
             poll_interval: 5,
             pairing_endpoint: config.pairing_endpoint(),
@@ -925,7 +925,7 @@ mod tests {
                     version: PAIRING_STATE_VERSION,
                     generation: old_generation,
                     request_id,
-                    activation_url: format!("https://unionc.example/agent/activate/{request_id}"),
+                    activation_url: format!("https://host-monitoring.example/agent/activate/{request_id}"),
                     expires_at: Utc::now() - TimeDelta::minutes(1),
                     poll_interval: 5,
                     pairing_endpoint: config.pairing_endpoint(),
@@ -1286,7 +1286,7 @@ mod tests {
                 version: PAIRING_STATE_VERSION,
                 generation,
                 request_id,
-                activation_url: "https://unionc.example/agent/activate/test".into(),
+                activation_url: "https://host-monitoring.example/agent/activate/test".into(),
                 instance_id,
                 report_endpoint: config.endpoint.clone(),
                 completed_at: Utc::now(),
@@ -1331,7 +1331,7 @@ mod tests {
                 version: PAIRING_STATE_VERSION,
                 generation,
                 request_id,
-                activation_url: "https://unionc.example/agent/activate/test".into(),
+                activation_url: "https://host-monitoring.example/agent/activate/test".into(),
                 instance_id,
                 report_endpoint: config.endpoint.clone(),
                 completed_at: Utc::now(),
@@ -1360,7 +1360,7 @@ mod tests {
             generation,
             request_id,
             instance_id,
-            "https://unionc.example/api/modules/host-monitoring/host-m-agent/v1/report",
+            "https://host-monitoring.example/api/modules/host-monitoring/host-m-agent/v1/report",
         )
         .expect_err("config synchronization must not replace a mismatched binding");
         assert!(config_error.to_string().contains("does not match"));
@@ -1383,7 +1383,7 @@ mod tests {
                 version: PAIRING_STATE_VERSION,
                 generation: old_generation,
                 request_id: old_request_id,
-                activation_url: "https://unionc.example/agent/activate/old".into(),
+                activation_url: "https://host-monitoring.example/agent/activate/old".into(),
                 instance_id: old_instance_id,
                 report_endpoint: old_endpoint.clone(),
                 completed_at: Utc::now(),
@@ -1469,7 +1469,7 @@ mod tests {
                 version: PAIRING_STATE_VERSION,
                 generation,
                 request_id,
-                activation_url: "https://unionc.example/agent/activate/test".into(),
+                activation_url: "https://host-monitoring.example/agent/activate/test".into(),
                 expires_at: Utc::now() + TimeDelta::minutes(10),
                 poll_interval: 5,
                 pairing_endpoint: config.pairing_endpoint(),
@@ -1505,7 +1505,7 @@ mod tests {
                 version: PAIRING_STATE_VERSION,
                 generation,
                 request_id,
-                activation_url: "https://unionc.example/agent/activate/test".into(),
+                activation_url: "https://host-monitoring.example/agent/activate/test".into(),
                 report_endpoint: config.endpoint.clone(),
                 completed_at: Utc::now(),
             },
@@ -1523,7 +1523,7 @@ mod tests {
                 version: PAIRING_STATE_VERSION,
                 generation,
                 request_id,
-                activation_url: "https://unionc.example/agent/activate/test".into(),
+                activation_url: "https://host-monitoring.example/agent/activate/test".into(),
                 report_endpoint: config.endpoint.clone(),
                 completed_at: Utc::now(),
             },
@@ -1548,7 +1548,7 @@ mod tests {
                 version: PAIRING_STATE_VERSION,
                 generation,
                 request_id,
-                activation_url: "https://unionc.example/agent/activate/test".into(),
+                activation_url: "https://host-monitoring.example/agent/activate/test".into(),
                 instance_id: Uuid::new_v4(),
                 report_endpoint: config.endpoint.clone(),
                 completed_at: Utc::now(),
@@ -1569,7 +1569,7 @@ mod tests {
             version: PAIRING_STATE_VERSION,
             generation,
             request_id,
-            activation_url: "https://unionc.example/agent/activate/test".into(),
+            activation_url: "https://host-monitoring.example/agent/activate/test".into(),
             instance_id: Uuid::new_v4(),
             report_endpoint: config.endpoint.clone(),
             completed_at: Utc::now(),
@@ -1600,7 +1600,7 @@ mod tests {
                 version: PAIRING_STATE_VERSION,
                 generation: Uuid::new_v4(),
                 request_id: Uuid::new_v4(),
-                activation_url: "https://unionc.example/agent/activate/test".into(),
+                activation_url: "https://host-monitoring.example/agent/activate/test".into(),
                 expires_at: Utc::now() + TimeDelta::minutes(10),
                 poll_interval: 5,
                 pairing_endpoint: config.pairing_endpoint(),
@@ -1625,7 +1625,7 @@ mod tests {
                 version: PAIRING_STATE_VERSION,
                 generation: Uuid::new_v4(),
                 request_id: Uuid::new_v4(),
-                activation_url: "https://unionc.example/agent/activate/test".into(),
+                activation_url: "https://host-monitoring.example/agent/activate/test".into(),
                 expires_at: Utc::now() + TimeDelta::minutes(10),
                 poll_interval: 5,
                 instance_id: Uuid::new_v4(),
@@ -1680,7 +1680,7 @@ mod tests {
             version: PAIRING_STATE_VERSION,
             generation: Uuid::new_v4(),
             request_id: Uuid::new_v4(),
-            activation_url: "https://unionc.example/agent/activate/test".into(),
+            activation_url: "https://host-monitoring.example/agent/activate/test".into(),
             expires_at: Utc::now() + TimeDelta::minutes(10),
             poll_interval: 5,
             instance_id: Uuid::new_v4(),
@@ -1724,7 +1724,7 @@ mod tests {
                 version: PAIRING_STATE_VERSION,
                 generation,
                 request_id,
-                activation_url: "https://unionc.example/agent/activate/test".into(),
+                activation_url: "https://host-monitoring.example/agent/activate/test".into(),
                 expires_at: Utc::now() + TimeDelta::minutes(10),
                 poll_interval: 5,
                 pairing_endpoint: pairing_endpoint.clone(),

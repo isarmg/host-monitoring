@@ -5,7 +5,7 @@
 <h1>Installed — pairing is still required</h1>
 <p>The LaunchDaemon has started, but it will not send authorized telemetry until it is paired.</p>
 <p>Create a one-time activation key in UnionC, then run in Terminal:</p>
-<p><code>sudo -u _hostmagent /usr/local/bin/host-m-agent pair --config '/Library/Application Support/host-m-agent/config.json' --server https://unionc.example.com --output human</code></p>
+<p><code>sudo -u _hostmagent /usr/local/bin/host-m-agent pair --config '/Library/Application Support/host-m-agent/config.json' --server https://host-monitoring.example.com --output human</code></p>
 <p>Replace the example URL with your console origin. To inspect the service later, use
 <code>sudo launchctl print system/org.sarmg.hostmagent</code>.</p>
 </html>

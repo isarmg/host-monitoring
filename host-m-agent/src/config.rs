@@ -888,7 +888,7 @@ fn print_help() {
          doctor inspect configuration, collection, authorization, and spool without writes\n\
          status print local identity, authorization, pairing, and spool state\n\
          Pairing example:\n\
-           host-m-agent pair --server https://unionc.example.com\n\n\
+           host-m-agent pair --server https://host-monitoring.example.com\n\n\
          Common options: --config PATH [--endpoint REPORT_URL] [--output human|json]\n\
            [--allow-insecure-http]\n\
          --allow-insecure-http permits remote plaintext report/OTLP delivery only;\n\
@@ -1007,32 +1007,32 @@ mod tests {
     fn derives_pairing_endpoint_from_the_current_report_endpoint() {
         let config = AgentConfig {
             endpoint:
-                "https://unionc.example/prefix/api/modules/host-monitoring/host-m-agent/v1/report"
+                "https://host-monitoring.example/prefix/api/modules/host-monitoring/host-m-agent/v1/report"
                     .into(),
             ..AgentConfig::default()
         };
         assert_eq!(
             config.pairing_endpoint(),
-            "https://unionc.example/prefix/api/modules/host-monitoring/host-m-agent/v1/pairing-requests"
+            "https://host-monitoring.example/prefix/api/modules/host-monitoring/host-m-agent/v1/pairing-requests"
         );
     }
 
     #[test]
     fn pairing_server_must_be_a_root_management_console_origin() {
         let mut root = AgentConfig {
-            server_override: Some("https://unionc.example/".into()),
+            server_override: Some("https://host-monitoring.example/".into()),
             ..AgentConfig::default()
         };
         root.apply_pair_options().unwrap();
         assert_eq!(
             root.pairing_endpoint.as_deref(),
             Some(
-                "https://unionc.example/api/modules/host-monitoring/host-m-agent/v1/pairing-requests"
+                "https://host-monitoring.example/api/modules/host-monitoring/host-m-agent/v1/pairing-requests"
             )
         );
 
         let mut path = AgentConfig {
-            server_override: Some("https://unionc.example/console".into()),
+            server_override: Some("https://host-monitoring.example/console".into()),
             ..AgentConfig::default()
         };
         let error = path
@@ -1070,7 +1070,7 @@ mod tests {
         let split_endpoints = AgentConfig {
             endpoint: "http://192.0.2.10/api/modules/host-monitoring/host-m-agent/v1/report".into(),
             pairing_endpoint: Some(
-                "https://unionc.example/api/modules/host-monitoring/host-m-agent/v1/pairing-requests"
+                "https://host-monitoring.example/api/modules/host-monitoring/host-m-agent/v1/pairing-requests"
                     .into(),
             ),
             allow_insecure_http: true,
@@ -1093,7 +1093,7 @@ mod tests {
         );
         assert!(
             validate_persisted_pairing_transport(
-                "https://unionc.example/api/modules/host-monitoring/host-m-agent/v1/report",
+                "https://host-monitoring.example/api/modules/host-monitoring/host-m-agent/v1/report",
                 false
             )
             .is_ok()
@@ -1134,9 +1134,9 @@ mod tests {
     #[test]
     fn pairing_endpoint_rejects_query_and_fragment_without_restricting_telemetry() {
         for endpoint in [
-            "https://unionc.example/api/modules/host-monitoring/host-m-agent/v1/pairing-requests?tenant=one",
-            "https://unionc.example/api/modules/host-monitoring/host-m-agent/v1/pairing-requests#bootstrap",
-            "https://unionc.example/api/modules/host-monitoring/host-m-agent/v1/pairing-requests?#",
+            "https://host-monitoring.example/api/modules/host-monitoring/host-m-agent/v1/pairing-requests?tenant=one",
+            "https://host-monitoring.example/api/modules/host-monitoring/host-m-agent/v1/pairing-requests#bootstrap",
+            "https://host-monitoring.example/api/modules/host-monitoring/host-m-agent/v1/pairing-requests?#",
         ] {
             let config = AgentConfig {
                 pairing_endpoint: Some(endpoint.into()),

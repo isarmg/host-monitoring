@@ -499,13 +499,13 @@ mod tests {
             parse_tray_arguments([
                 "--elevated-pair".into(),
                 "--server-b64".into(),
-                encode_base64url(b"https://unionc.example"),
+                encode_base64url(b"https://host-monitoring.example"),
                 "--callback-nonce".into(),
                 "ab".repeat(32),
             ])
             .unwrap(),
             TrayCommand::ElevatedPair {
-                server: "https://unionc.example".into(),
+                server: "https://host-monitoring.example".into(),
                 callback_nonce: "ab".repeat(32),
             }
         );
@@ -517,7 +517,7 @@ mod tests {
             parse_tray_arguments([
                 "--elevated-pair".into(),
                 "--server-b64".into(),
-                encode_base64url(b"https://unionc.example"),
+                encode_base64url(b"https://host-monitoring.example"),
                 "--server-b64".into(),
                 encode_base64url(b"https://other.example"),
                 "--callback-nonce".into(),
@@ -530,12 +530,12 @@ mod tests {
     #[test]
     fn server_url_rejects_dangerous_or_plaintext_remote_forms() {
         assert_eq!(
-            validate_server_base(" https://unionc.example/ ").unwrap(),
-            "https://unionc.example"
+            validate_server_base(" https://host-monitoring.example/ ").unwrap(),
+            "https://host-monitoring.example"
         );
         assert_eq!(
-            validate_server_base("https://unionc.example").unwrap(),
-            "https://unionc.example"
+            validate_server_base("https://host-monitoring.example").unwrap(),
+            "https://host-monitoring.example"
         );
         assert!(validate_server_base("http://127.0.0.1:18081").is_ok());
         assert!(validate_server_base("http://[::1]:18081").is_ok());
@@ -551,7 +551,7 @@ mod tests {
     fn browser_url_allows_activation_paths_but_not_unsafe_schemes() {
         assert!(
             validate_browser_url(
-                "https://unionc.example/modules/host-monitoring/activate/id?view=1#pair"
+                "https://host-monitoring.example/modules/host-monitoring/activate/id?view=1#pair"
             )
             .is_ok()
         );
@@ -562,23 +562,23 @@ mod tests {
         assert!(validate_browser_url("javascript:alert(1)").is_err());
         assert!(validate_browser_url("http://example.test/activate").is_err());
         assert!(browser_url_matches_server_origin(
-            "https://unionc.example/modules/host-monitoring/activate/id",
-            "https://unionc.example"
+            "https://host-monitoring.example/modules/host-monitoring/activate/id",
+            "https://host-monitoring.example"
         ));
         assert!(browser_url_matches_server_origin(
-            "https://unionc.example:443/modules/host-monitoring/activate/id",
-            "https://unionc.example/console"
+            "https://host-monitoring.example:443/modules/host-monitoring/activate/id",
+            "https://host-monitoring.example/console"
         ));
         assert!(!browser_url_matches_server_origin(
             "https://login.example/activate/id",
-            "https://unionc.example"
+            "https://host-monitoring.example"
         ));
     }
 
     #[test]
     fn form_parser_decodes_utf8_and_rejects_ambiguity() {
-        let form = parse_form(b"server=https%3A%2F%2Funionc.example&name=Workstation+One").unwrap();
-        assert_eq!(form["server"], "https://unionc.example");
+        let form = parse_form(b"server=https%3A%2F%2Fhost-monitoring.example&name=Workstation+One").unwrap();
+        assert_eq!(form["server"], "https://host-monitoring.example");
         assert_eq!(form["name"], "Workstation One");
         assert!(parse_form(b"server=a&server=b").is_err());
         assert!(parse_form(b"name=%ZZ").is_err());

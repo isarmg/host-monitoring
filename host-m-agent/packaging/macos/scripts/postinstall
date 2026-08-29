@@ -1345,7 +1345,7 @@ the generated credential files:
 
   sudo -u _hostmagent /usr/local/bin/host-m-agent pair \
     --config '/Library/Application Support/host-m-agent/config.json' \
-    --server https://unionc.example.com
+    --server https://host-monitoring.example.com
 
 Replace the example URL with your UnionC console origin. The package does not contain a
 deployment token, and pairing does not expose the long-lived Agent secret to the browser.

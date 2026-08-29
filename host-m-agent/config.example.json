@@ -1,7 +1,7 @@
 {
   "application_version": "0.6.0",
-  "endpoint": "https://unionc.example.com/api/modules/host-monitoring/host-m-agent/v1/report",
-  "pairing_endpoint": "https://unionc.example.com/api/modules/host-monitoring/host-m-agent/v1/pairing-requests",
+  "endpoint": "https://host-monitoring.example.com/api/modules/host-monitoring/host-m-agent/v1/report",
+  "pairing_endpoint": "https://host-monitoring.example.com/api/modules/host-monitoring/host-m-agent/v1/pairing-requests",
   "otlp_endpoint": null,
   "otlp_token": null,
   "interval_seconds": 10,

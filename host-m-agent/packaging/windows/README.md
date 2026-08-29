@@ -81,7 +81,7 @@ msiexec.exe /i host-m-agent-0.6.0-x64.msi /qn /norestart /l*v "%TEMP%\host-m-age
 
 ```cmd
 sc.exe stop host-m-agent
-"%ProgramFiles%\host-m-agent\host-m-agent.exe" pair --config "%ProgramData%\host-m-agent\config.json" --server https://unionc.example.com
+"%ProgramFiles%\host-m-agent\host-m-agent.exe" pair --config "%ProgramData%\host-m-agent\config.json" --server https://host-monitoring.example.com
 sc.exe start host-m-agent
 ```
 

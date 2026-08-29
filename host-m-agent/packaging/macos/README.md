@@ -50,7 +50,7 @@ accounts:
 sudo installer -pkg host-m-agent-0.6.0.pkg -target /
 sudo -u _hostmagent /usr/local/bin/host-m-agent pair \
   --config '/Library/Application Support/host-m-agent/config.json' \
-  --server https://unionc.example.com
+  --server https://host-monitoring.example.com
 ```
 
 Replace the URL with the management-console origin. Running `pair` as `_hostmagent` is

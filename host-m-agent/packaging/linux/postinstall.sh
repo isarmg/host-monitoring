@@ -585,7 +585,7 @@ host-m-agent 服务已启动，但新安装尚未配对，当前不会发送经�
 请在本机发起浏览器配对：
 
   sudo host-m-agent pair --config /etc/host-m-agent/config.json \
-    --server https://unionc.example.com
+    --server https://host-monitoring.example.com
 
 管理台只生成一次性激活码，不分发软件，也不会接触 Agent 的长期通信 secret。
 
@@ -610,7 +610,7 @@ host-m-agent 文件已安装；当前环境没有运行 systemd，因此没有�
 
   sudo systemctl enable --now host-m-agent.service
   sudo host-m-agent pair --config /etc/host-m-agent/config.json \
-    --server https://unionc.example.com
+    --server https://host-monitoring.example.com
 
 配对后使用 `host-m-agent status --output human` 验证授权状态。
 

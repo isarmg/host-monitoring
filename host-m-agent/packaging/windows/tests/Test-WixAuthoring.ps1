@@ -123,7 +123,7 @@ Assert-Contains $trayText `
     'name=activation_code type=password maxlength=256 required autocomplete=one-time-code spellcheck=false' `
     "The local pairing form must expose a bounded one-time authorization-key field."
 Assert-Contains $trayText `
-    'placeholder=\"https://unionc.example.com\"' `
+    'placeholder=\"https://host-monitoring.example.com\"' `
     "The local pairing form must show a secure, complete management-console origin."
 if ($trayText -match 'COMMAND_OPEN_MANAGEMENT|open_management_console|id=management|\u6253\u5f00 UnionC \u7ba1\u7406\u53f0') {
     throw "The Agent tray and its local configuration page must not provide a direct management-console link."
