@@ -1,5 +1,4 @@
 use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
 use host_protocol::{
     AGENT_REPORT_MAX_AGENT_VERSION_BYTES, AGENT_REPORT_MAX_CAPABILITIES,
     AGENT_REPORT_MAX_CAPABILITY_MESSAGE_BYTES, AGENT_REPORT_MAX_CAPABILITY_NAME_BYTES,
@@ -15,6 +14,7 @@ use host_protocol::{
     AGENT_REPORT_MAX_TEMPERATURES, AGENT_REPORT_MIN_INTERVAL_SECONDS, AGENT_REPORT_SCHEMA_VERSION,
     AgentPairingRequest, AgentReport, Capability, HostIdentity,
 };
+use serde::{Deserialize, Serialize};
 
 use crate::error::{Error, Result};
 

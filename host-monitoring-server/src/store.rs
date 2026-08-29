@@ -1,6 +1,6 @@
 use chrono::{DateTime, Utc};
-use sqlx::{FromRow, SqlitePool, Row, sqlite::SqlitePoolOptions, types::Json};
 use host_protocol::{AgentPairingRequest, AgentReport, Capability, PairingStatus};
+use sqlx::{FromRow, Row, SqlitePool, sqlite::SqlitePoolOptions, types::Json};
 use uuid::Uuid;
 
 use crate::model::{
@@ -64,9 +64,7 @@ pub async fn ensure_admin_user(
         return Ok(());
     }
     let password = password.ok_or_else(|| {
-        anyhow::anyhow!(
-            "HOST_MONITORING_BOOTSTRAP_ADMIN_PASSWORD is required while no users exist"
-        )
+        anyhow::anyhow!("HOST_MONITORING_BOOTSTRAP_ADMIN_PASSWORD is required while no users exist")
     })?;
     let normalized = email.trim().to_lowercase();
     let password_hash = crate::auth::hash_password(password)?;
@@ -89,13 +87,11 @@ pub async fn reset_admin_password(
 ) -> anyhow::Result<()> {
     let normalized = email.trim().to_lowercase();
     let password_hash = crate::auth::hash_password(password)?;
-    let result = sqlx::query(
-        "UPDATE auth_users SET password_hash=? WHERE email=?",
-    )
-    .bind(password_hash)
-    .bind(normalized)
-    .execute(pool)
-    .await?;
+    let result = sqlx::query("UPDATE auth_users SET password_hash=? WHERE email=?")
+        .bind(password_hash)
+        .bind(normalized)
+        .execute(pool)
+        .await?;
     anyhow::ensure!(
         result.rows_affected() == 1,
         "no active or existing user matched {email}"
@@ -110,15 +106,13 @@ async fn audit(
     detail: Option<&str>,
     actor: &str,
 ) -> anyhow::Result<()> {
-    sqlx::query(
-        "INSERT INTO audit_events(action,target,detail,actor) VALUES(?,?,?,?)",
-    )
-    .bind(action)
-    .bind(target)
-    .bind(detail)
-    .bind(actor)
-    .execute(&mut **tx)
-    .await?;
+    sqlx::query("INSERT INTO audit_events(action,target,detail,actor) VALUES(?,?,?,?)")
+        .bind(action)
+        .bind(target)
+        .bind(detail)
+        .bind(actor)
+        .execute(&mut **tx)
+        .await?;
     Ok(())
 }
 
@@ -198,8 +192,11 @@ pub async fn cancel_invite(
     actor: &str,
 ) -> anyhow::Result<CancelInviteResult> {
     let mut tx = pool.begin().await?;
-    let row = sqlx::query("SELECT status,instance_id FROM agent_instance_invites WHERE invite_id=?")
-        .bind(invite_id).fetch_optional(&mut *tx).await?;
+    let row =
+        sqlx::query("SELECT status,instance_id FROM agent_instance_invites WHERE invite_id=?")
+            .bind(invite_id)
+            .fetch_optional(&mut *tx)
+            .await?;
     let Some(row) = row else {
         tx.rollback().await?;
         return Ok(CancelInviteResult::NotFound);
@@ -397,7 +394,10 @@ pub async fn activate(
     let invite = sqlx::query(
         "SELECT invite_id,instance_id,display_name,status,expires_at FROM agent_instance_invites \
          WHERE activation_code_hash=?",
-    ).bind(activation_hash).fetch_optional(&mut *tx).await?;
+    )
+    .bind(activation_hash)
+    .fetch_optional(&mut *tx)
+    .await?;
     let Some(invite) = invite else {
         tx.rollback().await?;
         return Ok(ActivateResult::InvalidCode);
@@ -438,12 +438,24 @@ pub async fn activate(
       .bind(pairing.try_get::<String,_>("os")?).bind(pairing.try_get::<Option<String>,_>("os_version")?)
       .bind(pairing.try_get::<Option<String>,_>("kernel_version")?).bind(pairing.try_get::<String,_>("arch")?)
       .bind(pairing.try_get::<String,_>("agent_version")?).bind(now).execute(&mut *tx).await?;
-    sqlx::query("INSERT INTO agent_credentials(credential_id,host_id,token_hash,issued_at) VALUES(?,?,?,?)")
-        .bind(Uuid::new_v4()).bind(instance_id).bind(&token_hash).bind(now).execute(&mut *tx).await?;
+    sqlx::query(
+        "INSERT INTO agent_credentials(credential_id,host_id,token_hash,issued_at) VALUES(?,?,?,?)",
+    )
+    .bind(Uuid::new_v4())
+    .bind(instance_id)
+    .bind(&token_hash)
+    .bind(now)
+    .execute(&mut *tx)
+    .await?;
     sqlx::query("UPDATE agent_pairing_requests SET status='active',invite_id=?,instance_id=?,activated_at=? WHERE request_id=?")
         .bind(request_id).bind(invite_id).bind(instance_id).bind(now).execute(&mut *tx).await?;
-    sqlx::query("UPDATE agent_instance_invites SET status='active',activated_at=? WHERE invite_id=?")
-        .bind(invite_id).bind(now).execute(&mut *tx).await?;
+    sqlx::query(
+        "UPDATE agent_instance_invites SET status='active',activated_at=? WHERE invite_id=?",
+    )
+    .bind(invite_id)
+    .bind(now)
+    .execute(&mut *tx)
+    .await?;
     audit(
         &mut tx,
         "monitoring.agent_instance.activate",
@@ -517,7 +529,10 @@ pub async fn store_report(
     let Some(row) = inserted else {
         let existing: Option<(Uuid, DateTime<Utc>)> = sqlx::query_as(
             "SELECT host_id,received_at FROM agent_metric_reports WHERE report_id=?",
-        ).bind(report_id).fetch_optional(&mut *tx).await?;
+        )
+        .bind(report_id)
+        .fetch_optional(&mut *tx)
+        .await?;
         tx.rollback().await?;
         return match existing {
             Some((owner, timestamp)) if owner == host_id => Ok((false, timestamp)),
@@ -546,12 +561,10 @@ pub async fn store_report(
         .execute(&mut *tx)
         .await?;
         if let Some(previous) = previous_report.filter(|previous| *previous != report_id) {
-            sqlx::query(
-                "UPDATE agent_metric_reports SET payload=NULL WHERE report_id=?",
-            )
-            .bind(previous)
-            .execute(&mut *tx)
-            .await?;
+            sqlx::query("UPDATE agent_metric_reports SET payload=NULL WHERE report_id=?")
+                .bind(previous)
+                .execute(&mut *tx)
+                .await?;
         }
     }
     sqlx::query("UPDATE agent_credentials SET last_used_at=? WHERE token_hash=?")
@@ -628,11 +641,10 @@ pub async fn list_hosts(
     limit: i64,
     offset: i64,
 ) -> anyhow::Result<(Vec<HostSummary>, i64)> {
-    let total: i64 = sqlx::query_scalar(
-        "SELECT count(*) FROM monitored_hosts WHERE lifecycle_status='active'",
-    )
-    .fetch_one(pool)
-    .await?;
+    let total: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM monitored_hosts WHERE lifecycle_status='active'")
+            .fetch_one(pool)
+            .await?;
     let sql = format!(
         "{HOST_SELECT} WHERE h.lifecycle_status='active' ORDER BY h.registered_at,h.host_id LIMIT ? OFFSET ?"
     );
@@ -733,14 +745,13 @@ pub async fn update_remark(
     actor: &str,
 ) -> anyhow::Result<bool> {
     let mut tx = pool.begin().await?;
-    let changed =
-        sqlx::query("UPDATE monitored_hosts SET name=? WHERE host_id=?")
-            .bind(host_id)
-            .bind(remark)
-            .execute(&mut *tx)
-            .await?
-            .rows_affected()
-            == 1;
+    let changed = sqlx::query("UPDATE monitored_hosts SET name=? WHERE host_id=?")
+        .bind(host_id)
+        .bind(remark)
+        .execute(&mut *tx)
+        .await?
+        .rows_affected()
+        == 1;
     if changed {
         audit(
             &mut tx,
@@ -759,12 +770,11 @@ pub async fn update_remark(
 
 pub async fn delete_host(pool: &SqlitePool, host_id: Uuid, actor: &str) -> anyhow::Result<bool> {
     let mut tx = pool.begin().await?;
-    let exists: bool = sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM monitored_hosts WHERE host_id=?)",
-    )
-    .bind(host_id)
-    .fetch_one(&mut *tx)
-    .await?;
+    let exists: bool =
+        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM monitored_hosts WHERE host_id=?)")
+            .bind(host_id)
+            .fetch_one(&mut *tx)
+            .await?;
     if !exists {
         tx.rollback().await?;
         return Ok(false);

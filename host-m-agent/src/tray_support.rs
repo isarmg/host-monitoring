@@ -577,7 +577,8 @@ mod tests {
 
     #[test]
     fn form_parser_decodes_utf8_and_rejects_ambiguity() {
-        let form = parse_form(b"server=https%3A%2F%2Fhost-monitoring.example&name=Workstation+One").unwrap();
+        let form = parse_form(b"server=https%3A%2F%2Fhost-monitoring.example&name=Workstation+One")
+            .unwrap();
         assert_eq!(form["server"], "https://host-monitoring.example");
         assert_eq!(form["name"], "Workstation One");
         assert!(parse_form(b"server=a&server=b").is_err());

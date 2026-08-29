@@ -46,11 +46,17 @@ async fn main() -> anyhow::Result<()> {
         Command::AdminResetPassword(args) => {
             let pool = store::connect(&args.database_url).await?;
             store::reset_admin_password(&pool, &args.email, &args.password).await?;
-            println!("{{\"status\":\"password-reset\",\"email\":{:?}}}", args.email);
+            println!(
+                "{{\"status\":\"password-reset\",\"email\":{:?}}}",
+                args.email
+            );
         }
         Command::BackupCreate(args) => {
             create_pg_dump(&args.database_url, &args.output)?;
-            println!("{{\"status\":\"backup-created\",\"output\":{:?}}}", args.output);
+            println!(
+                "{{\"status\":\"backup-created\",\"output\":{:?}}}",
+                args.output
+            );
         }
         Command::BackupVerify(args) => {
             anyhow::ensure!(
@@ -58,7 +64,10 @@ async fn main() -> anyhow::Result<()> {
                 "backup file does not exist: {}",
                 args.output.display()
             );
-            println!("{{\"status\":\"backup-verified\",\"output\":{:?}}}", args.output);
+            println!(
+                "{{\"status\":\"backup-verified\",\"output\":{:?}}}",
+                args.output
+            );
         }
         Command::Restore(args) => {
             restore_pg_dump(&args.database_url, &args.input)?;
@@ -82,7 +91,9 @@ async fn main() -> anyhow::Result<()> {
 }
 
 fn create_pg_dump(database_url: &str, output: &std::path::Path) -> anyhow::Result<()> {
-    let database = database_url.strip_prefix("sqlite://").unwrap_or(database_url);
+    let database = database_url
+        .strip_prefix("sqlite://")
+        .unwrap_or(database_url);
     let status = std::process::Command::new("sqlite3")
         .arg(database)
         .arg(".backup")
@@ -94,7 +105,9 @@ fn create_pg_dump(database_url: &str, output: &std::path::Path) -> anyhow::Resul
 
 fn restore_pg_dump(database_url: &str, input: &std::path::Path) -> anyhow::Result<()> {
     anyhow::ensure!(input.is_file(), "restore file does not exist");
-    let database = database_url.strip_prefix("sqlite://").unwrap_or(database_url);
+    let database = database_url
+        .strip_prefix("sqlite://")
+        .unwrap_or(database_url);
     let status = std::process::Command::new("sqlite3")
         .arg(database)
         .arg(".restore")

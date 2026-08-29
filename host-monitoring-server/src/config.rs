@@ -87,10 +87,8 @@ impl ValidatedConfig {
         let session_secret = STANDARD
             .decode(required("HOST_MONITORING_SESSION_SECRET")?)
             .map_err(|_| anyhow::anyhow!("HOST_MONITORING_SESSION_SECRET must be base64"))?;
-        let session_ttl = Duration::from_secs(parse_u64(
-            "HOST_MONITORING_SESSION_TTL_SECONDS",
-            43_200,
-        )?);
+        let session_ttl =
+            Duration::from_secs(parse_u64("HOST_MONITORING_SESSION_TTL_SECONDS", 43_200)?);
         let cookie_secure = parse_bool("HOST_MONITORING_SESSION_COOKIE_SECURE", false)?;
         Ok(Self {
             bind: value("HOST_MONITORING_BIND", "127.0.0.1:18105")

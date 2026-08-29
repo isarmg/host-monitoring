@@ -24,9 +24,7 @@ impl Auth {
     }
 
     pub fn verify_session(&self, token: &str) -> Result<String> {
-        self.issuer
-            .verify(token)
-            .map_err(|_| Error::Unauthorized)
+        self.issuer.verify(token).map_err(|_| Error::Unauthorized)
     }
 
     pub fn session_cookie(&self, token: &str) -> String {

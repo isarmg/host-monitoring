@@ -9,13 +9,13 @@ use axum::{
     routing::{get, post},
 };
 use chrono::Utc;
-use tokio::sync::Mutex;
-use tower_http::services::ServeDir;
 use host_protocol::{
     AGENT_REPORT_MAX_BODY_BYTES, ActivateAgentRequest, ActivateAgentResponse,
     ActivatePairingStatus, AgentPairingRequest, AgentPairingResponse, AgentPairingStatusResponse,
     AgentReport, AgentReportAck,
 };
+use tokio::sync::Mutex;
+use tower_http::services::ServeDir;
 
 use crate::{
     auth::{self, Principal},
@@ -148,23 +148,15 @@ async fn login(
     }
     let token = state.auth.issue_session(&user.user_id.to_string())?;
     let cookie = state.auth.session_cookie(&token);
-    let value = HeaderValue::from_str(&cookie)
-        .map_err(|error| Error::BadRequest(error.to_string()))?;
-    Ok((
-        StatusCode::NO_CONTENT,
-        [(header::SET_COOKIE, value)],
-    )
-        .into_response())
+    let value =
+        HeaderValue::from_str(&cookie).map_err(|error| Error::BadRequest(error.to_string()))?;
+    Ok((StatusCode::NO_CONTENT, [(header::SET_COOKIE, value)]).into_response())
 }
 
 async fn logout(State(state): State<AppState>) -> Response {
     let cookie = state.auth.expired_session_cookie();
     let value = HeaderValue::from_str(&cookie).unwrap_or_else(|_| HeaderValue::from_static(""));
-    (
-        StatusCode::NO_CONTENT,
-        [(header::SET_COOKIE, value)],
-    )
-        .into_response()
+    (StatusCode::NO_CONTENT, [(header::SET_COOKIE, value)]).into_response()
 }
 
 async fn session(
@@ -575,12 +567,8 @@ mod tests {
         let pool = sqlx::sqlite::SqlitePoolOptions::new()
             .connect_lazy("postgresql://localhost/unused")
             .unwrap();
-        let auth = crate::auth::Auth::new(
-            vec![7; 32],
-            std::time::Duration::from_secs(60),
-            false,
-        )
-        .unwrap();
+        let auth =
+            crate::auth::Auth::new(vec![7; 32], std::time::Duration::from_secs(60), false).unwrap();
         router(AppState::new(pool, auth))
     }
 

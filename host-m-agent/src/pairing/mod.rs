@@ -8,13 +8,13 @@ use std::{fs, path::PathBuf};
 
 use anyhow::{Context, bail};
 use chrono::{TimeDelta, Utc};
-use reqwest::{StatusCode, header};
 use host_protocol::{
     ActivateAgentRequestRef as ActivatePairingRequest,
     ActivateAgentResponse as ActivatePairingResponse, ActivatePairingStatus,
     AgentPairingRequest as CreatePairingRequest, AgentPairingResponse as CreatePairingResponse,
     AgentPairingStatusResponse as PairingStatusResponse, PairingStatus,
 };
+use reqwest::{StatusCode, header};
 use uuid::Uuid;
 
 use crate::{
