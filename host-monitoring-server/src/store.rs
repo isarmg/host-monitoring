@@ -82,6 +82,27 @@ pub async fn ensure_admin_user(
     Ok(())
 }
 
+pub async fn reset_admin_password(
+    pool: &PgPool,
+    email: &str,
+    password: &str,
+) -> anyhow::Result<()> {
+    let normalized = email.trim().to_lowercase();
+    let password_hash = crate::auth::hash_password(password)?;
+    let result = sqlx::query(
+        "UPDATE host_monitoring.auth_users SET password_hash=$1 WHERE email=$2",
+    )
+    .bind(password_hash)
+    .bind(normalized)
+    .execute(pool)
+    .await?;
+    anyhow::ensure!(
+        result.rows_affected() == 1,
+        "no active or existing user matched {email}"
+    );
+    Ok(())
+}
+
 async fn audit(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     action: &str,

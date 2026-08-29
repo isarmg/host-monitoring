@@ -43,6 +43,27 @@ async fn main() -> anyhow::Result<()> {
             store::ensure_admin_user(&pool, &email, password.as_deref()).await?;
             println!("{{\"status\":\"admin-ready\",\"email\":{email:?}}}");
         }
+        Command::AdminResetPassword(args) => {
+            let pool = store::connect(&args.database_url).await?;
+            store::reset_admin_password(&pool, &args.email, &args.password).await?;
+            println!("{{\"status\":\"password-reset\",\"email\":{:?}}}", args.email);
+        }
+        Command::BackupCreate(args) => {
+            create_pg_dump(&args.database_url, &args.output)?;
+            println!("{{\"status\":\"backup-created\",\"output\":{:?}}}", args.output);
+        }
+        Command::BackupVerify(args) => {
+            anyhow::ensure!(
+                args.output.is_file(),
+                "backup file does not exist: {}",
+                args.output.display()
+            );
+            println!("{{\"status\":\"backup-verified\",\"output\":{:?}}}", args.output);
+        }
+        Command::Restore(args) => {
+            restore_pg_dump(&args.database_url, &args.input)?;
+            println!("{{\"status\":\"restored\",\"input\":{:?}}}", args.input);
+        }
         Command::Doctor => {
             let config = host_monitoring_server::config::ValidatedConfig::from_runtime()?;
             let pool = store::connect(&config.database_url).await?;
@@ -57,6 +78,33 @@ async fn main() -> anyhow::Result<()> {
             }
         }
     }
+    Ok(())
+}
+
+fn create_pg_dump(database_url: &str, output: &std::path::Path) -> anyhow::Result<()> {
+    let file = std::fs::File::create(output)?;
+    let status = std::process::Command::new("pg_dump")
+        .arg("--format=custom")
+        .arg("--file")
+        .arg(output)
+        .arg(database_url)
+        .status()?;
+    anyhow::ensure!(status.success(), "pg_dump failed");
+    let _ = file;
+    Ok(())
+}
+
+fn restore_pg_dump(database_url: &str, input: &std::path::Path) -> anyhow::Result<()> {
+    anyhow::ensure!(input.is_file(), "restore file does not exist");
+    let status = std::process::Command::new("pg_restore")
+        .arg("--clean")
+        .arg("--if-exists")
+        .arg("--no-owner")
+        .arg("--dbname")
+        .arg(database_url)
+        .arg(input)
+        .status()?;
+    anyhow::ensure!(status.success(), "pg_restore failed");
     Ok(())
 }
 

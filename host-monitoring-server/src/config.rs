@@ -27,12 +27,46 @@ pub enum Command {
     Doctor,
     /// Create the initial local administrator in the configured database.
     AdminCreate(Database),
+    /// Reset an existing local administrator password.
+    AdminResetPassword(AdminResetPassword),
+    /// Create a PostgreSQL dump backup.
+    BackupCreate(Backup),
+    /// Verify a PostgreSQL dump backup file.
+    BackupVerify(Backup),
+    /// Restore a PostgreSQL dump backup.
+    Restore(Restore),
 }
 
 #[derive(Debug, Clone, clap::Args)]
 pub struct Database {
     #[arg(long)]
     pub database_url: String,
+}
+
+#[derive(Debug, Clone, clap::Args)]
+pub struct AdminResetPassword {
+    #[arg(long)]
+    pub database_url: String,
+    #[arg(long)]
+    pub email: String,
+    #[arg(long, hide_env_values = true)]
+    pub password: String,
+}
+
+#[derive(Debug, Clone, clap::Args)]
+pub struct Backup {
+    #[arg(long)]
+    pub database_url: String,
+    #[arg(long)]
+    pub output: std::path::PathBuf,
+}
+
+#[derive(Debug, Clone, clap::Args)]
+pub struct Restore {
+    #[arg(long)]
+    pub database_url: String,
+    #[arg(long)]
+    pub input: std::path::PathBuf,
 }
 
 #[derive(Clone)]

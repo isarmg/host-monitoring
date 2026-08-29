@@ -113,7 +113,7 @@ pub fn router(state: AppState) -> Router {
         .merge(console)
         .merge(agent)
         .fallback_service(ServeDir::new(
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("web"),
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("web/dist"),
         ))
         .with_state(state)
 }
