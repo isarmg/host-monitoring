@@ -30,9 +30,9 @@ new business code is outside this contract.
   Bearer/Pairing or one-time-code checks. Union adds its separate per-process gateway proof, so
   deployed Agents never receive the worker credential.
 - Browser activation lives at `/modules/host-monitoring/activate/:requestId`. It submits to the
-  separate `/agent/v2/activate-admin` platform route protected by Core login,
+  separate `/host-m-agent/v1/activate-admin` platform route protected by Core login,
   `host-monitoring.agents.write` and CSRF, while the worker still verifies and consumes the same
-  kind of one-time activation code. Agent/Tray activation continues to use `/agent/v2/activate`
+  kind of one-time activation code. Agent/Tray activation continues to use `/host-m-agent/v1/activate`
   without requiring a browser session.
 - Console cookies must be removed by Union. The worker rejects requests containing `Cookie`,
   requires one canonical `X-Union-Principal`, and records that real operator as the audit actor.
@@ -42,61 +42,17 @@ new business code is outside this contract.
 Union must remove any inbound copies of all four internal headers before writing its own values.
 The token is shared only by Union and this worker and must be regenerated for each worker process.
 
-## Offline/admin commands and local contract testing
+## Offline/admin command
 
 ```console
 union-host-monitoring-worker migrate \
   --database-url postgresql://host_monitoring@127.0.0.1/host_monitoring
-
-UNION_MODULE_PROTOCOL=gateway-v1 \
-UNION_MODULE_AUDIENCE=host-monitoring \
-UNION_MODULE_TOKEN=<64-lowercase-hex> \
-UNION_MODULE_PREFIX=/api/modules/host-monitoring \
-union-host-monitoring-worker serve \
-  --database-url postgresql://host_monitoring@127.0.0.1/host_monitoring
 ```
 
-The process refuses non-loopback binds and non-PostgreSQL URLs.
-The `serve` example is for local contract tests only. Production operators use the module
-configuration center; Runtime supplies `UNION_PLUGIN_BIND`, the legacy bind alias and all
-`UNION_MODULE_*` gateway values.
-
-## SQLite cutover and rollback
-
-Stop legacy monitoring writes first and checkpoint/copy the Union SQLite database together with
-its WAL. Import into an empty `host_monitoring` domain:
-
-```console
-union-host-monitoring-worker import-sqlite \
-  --database-url "$UNION_HOST_MONITORING_DATABASE_URL" \
-  --sqlite /var/lib/union/unionc.db \
-  --evidence ./host-monitoring-import.json
-```
-
-The import is one PostgreSQL transaction. Evidence contains the source file SHA-256, deterministic
-logical source digests, target JSONB digests, row counts and an `import_id`. It is written with
-create-new semantics so existing evidence cannot be overwritten. Revalidate after cutover:
-
-```console
-union-host-monitoring-worker verify-import \
-  --database-url "$UNION_HOST_MONITORING_DATABASE_URL" \
-  --import-id <uuid>
-```
-
-Rollback is deliberately refused if imported rows no longer match their recorded target digest;
-that prevents deleting post-cutover changes under the guise of rollback. During the no-write
-cutover window, rollback removes only rows carrying that `import_id`, leaves the import audit row,
-and creates separate evidence:
-
-```console
-union-host-monitoring-worker rollback-import \
-  --database-url "$UNION_HOST_MONITORING_DATABASE_URL" \
-  --import-id <uuid> \
-  --evidence ./host-monitoring-rollback.json
-```
-
-After accepting writes in PostgreSQL, rollback means a reverse migration or restoring the frozen
-SQLite copy; this tool correctly refuses to pretend that new PostgreSQL telemetry can be discarded.
+`serve` is intentionally a Core-only runtime command. It requires Manifest v2 standard identity,
+`UNION_PLUGIN_BIND`, `UNION_PLUGIN_CONFIG` and gateway variables, reads the schema-validated JSON
+configuration file directly, and refuses non-loopback binds or non-PostgreSQL URLs. There is no
+module-specific environment alias, SQLite importer, upgrade converter or rollback-to-old-schema path.
 
 ## Union integration and repository boundary
 
@@ -107,6 +63,5 @@ this repository the authoritative source for the complete Host Monitoring domain
 
 Union Builder assembles this module through its Manifest-defined package. Union Core owns the
 public routes, generates the process credential, removes untrusted internal headers/cookies and
-supervises this binary on its Manifest-reserved loopback endpoint. The former in-process
-implementation is not an online fallback. Its frozen SQLite data is usable only through the
-offline import/verification procedure above.
+supervises this binary on its Manifest-reserved loopback endpoint. The v0.6 boundary is fresh-only:
+the former in-process database, old Agent state and previous module schema are not accepted or migrated.

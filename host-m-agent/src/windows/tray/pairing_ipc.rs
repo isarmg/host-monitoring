@@ -487,7 +487,7 @@ fn validate_pair_ipc_message(message: &PairIpcMessage, server: &str) -> anyhow::
     canonical_uuid(&message.generation, "pairing IPC generation")?;
     let request_id = canonical_uuid(&message.request_id, "pairing IPC request id")?;
     let expected_pairing_endpoint = format!(
-        "{}/api/modules/host-monitoring/agent/v2/pairing-requests",
+        "{}/api/modules/host-monitoring/host-m-agent/v1/pairing-requests",
         server.trim_end_matches('/')
     );
     ensure!(

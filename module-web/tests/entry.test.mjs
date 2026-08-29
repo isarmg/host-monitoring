@@ -61,7 +61,7 @@ test("console mutations use only the module-scoped gateway paths", async () => {
       basePath: "/api/modules/host-monitoring",
       request: async (path, init) => {
         calls.push([path, init]);
-        return path === "/agent/v2/activate-admin"
+        return path === "/host-m-agent/v1/activate-admin"
           ? { instance_id: "host-one", status: "active" }
           : undefined;
       },
@@ -73,7 +73,7 @@ test("console mutations use only the module-scoped gateway paths", async () => {
   assert.deepEqual(calls.map(([path, init]) => [path, init.method]), [
     ["/managed-instances/host%2Fone", "PATCH"],
     ["/agent-instances/request%2Fone", "DELETE"],
-    ["/agent/v2/activate-admin", "POST"],
+    ["/host-m-agent/v1/activate-admin", "POST"],
   ]);
 });
 

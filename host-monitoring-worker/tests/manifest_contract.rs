@@ -15,8 +15,11 @@ fn route<'a>(manifest: &'a Value, id: &str) -> &'a Value {
 fn browser_activation_uses_platform_rbac_and_the_dynamic_module_route() {
     let manifest: Value = serde_json::from_str(include_str!("../manifest.json")).unwrap();
     let activation = route(&manifest, "agent-activate-admin");
-    assert_eq!(activation["path"], "/agent/v2/activate-admin");
-    assert_eq!(activation["upstream_path"], "/api/agent/v2/activate-admin");
+    assert_eq!(activation["path"], "/host-m-agent/v1/activate-admin");
+    assert_eq!(
+        activation["upstream_path"],
+        "/api/host-m-agent/v1/activate-admin"
+    );
     assert_eq!(activation["methods"], serde_json::json!(["POST"]));
     assert_eq!(activation["auth"], "platform");
     assert_eq!(activation["permission"], "host-monitoring.agents.write");

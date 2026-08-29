@@ -4,6 +4,7 @@ use std::{
 };
 
 use clap::{Parser, Subcommand};
+use serde::Deserialize;
 
 #[derive(Debug, Parser)]
 #[command(name = "union-host-monitoring-worker", version, about)]
@@ -15,77 +16,37 @@ pub struct Cli {
 #[derive(Debug, Subcommand)]
 pub enum Command {
     /// Apply this module's PostgreSQL migrations, then serve its private HTTP API.
-    Serve(Common),
+    Serve,
     /// Apply only this module's PostgreSQL migrations.
     Migrate(Database),
-    /// Transactionally import the legacy Union SQLite monitoring tables.
-    ImportSqlite {
-        #[command(flatten)]
-        database: Database,
-        #[arg(long)]
-        sqlite: std::path::PathBuf,
-        #[arg(long)]
-        evidence: std::path::PathBuf,
-    },
-    /// Re-run target row-count and logical-digest validation for an import batch.
-    VerifyImport {
-        #[command(flatten)]
-        database: Database,
-        #[arg(long)]
-        import_id: uuid::Uuid,
-    },
-    /// Delete only rows attributed to a previously completed import, preserving evidence.
-    RollbackImport {
-        #[command(flatten)]
-        database: Database,
-        #[arg(long)]
-        import_id: uuid::Uuid,
-        #[arg(long)]
-        evidence: std::path::PathBuf,
-    },
 }
 
 #[derive(Debug, Clone, clap::Args)]
 pub struct Database {
-    #[arg(long, env = "UNION_HOST_MONITORING_DATABASE_URL")]
+    #[arg(long)]
     pub database_url: String,
 }
 
-#[derive(Debug, Clone, clap::Args)]
-pub struct Common {
-    #[command(flatten)]
-    pub database: Database,
-    #[arg(
-        long,
-        env = "UNION_HOST_MONITORING_BIND",
-        default_value = "127.0.0.1:18105"
-    )]
-    pub bind: SocketAddr,
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RuntimeConfiguration {
+    database_url: String,
 }
 
-impl Common {
-    pub fn validate(&self) -> anyhow::Result<ValidatedConfig> {
-        let bind = match std::env::var("UNION_PLUGIN_BIND") {
-            Ok(value) => value
-                .parse::<SocketAddr>()
-                .map_err(|_| anyhow::anyhow!("UNION_PLUGIN_BIND must be a socket address"))?,
-            Err(std::env::VarError::NotPresent) => self.bind,
-            Err(error) => return Err(error.into()),
-        };
-        if !bind.ip().is_loopback() {
-            anyhow::bail!(
-                "UNION host-monitoring worker must use a loopback bind; got {}",
-                bind
-            );
-        }
-        if !self.database.database_url.starts_with("postgresql://")
-            && !self.database.database_url.starts_with("postgres://")
+impl ValidatedConfig {
+    pub fn from_runtime() -> anyhow::Result<Self> {
+        let manifest =
+            sarmg_platform_core::PluginManifest::parse_json(include_str!("../manifest.json"))?;
+        let context = sarmg_platform_sdk::ProcessContext::from_env(&manifest)?;
+        let configuration: RuntimeConfiguration = context.load_configuration()?;
+        if !configuration.database_url.starts_with("postgresql://")
+            && !configuration.database_url.starts_with("postgres://")
         {
             anyhow::bail!("host-monitoring requires a PostgreSQL database URL");
         }
-        Ok(ValidatedConfig {
-            bind,
-            database_url: self.database.database_url.clone(),
+        Ok(Self {
+            bind: context.bind,
+            database_url: configuration.database_url,
             gateway: sarmg_platform_gateway::GatewayIdentity::from_env(
                 crate::auth::MODULE_AUDIENCE,
                 crate::auth::MODULE_PREFIX,
@@ -107,25 +68,6 @@ pub fn forwarded_ip(value: &str) -> Option<IpAddr> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
-    #[test]
-    fn rejects_public_bind_and_short_secret() {
-        let common = Common {
-            database: Database {
-                database_url: "postgresql://localhost/union".into(),
-            },
-            bind: "0.0.0.0:18105".parse().unwrap(),
-        };
-        assert!(
-            common
-                .validate()
-                .unwrap_err()
-                .to_string()
-                .contains("loopback")
-        );
-    }
-
     #[test]
     fn shared_gateway_contract_accepts_only_host_monitoring_identity() {
         let token = "ab".repeat(32);

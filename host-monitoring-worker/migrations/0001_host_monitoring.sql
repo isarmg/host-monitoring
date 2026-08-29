@@ -1,15 +1,5 @@
 CREATE SCHEMA IF NOT EXISTS host_monitoring;
 
-CREATE TABLE IF NOT EXISTS host_monitoring.import_batches (
-    import_id       uuid PRIMARY KEY,
-    source_path     text NOT NULL,
-    source_sha256   text NOT NULL CHECK (source_sha256 ~ '^[0-9a-f]{64}$'),
-    manifest        jsonb NOT NULL CHECK (jsonb_typeof(manifest) = 'object'),
-    status          text NOT NULL CHECK (status IN ('complete', 'rolled_back')),
-    imported_at     timestamptz NOT NULL DEFAULT now(),
-    rolled_back_at  timestamptz
-);
-
 CREATE TABLE IF NOT EXISTS host_monitoring.monitored_hosts (
     host_id                  uuid PRIMARY KEY,
     name                     text NOT NULL CHECK (length(btrim(name)) BETWEEN 1 AND 255),
@@ -25,7 +15,9 @@ CREATE TABLE IF NOT EXISTS host_monitoring.monitored_hosts (
     latest_report_id         uuid,
     latest_collected_at      timestamptz,
     latest_interval_seconds  double precision,
-    source_import_id         uuid,
+    lifecycle_status         text NOT NULL DEFAULT 'active'
+                                 CHECK (lifecycle_status IN ('active', 'revoked')),
+    revoked_at               timestamptz,
     CHECK (latest_interval_seconds IS NULL OR
            (latest_interval_seconds > 0 AND latest_interval_seconds <= 3600))
 );
@@ -34,8 +26,6 @@ CREATE INDEX IF NOT EXISTS monitored_hosts_registered
     ON host_monitoring.monitored_hosts(registered_at, host_id);
 CREATE INDEX IF NOT EXISTS monitored_hosts_last_seen
     ON host_monitoring.monitored_hosts(last_seen_at DESC);
-CREATE INDEX IF NOT EXISTS monitored_hosts_source_import
-    ON host_monitoring.monitored_hosts(source_import_id) WHERE source_import_id IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS host_monitoring.agent_metric_reports (
     report_id                             uuid PRIMARY KEY,
@@ -56,16 +46,13 @@ CREATE TABLE IF NOT EXISTS host_monitoring.agent_metric_reports (
     disk_written_bytes_per_second         double precision,
     max_temperature_celsius               double precision,
     gpu_utilization_percent               double precision,
-    gpu_memory_usage_percent              double precision,
-    source_import_id                      uuid
+    gpu_memory_usage_percent              double precision
 );
 
 CREATE INDEX IF NOT EXISTS agent_metric_reports_host_collected
     ON host_monitoring.agent_metric_reports(host_id, collected_at DESC, report_id DESC);
 CREATE INDEX IF NOT EXISTS agent_metric_reports_received
     ON host_monitoring.agent_metric_reports(received_at);
-CREATE INDEX IF NOT EXISTS agent_metric_reports_source_import
-    ON host_monitoring.agent_metric_reports(source_import_id) WHERE source_import_id IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS host_monitoring.agent_credentials (
     credential_id   uuid PRIMARY KEY,
@@ -74,13 +61,13 @@ CREATE TABLE IF NOT EXISTS host_monitoring.agent_credentials (
     token_hash       text NOT NULL UNIQUE CHECK (token_hash ~ '^[0-9a-f]{64}$'),
     issued_at        timestamptz NOT NULL DEFAULT now(),
     last_used_at     timestamptz,
-    source_import_id uuid
+    revoked_at       timestamptz
 );
 
 CREATE INDEX IF NOT EXISTS agent_credentials_host
     ON host_monitoring.agent_credentials(host_id);
-CREATE INDEX IF NOT EXISTS agent_credentials_source_import
-    ON host_monitoring.agent_credentials(source_import_id) WHERE source_import_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS agent_credentials_active_token
+    ON host_monitoring.agent_credentials(token_hash) WHERE revoked_at IS NULL;
 
 CREATE TABLE IF NOT EXISTS host_monitoring.agent_instance_invites (
     invite_id             uuid PRIMARY KEY,
@@ -93,7 +80,6 @@ CREATE TABLE IF NOT EXISTS host_monitoring.agent_instance_invites (
     created_at            timestamptz NOT NULL DEFAULT now(),
     activated_at          timestamptz,
     cancelled_at          timestamptz,
-    source_import_id      uuid,
     CHECK (expires_at > created_at),
     CHECK (
       (status = 'pending' AND activated_at IS NULL AND cancelled_at IS NULL) OR
@@ -106,8 +92,6 @@ CREATE INDEX IF NOT EXISTS agent_instance_invites_created
     ON host_monitoring.agent_instance_invites(created_at DESC);
 CREATE UNIQUE INDEX IF NOT EXISTS agent_instance_invites_one_pending
     ON host_monitoring.agent_instance_invites(instance_id) WHERE status = 'pending';
-CREATE INDEX IF NOT EXISTS agent_instance_invites_source_import
-    ON host_monitoring.agent_instance_invites(source_import_id) WHERE source_import_id IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS host_monitoring.agent_pairing_requests (
     request_id           uuid PRIMARY KEY,
@@ -126,7 +110,6 @@ CREATE TABLE IF NOT EXISTS host_monitoring.agent_pairing_requests (
     expires_at           timestamptz NOT NULL,
     created_at           timestamptz NOT NULL DEFAULT now(),
     activated_at         timestamptz,
-    source_import_id     uuid,
     CHECK (expires_at > created_at),
     CHECK (
       (status = 'pending' AND invite_id IS NULL AND instance_id IS NULL AND activated_at IS NULL) OR
@@ -137,8 +120,6 @@ CREATE TABLE IF NOT EXISTS host_monitoring.agent_pairing_requests (
 
 CREATE INDEX IF NOT EXISTS agent_pairing_requests_expiry
     ON host_monitoring.agent_pairing_requests(expires_at) WHERE status = 'pending';
-CREATE INDEX IF NOT EXISTS agent_pairing_requests_source_import
-    ON host_monitoring.agent_pairing_requests(source_import_id) WHERE source_import_id IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS host_monitoring.audit_events (
     event_id      bigserial PRIMARY KEY,

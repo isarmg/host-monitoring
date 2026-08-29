@@ -21,7 +21,6 @@ pub fn local_status(config: &AgentConfig) -> anyhow::Result<LocalPairingStatus> 
             return Ok(LocalPairingStatus {
                 progress: state.map(progress_from_terminal),
                 active_report_endpoint: None,
-                active_binding_persisted: false,
             });
         }
         let active = state.expect("checked Active pairing state above");
@@ -37,17 +36,14 @@ pub fn local_status(config: &AgentConfig) -> anyhow::Result<LocalPairingStatus> 
         if current_binding.as_ref() != Some(&expected) {
             continue;
         }
-        let persisted = match binding? {
-            Some(binding) if binding == expected => true,
+        match binding? {
+            Some(binding) if binding == expected => {}
             Some(_) => bail!("active binding does not match the current Active pairing state"),
-            // A current-version Active journal from an installation upgraded in place remains
-            // usable; run/pair will migrate it while holding the transaction lock.
-            None => false,
-        };
+            None => bail!("active binding is missing; purge local state and pair host-m-agent again"),
+        }
         return Ok(LocalPairingStatus {
             progress: Some(progress_from_terminal(active)),
             active_report_endpoint: Some(expected.report_endpoint),
-            active_binding_persisted: persisted,
         });
     }
     bail!("pairing state changed repeatedly while reading local status")
@@ -114,8 +110,7 @@ pub fn existing_reporter_for_run(config: &AgentConfig) -> anyhow::Result<Option<
             | StoredPairingState::Expired { .. },
         ) => match load_active_binding(config)? {
             Some(binding) => reporter_for_active_binding_unlocked(config, &binding),
-            // Compatibility for an upgrade that was already mid-pairing before bindings existed.
-            None => Reporter::for_existing_credential(config),
+            None => bail!("active binding is missing; purge local state and pair host-m-agent again"),
         },
         _ => Ok(None),
     }
@@ -135,7 +130,7 @@ pub(crate) fn reporter_for_current_active_state(
         return Ok(None);
     };
     let expected = binding_from_active_state(&state)?;
-    let binding = load_or_migrate_active_binding_unlocked(config, &expected)?;
+    let binding = load_current_active_binding_unlocked(config, &expected)?;
     reporter_for_active_binding_unlocked(config, &binding)
 }
 
@@ -151,7 +146,7 @@ pub fn commit_active_configuration(
     let _lock = lock_state(config)?;
     let expected =
         ensure_active_is_current(config, generation, request_id, instance_id, report_endpoint)?;
-    let binding = load_or_migrate_active_binding_unlocked(config, &expected)?;
+    let binding = load_current_active_binding_unlocked(config, &expected)?;
     let path = persist_active_config_unlocked(config, &binding.report_endpoint)?;
     apply_active_config(config, &binding.report_endpoint);
     Ok(path)
@@ -174,7 +169,7 @@ pub fn activate_reporter_snapshot(
     }
     let expected =
         ensure_active_is_current(config, generation, request_id, instance_id, report_endpoint)?;
-    let binding = load_or_migrate_active_binding_unlocked(config, &expected)?;
+    let binding = load_current_active_binding_unlocked(config, &expected)?;
     let reporter_config = config_for_active_binding(config, &binding);
     apply_active_config(config, &binding.report_endpoint);
     let durable_host = load_host_identity(&config.state_dir)?;

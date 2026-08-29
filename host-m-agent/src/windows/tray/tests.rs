@@ -73,29 +73,29 @@ mod tests {
 
         assert!(
             serde_json::from_str::<PairIpcMessage>(
-                r#"{"generation":"generation","request_id":"request","activation_url":"https://server.example/modules/host-monitoring/activate/request","pairing_endpoint":"https://server.example/api/modules/host-monitoring/agent/v2/pairing-requests"}"#
+                r#"{"generation":"generation","request_id":"request","activation_url":"https://server.example/modules/host-monitoring/activate/request","pairing_endpoint":"https://server.example/api/modules/host-monitoring/host-m-agent/v1/pairing-requests"}"#
             )
             .is_ok()
         );
         assert!(
             serde_json::from_str::<PairIpcMessage>(
-                r#"{"generation":"generation","request_id":"request","activation_url":"https://server.example/modules/host-monitoring/activate/request","pairing_endpoint":"https://server.example/api/modules/host-monitoring/agent/v2/pairing-requests","legacy":true}"#
+                r#"{"generation":"generation","request_id":"request","activation_url":"https://server.example/modules/host-monitoring/activate/request","pairing_endpoint":"https://server.example/api/modules/host-monitoring/host-m-agent/v1/pairing-requests","legacy":true}"#
             )
             .is_err()
         );
 
         let waiting_event = format!(
-            r#"{{"event":"pairing_waiting","version":"{}","request_id":"request","generation":"generation","activation_url":"https://server.example/modules/host-monitoring/activate/request","pairing_endpoint":"https://server.example/api/modules/host-monitoring/agent/v2/pairing-requests","expires_at":"2026-08-20T00:00:00Z","poll_interval":2}}"#,
+            r#"{{"event":"pairing_waiting","version":"{}","request_id":"request","generation":"generation","activation_url":"https://server.example/modules/host-monitoring/activate/request","pairing_endpoint":"https://server.example/api/modules/host-monitoring/host-m-agent/v1/pairing-requests","expires_at":"2026-08-20T00:00:00Z","poll_interval":2}}"#,
             env!("CARGO_PKG_VERSION")
         );
         assert!(serde_json::from_str::<PairEvent>(&waiting_event).is_ok());
         let waiting_event_without_expiry = format!(
-            r#"{{"event":"pairing_waiting","version":"{}","request_id":"request","generation":"generation","activation_url":"https://server.example/modules/host-monitoring/activate/request","pairing_endpoint":"https://server.example/api/modules/host-monitoring/agent/v2/pairing-requests","poll_interval":2}}"#,
+            r#"{{"event":"pairing_waiting","version":"{}","request_id":"request","generation":"generation","activation_url":"https://server.example/modules/host-monitoring/activate/request","pairing_endpoint":"https://server.example/api/modules/host-monitoring/host-m-agent/v1/pairing-requests","poll_interval":2}}"#,
             env!("CARGO_PKG_VERSION")
         );
         assert!(serde_json::from_str::<PairEvent>(&waiting_event_without_expiry).is_err());
         let paired_event_with_legacy_field = format!(
-            r#"{{"event":"paired","version":"{}","request_id":"request","instance_id":"instance","endpoint":"https://server.example/api/modules/host-monitoring/agent/v1/report","legacy":true}}"#,
+            r#"{{"event":"paired","version":"{}","request_id":"request","instance_id":"instance","endpoint":"https://server.example/api/modules/host-monitoring/host-m-agent/v1/report","legacy":true}}"#,
             env!("CARGO_PKG_VERSION")
         );
         assert!(serde_json::from_str::<PairEvent>(&paired_event_with_legacy_field).is_err());
@@ -157,7 +157,7 @@ mod tests {
             request_id: request_id.clone(),
             activation_url: format!("{server}/modules/host-monitoring/activate/{request_id}"),
             pairing_endpoint: format!(
-                "{server}/api/modules/host-monitoring/agent/v2/pairing-requests"
+                "{server}/api/modules/host-monitoring/host-m-agent/v1/pairing-requests"
             ),
         };
         validate_pair_ipc_message(&message, server).unwrap();

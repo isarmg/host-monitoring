@@ -17,10 +17,11 @@ Union 网关发起出站连接，不能直接访问 Worker 的 loopback 端口�
 | `module-web/` | 可维护的 React/TypeScript 模块前端源码、独立构建和契约测试；React 由 Union Web Shell 注入，不重复打包 |
 | `protocol/` | `unionc-protocol`：Agent 与 Worker 共用的稳定 JSON DTO 和线级约束 |
 
-`host-m-agent` 是主机侧产品和交付物的规范名称。Manifest 与设备协议继续使用既有
-`/agent/v1`、`/agent/v2` 路径，重命名不会制造第二套网关协议。
+`host-m-agent` 是主机侧产品和交付物的规范名称。0.6 设备协议只使用
+`/host-m-agent/v1` 路径；旧 Agent 路由、状态、配置、数据库导入器和环境变量别名均已删除。
+升级必须先卸载并清除旧状态，再安装 0.6 并重新配对；本仓库不提供静默转换。
 
-三个 crate 统一采用版本 `0.5.0`、Rust `1.98`、Apache-2.0 和单一作者
+三个 crate 统一采用版本 `0.6.0`、Rust `1.98`、Apache-2.0 和单一作者
 `sarmg <isarmg@163.com>`。`host-m-agent` 与 Worker 均通过 workspace path 依赖
 `unionc-protocol`；仓库内部禁止通过 Git URL、分支或 tag 反向依赖自身。
 

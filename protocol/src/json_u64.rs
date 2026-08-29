@@ -34,15 +34,25 @@ impl de::Visitor<'_> for U64Visitor {
         formatter.write_str("a non-negative JSON integer or canonical decimal u64 string")
     }
 
-    fn visit_u64<E>(self, value: u64) -> Result<Self::Value, E> {
-        Ok(value)
+    fn visit_u64<E>(self, value: u64) -> Result<Self::Value, E>
+    where
+        E: de::Error,
+    {
+        if value <= MAX_SAFE_INTEGER {
+            Ok(value)
+        } else {
+            Err(E::custom(
+                "integers above JavaScript's exact range must use canonical decimal strings",
+            ))
+        }
     }
 
     fn visit_i64<E>(self, value: i64) -> Result<Self::Value, E>
     where
         E: de::Error,
     {
-        u64::try_from(value).map_err(|_| E::custom("u64 value cannot be negative"))
+        let value = u64::try_from(value).map_err(|_| E::custom("u64 value cannot be negative"))?;
+        self.visit_u64(value)
     }
 
     fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>

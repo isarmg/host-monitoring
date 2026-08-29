@@ -1,10 +1,13 @@
 # Changelog
 
-## 0.5.0 - Unreleased
+## 0.6.0 - Unreleased
 
 - 主机侧组件统一采用 `host-m-agent` 作为源码目录、Cargo package/crate、CLI、桌面服务、
-  安装包、移动 SDK、环境变量和管理界面产品名；设备协议的 `/agent/v1`、`/agent/v2`
-  路径保持稳定。
+  安装包、移动 SDK、环境变量和管理界面产品名；设备协议切换为唯一的
+  `/host-m-agent/v1` 路径，删除旧 `/agent/v1`、`/agent/v2` 入口。
+- 切换到 Manifest v2/Plugin API 2.0，只读取标准 `UNION_PLUGIN_CONFIG` 与
+  `UNION_PLUGIN_BIND`；删除模块专属环境变量桥接、Union SQLite 导入/回滚、旧数据库字段和
+  Agent active-binding 懒迁移。0.6 必须使用全新模块数据库和本地状态并重新配对。
 - 将 `host-m-agent` 的完整源码、配置、测试及 Linux、Windows、macOS 打包资产从 Union Core
   仓库迁入 Host Monitoring，使本仓库成为 Host Worker、协议和 Agent 的唯一源码仓库。
 - Agent 与 Worker 改为通过 workspace path 使用同一 `unionc-protocol`，消除仓库内部 Git

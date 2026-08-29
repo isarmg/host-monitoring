@@ -4,7 +4,7 @@ import type { AgentActivationResponse, AgentPairingRequestSummary } from "./type
 export const agentActivationApi = {
   activateAgent: async (request_id: string, activation_code: string) => {
     try {
-      return await request<AgentActivationResponse>("/agent/v2/activate-admin", {
+      return await request<AgentActivationResponse>("/host-m-agent/v1/activate-admin", {
         method: "POST",
         body: JSON.stringify({ request_id, activation_code }),
         suppressAuthExpired: true,
@@ -17,7 +17,7 @@ export const agentActivationApi = {
     }
   },
   agentPairingRequest: (requestId: string) => request<AgentPairingRequestSummary>(
-    `/agent/v2/pairing-requests/${pathSegment(requestId)}`,
+    `/host-m-agent/v1/pairing-requests/${pathSegment(requestId)}`,
     { suppressAuthExpired: true },
   ),
 };

@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://sarmg.org/modules/host-monitoring/config-v1.schema.json",
+  "$id": "https://sarmg.org/modules/host-monitoring/config-v2.schema.json",
   "title": "Host Monitoring module configuration",
   "type": "object",
   "additionalProperties": false,

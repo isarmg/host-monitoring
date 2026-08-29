@@ -376,11 +376,10 @@ mod tests {
     }
 
     #[test]
-    fn legacy_large_json_integers_remain_accepted_without_loss() {
+    fn large_json_integers_must_use_the_current_decimal_string_shape() {
         let mut json = serde_json::to_value(fixture()).unwrap();
         json["system"]["networks"][0]["received_bytes_total"] = serde_json::json!(u64::MAX);
-        let report = serde_json::from_value::<AgentReport>(json).unwrap();
-        assert_eq!(report.system.networks[0].received_bytes_total, u64::MAX);
+        assert!(serde_json::from_value::<AgentReport>(json).is_err());
     }
 
     #[test]

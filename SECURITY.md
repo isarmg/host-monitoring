@@ -14,9 +14,9 @@
   `gateway-v1` 协议、audience、token 和 forwarded prefix；其端口不是公共 API。
 - `gateway-v1` token 只证明请求来自监管该进程的 Union Core，不代表管理员或 Agent 身份。
   平台路由还必须携带 Core 校验后的 canonical principal；Agent 路由仍验证领域凭据。
-- 浏览器管理激活端点为 `/agent/v2/activate-admin`，受 Core 会话、
+- 浏览器管理激活端点为 `/host-m-agent/v1/activate-admin`，受 Core 会话、
   `host-monitoring.agents.write` 与 CSRF 保护；Agent/Tray 使用独立的
-  `/agent/v2/activate` 能力端点。不得把后者改成浏览器会话旁路。
+  `/host-m-agent/v1/activate` 能力端点。不得把后者改成浏览器会话旁路。
 - Worker 使用模块专属 PostgreSQL database/role 和 migration。不得读取或修改 Core 或其他
   模块数据库；数据库 URL、进程 token、Agent token 和一次性配对凭据不得写入日志或仓库。
 - 动态前端属于 Builder 验证的可信发行代码；同源 ESM 不提供恶意插件隔离。

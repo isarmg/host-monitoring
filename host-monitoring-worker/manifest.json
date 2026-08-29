@@ -1,24 +1,21 @@
 {
-  "manifest_version": 1,
+  "manifest_version": 2,
   "id": "host-monitoring",
   "display_name": "主机",
   "description": "Agent 配对、遥测接收、历史和主机生命周期",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "version_metadata": { "channel": "development", "distribution": "bundled", "license": "Apache-2.0" },
   "compatibility": {
-    "core": ">=0.5.0, <0.6.0",
+    "core": ">=0.6.0, <0.7.0",
     "platform_api": "^1.0.0",
-    "plugin_api": "^1.0.0"
+    "plugin_api": "^2.0.0"
   },
   "dependencies": [],
   "execution": {
     "mode": "process",
     "executable": "backend/host-monitoring",
     "args": ["serve"],
-    "environment": [
-      { "name": "UNION_HOST_MONITORING_DATABASE_URL", "config_pointer": "/database_url" }
-    ],
-    "bind": { "host": "127.0.0.1", "port": 18105, "environment": "UNION_HOST_MONITORING_BIND" }
+    "bind": { "host": "127.0.0.1", "port": 18105 }
   },
   "backend": {
     "api_version": "v1",
@@ -31,12 +28,12 @@
       { "id": "agent-instances-write", "path": "/agent-instances", "upstream_path": "/api/monitoring/agent-instances", "methods": ["POST"], "auth": "platform", "permission": "host-monitoring.agents.write" },
       { "id": "agent-instance-write", "path": "/agent-instances/{*path}", "upstream_path": "/api/monitoring/agent-instances/{*path}", "methods": ["DELETE"], "auth": "platform", "permission": "host-monitoring.agents.write" },
       { "id": "managed-instance-write", "path": "/managed-instances/{*path}", "upstream_path": "/api/monitoring/managed-instances/{*path}", "methods": ["PATCH", "DELETE"], "auth": "platform", "permission": "host-monitoring.agents.write" },
-      { "id": "agent-report", "path": "/agent/v1/report", "upstream_path": "/api/agent/v1/report", "methods": ["POST"], "auth": "module", "permission": null },
-      { "id": "pairing-create", "path": "/agent/v2/pairing-requests", "upstream_path": "/api/agent/v2/pairing-requests", "methods": ["POST"], "auth": "module", "permission": null },
-      { "id": "pairing-read", "path": "/agent/v2/pairing-requests/{request_id}", "upstream_path": "/api/agent/v2/pairing-requests/{request_id}", "methods": ["GET"], "auth": "module", "permission": null },
-      { "id": "pairing-status", "path": "/agent/v2/pairing-requests/{request_id}/status", "upstream_path": "/api/agent/v2/pairing-requests/{request_id}/status", "methods": ["POST"], "auth": "module", "permission": null },
-      { "id": "agent-activate", "path": "/agent/v2/activate", "upstream_path": "/api/agent/v2/activate", "methods": ["POST"], "auth": "module", "permission": null },
-      { "id": "agent-activate-admin", "path": "/agent/v2/activate-admin", "upstream_path": "/api/agent/v2/activate-admin", "methods": ["POST"], "auth": "platform", "permission": "host-monitoring.agents.write" }
+      { "id": "agent-report", "path": "/host-m-agent/v1/report", "upstream_path": "/api/host-m-agent/v1/report", "methods": ["POST"], "auth": "module", "permission": null },
+      { "id": "pairing-create", "path": "/host-m-agent/v1/pairing-requests", "upstream_path": "/api/host-m-agent/v1/pairing-requests", "methods": ["POST"], "auth": "module", "permission": null },
+      { "id": "pairing-read", "path": "/host-m-agent/v1/pairing-requests/{request_id}", "upstream_path": "/api/host-m-agent/v1/pairing-requests/{request_id}", "methods": ["GET"], "auth": "module", "permission": null },
+      { "id": "pairing-status", "path": "/host-m-agent/v1/pairing-requests/{request_id}/status", "upstream_path": "/api/host-m-agent/v1/pairing-requests/{request_id}/status", "methods": ["POST"], "auth": "module", "permission": null },
+      { "id": "agent-activate", "path": "/host-m-agent/v1/activate", "upstream_path": "/api/host-m-agent/v1/activate", "methods": ["POST"], "auth": "module", "permission": null },
+      { "id": "agent-activate-admin", "path": "/host-m-agent/v1/activate-admin", "upstream_path": "/api/host-m-agent/v1/activate-admin", "methods": ["POST"], "auth": "platform", "permission": "host-monitoring.agents.write" }
     ]
   },
   "frontend": {
@@ -57,11 +54,11 @@
     { "id": "host-monitoring.agents.write", "description": "配对和管理 Agent", "default_roles": ["admin"] }
   ],
   "migrations": [
-    { "id": "schema-v1", "engine": "postgresql", "directory": "migrations", "schema": "host_monitoring" }
+    { "id": "schema-v2", "engine": "postgresql", "directory": "migrations", "schema": "host_monitoring" }
   ],
   "configuration": {
     "schema": "config/schema.json",
-    "version": 1,
+    "version": 2,
     "secret_fields": ["/database_url"]
   },
   "health": {

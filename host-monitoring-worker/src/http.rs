@@ -80,24 +80,27 @@ pub fn router(state: AppState) -> Router {
             "/api/monitoring/managed-instances/{host_id}",
             axum::routing::patch(update_remark).delete(delete_host),
         )
-        .route("/api/agent/v2/activate-admin", post(activate_admin))
+        .route("/api/host-m-agent/v1/activate-admin", post(activate_admin))
         .layer(DefaultBodyLimit::max(16 * 1024))
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
             console_admission,
         ));
     let agent = Router::new()
-        .route("/api/agent/v1/report", post(report))
-        .route("/api/agent/v2/pairing-requests", post(create_pairing))
+        .route("/api/host-m-agent/v1/report", post(report))
         .route(
-            "/api/agent/v2/pairing-requests/{request_id}",
+            "/api/host-m-agent/v1/pairing-requests",
+            post(create_pairing),
+        )
+        .route(
+            "/api/host-m-agent/v1/pairing-requests/{request_id}",
             get(pairing_public),
         )
         .route(
-            "/api/agent/v2/pairing-requests/{request_id}/status",
+            "/api/host-m-agent/v1/pairing-requests/{request_id}/status",
             post(pairing_status),
         )
-        .route("/api/agent/v2/activate", post(activate_capability))
+        .route("/api/host-m-agent/v1/activate", post(activate_capability))
         .layer(DefaultBodyLimit::max(AGENT_REPORT_MAX_BODY_BYTES));
     Router::new()
         .route("/health", get(live))
@@ -585,7 +588,7 @@ mod tests {
         assert_eq!(
             app()
                 .oneshot(
-                    Request::post("/api/agent/v2/pairing-requests")
+                    Request::post("/api/host-m-agent/v1/pairing-requests")
                         .body(Body::empty())
                         .unwrap()
                 )
@@ -638,7 +641,7 @@ mod tests {
 
     #[tokio::test]
     async fn admin_activation_requires_a_principal_but_capability_activation_does_not() {
-        let request = console_gateway(Request::post("/api/agent/v2/activate-admin"))
+        let request = console_gateway(Request::post("/api/host-m-agent/v1/activate-admin"))
             .header(header::CONTENT_TYPE, "application/json")
             .body(Body::from("{}"))
             .unwrap();
@@ -647,7 +650,7 @@ mod tests {
             StatusCode::UNPROCESSABLE_ENTITY
         );
 
-        let request = gateway(Request::post("/api/agent/v2/activate-admin"))
+        let request = gateway(Request::post("/api/host-m-agent/v1/activate-admin"))
             .header(header::CONTENT_TYPE, "application/json")
             .body(Body::from("{}"))
             .unwrap();
@@ -656,7 +659,7 @@ mod tests {
             StatusCode::UNAUTHORIZED
         );
 
-        let request = gateway(Request::post("/api/agent/v2/activate"))
+        let request = gateway(Request::post("/api/host-m-agent/v1/activate"))
             .header(header::CONTENT_TYPE, "application/json")
             .body(Body::from("{}"))
             .unwrap();

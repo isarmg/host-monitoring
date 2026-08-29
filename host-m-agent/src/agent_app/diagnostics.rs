@@ -298,9 +298,6 @@ pub(super) fn print_local_status(config: &AgentConfig) -> anyhow::Result<()> {
     let active_endpoint = pairing_status
         .as_ref()
         .and_then(|status| status.active_report_endpoint.as_deref());
-    let active_binding_persisted = pairing_status
-        .as_ref()
-        .is_some_and(|status| status.active_binding_persisted);
     let status_endpoint = pairing_error
         .is_none()
         .then(|| active_endpoint.unwrap_or(config.endpoint.as_str()));
@@ -340,12 +337,6 @@ pub(super) fn print_local_status(config: &AgentConfig) -> anyhow::Result<()> {
             "error",
             Some("active_pairing_snapshot_invalid"),
             error.clone(),
-        )
-    } else if active_endpoint.is_some() && !active_binding_persisted {
-        (
-            "warning",
-            Some("active_binding_missing"),
-            "legacy Active state will create its private endpoint binding on the next run".into(),
         )
     } else if active_endpoint.is_some() {
         (

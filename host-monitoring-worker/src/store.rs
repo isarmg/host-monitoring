@@ -1,5 +1,4 @@
 use chrono::{DateTime, Utc};
-use serde_json::Value;
 use sqlx::{FromRow, PgPool, Row, postgres::PgPoolOptions, types::Json};
 use unionc_protocol::{AgentPairingRequest, AgentReport, Capability, PairingStatus};
 use uuid::Uuid;
@@ -719,24 +718,4 @@ pub async fn delete_host(pool: &PgPool, host_id: Uuid, actor: &str) -> anyhow::R
         .await?;
     tx.commit().await?;
     Ok(true)
-}
-
-pub async fn schema_counts(pool: &PgPool, import_id: Uuid) -> anyhow::Result<serde_json::Value> {
-    let mut map = serde_json::Map::new();
-    for table in [
-        "monitored_hosts",
-        "agent_metric_reports",
-        "agent_credentials",
-        "agent_instance_invites",
-        "agent_pairing_requests",
-    ] {
-        let query =
-            format!("SELECT count(*) FROM host_monitoring.{table} WHERE source_import_id=$1");
-        let count: i64 = sqlx::query_scalar(&query)
-            .bind(import_id)
-            .fetch_one(pool)
-            .await?;
-        map.insert(table.into(), Value::from(count));
-    }
-    Ok(Value::Object(map))
 }

@@ -2,7 +2,7 @@ use clap::Parser;
 use union_host_monitoring_worker::{
     config::{Cli, Command},
     http::{AppState, router},
-    import, store,
+    store,
 };
 
 #[tokio::main]
@@ -14,8 +14,8 @@ async fn main() -> anyhow::Result<()> {
         )
         .init();
     match Cli::parse().command {
-        Command::Serve(common) => {
-            let config = common.validate()?;
+        Command::Serve => {
+            let config = union_host_monitoring_worker::config::ValidatedConfig::from_runtime()?;
             let pool = store::connect(&config.database_url).await?;
             store::migrate(&pool).await?;
             let listener = tokio::net::TcpListener::bind(config.bind).await?;
@@ -27,35 +27,6 @@ async fn main() -> anyhow::Result<()> {
         Command::Migrate(database) => {
             let pool = store::connect(&database.database_url).await?;
             store::migrate(&pool).await?;
-        }
-        Command::ImportSqlite {
-            database,
-            sqlite,
-            evidence,
-        } => {
-            let pool = store::connect(&database.database_url).await?;
-            let result = import::import_sqlite(&pool, &sqlite, &evidence).await?;
-            println!("{}", serde_json::to_string_pretty(&result)?);
-        }
-        Command::VerifyImport {
-            database,
-            import_id,
-        } => {
-            let pool = store::connect(&database.database_url).await?;
-            let result = import::verify(&pool, import_id).await?;
-            println!("{}", serde_json::to_string_pretty(&result)?);
-            if !result.valid {
-                anyhow::bail!("import verification failed");
-            }
-        }
-        Command::RollbackImport {
-            database,
-            import_id,
-            evidence,
-        } => {
-            let pool = store::connect(&database.database_url).await?;
-            let result = import::rollback(&pool, import_id, &evidence).await?;
-            println!("{}", serde_json::to_string_pretty(&result)?);
         }
     }
     Ok(())

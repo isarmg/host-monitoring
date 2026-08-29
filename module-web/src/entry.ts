@@ -22,7 +22,7 @@ interface HostSdk {
 const entry = {
   pluginApiVersion: "1.0.0",
   moduleId: "host-monitoring",
-  version: "0.5.0",
+  version: "0.6.0",
   async activate(host: HostSdk) {
     bindReact(host.react);
     bindModuleApi(host.api);

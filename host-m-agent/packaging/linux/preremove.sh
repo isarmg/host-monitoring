@@ -5,7 +5,7 @@ PATH=/usr/sbin:/usr/bin:/sbin:/bin
 export PATH
 
 service_name=host-m-agent.service
-package_version=0.5.0
+package_version=0.6.0
 account_state_dir=/var/lib/host-m-agent-package
 state_dir=/var/lib/host-m-agent
 config_dir=/etc/host-m-agent
@@ -251,9 +251,9 @@ disable_for_remove() {
 }
 
 # Debian uses the literal `upgrade <new-version>` ABI even when reinstalling
-# the exact same package. Accept only 0.5.0. RPM uses a positive remaining
+# the exact same package. Accept only 0.6.0. RPM uses a positive remaining
 # instance count for replacement; the new postinstall has already validated
-# the exact 0.5.0 ownership markers before the pre-remove scriptlet can run.
+# the exact 0.6.0 ownership markers before the pre-remove scriptlet can run.
 case "${1:-}" in
   upgrade)
     [ "$#" -eq 2 ] && [ "$2" = "$package_version" ] ||

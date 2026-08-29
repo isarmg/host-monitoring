@@ -131,7 +131,7 @@ var monitoringApi = {
 var agentActivationApi = {
   activateAgent: async (request_id, activation_code) => {
     try {
-      return await request("/agent/v2/activate-admin", {
+      return await request("/host-m-agent/v1/activate-admin", {
         method: "POST",
         body: JSON.stringify({ request_id, activation_code }),
         suppressAuthExpired: true
@@ -144,7 +144,7 @@ var agentActivationApi = {
     }
   },
   agentPairingRequest: (requestId) => request(
-    `/agent/v2/pairing-requests/${pathSegment(requestId)}`,
+    `/host-m-agent/v1/pairing-requests/${pathSegment(requestId)}`,
     { suppressAuthExpired: true }
   )
 };
