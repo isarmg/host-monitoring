@@ -8,7 +8,7 @@ use anyhow::{Context, bail};
 use flate2::{Compression, write::GzEncoder};
 use reqwest::{Certificate, Client, Identity, StatusCode};
 
-use unionc_protocol::AgentReportAck;
+use host_protocol::AgentReportAck;
 
 use crate::{
     config::AgentConfig,

@@ -1,6 +1,6 @@
 use chrono::{DateTime, Utc};
 use sqlx::{FromRow, PgPool, Row, postgres::PgPoolOptions, types::Json};
-use unionc_protocol::{AgentPairingRequest, AgentReport, Capability, PairingStatus};
+use host_protocol::{AgentPairingRequest, AgentReport, Capability, PairingStatus};
 use uuid::Uuid;
 
 use crate::model::{
@@ -27,6 +27,59 @@ pub async fn ready(pool: &PgPool) -> bool {
         .fetch_one(pool)
         .await
         .is_ok()
+}
+
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct StoredUser {
+    pub user_id: Uuid,
+    pub email: String,
+    pub password_hash: String,
+    pub active: bool,
+}
+
+pub async fn find_active_user_by_email(
+    pool: &PgPool,
+    email: &str,
+) -> anyhow::Result<Option<StoredUser>> {
+    let normalized = email.trim().to_lowercase();
+    let row = sqlx::query_as::<_, StoredUser>(
+        "SELECT user_id,email,password_hash,active FROM host_monitoring.auth_users \
+         WHERE email=$1 AND active=true",
+    )
+    .bind(normalized)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row)
+}
+
+pub async fn ensure_admin_user(
+    pool: &PgPool,
+    email: &str,
+    password: Option<&str>,
+) -> anyhow::Result<()> {
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM host_monitoring.auth_users")
+        .fetch_one(pool)
+        .await?;
+    if count > 0 {
+        return Ok(());
+    }
+    let password = password.ok_or_else(|| {
+        anyhow::anyhow!(
+            "HOST_MONITORING_BOOTSTRAP_ADMIN_PASSWORD is required while no users exist"
+        )
+    })?;
+    let normalized = email.trim().to_lowercase();
+    let password_hash = crate::auth::hash_password(password)?;
+    sqlx::query(
+        "INSERT INTO host_monitoring.auth_users(user_id,email,password_hash,active,created_at) \
+         VALUES($1,$2,$3,true,now())",
+    )
+    .bind(Uuid::new_v4())
+    .bind(normalized)
+    .bind(password_hash)
+    .execute(pool)
+    .await?;
+    Ok(())
 }
 
 async fn audit(

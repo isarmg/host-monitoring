@@ -10,7 +10,8 @@ use axum::{
 };
 use chrono::Utc;
 use tokio::sync::Mutex;
-use unionc_protocol::{
+use tower_http::services::ServeDir;
+use host_protocol::{
     AGENT_REPORT_MAX_BODY_BYTES, ActivateAgentRequest, ActivateAgentResponse,
     ActivatePairingStatus, AgentPairingRequest, AgentPairingResponse, AgentPairingStatusResponse,
     AgentReport, AgentReportAck,
@@ -30,15 +31,15 @@ use crate::{
 #[derive(Clone)]
 pub struct AppState {
     pub pool: sqlx::PgPool,
-    pub gateway: sarmg_platform_gateway::GatewayIdentity,
+    pub auth: crate::auth::Auth,
     report_buckets: Arc<Mutex<HashMap<String, TokenBucket>>>,
 }
 
 impl AppState {
-    pub fn new(pool: sqlx::PgPool, gateway: sarmg_platform_gateway::GatewayIdentity) -> Self {
+    pub fn new(pool: sqlx::PgPool, auth: crate::auth::Auth) -> Self {
         Self {
             pool,
-            gateway,
+            auth,
             report_buckets: Arc::new(Mutex::new(HashMap::new())),
         }
     }
@@ -65,6 +66,9 @@ impl TokenBucket {
 
 pub fn router(state: AppState) -> Router {
     let console = Router::new()
+        .route("/api/v1/auth/login", post(login))
+        .route("/api/v1/auth/logout", post(logout))
+        .route("/api/v1/auth/session", get(session))
         .route("/api/monitoring/hosts", get(list_hosts))
         .route("/api/monitoring/hosts/{host_id}", get(host_detail))
         .route("/api/monitoring/hosts/{host_id}/history", get(host_history))
@@ -108,9 +112,8 @@ pub fn router(state: AppState) -> Router {
         .route("/health/ready", get(ready))
         .merge(console)
         .merge(agent)
-        .layer(middleware::from_fn_with_state(
-            state.clone(),
-            gateway_admission,
+        .fallback_service(ServeDir::new(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("web"),
         ))
         .with_state(state)
 }
@@ -125,20 +128,69 @@ async fn console_admission(
     Ok(next.run(request).await)
 }
 
-async fn gateway_admission(
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LoginRequest {
+    email: String,
+    password: String,
+}
+
+async fn login(
     State(state): State<AppState>,
-    request: Request,
-    next: Next,
+    Json(request): Json<LoginRequest>,
 ) -> Result<Response> {
-    auth::require(request.headers(), &state)?;
-    Ok(next.run(request).await)
+    let user = store::find_active_user_by_email(&state.pool, &request.email)
+        .await
+        .map_err(database)?
+        .ok_or(Error::Unauthorized)?;
+    if !crate::auth::verify_password(&request.password, &user.password_hash) {
+        return Err(Error::Unauthorized);
+    }
+    let token = state.auth.issue_session(&user.user_id.to_string())?;
+    let cookie = state.auth.session_cookie(&token);
+    let value = HeaderValue::from_str(&cookie)
+        .map_err(|error| Error::BadRequest(error.to_string()))?;
+    Ok((
+        StatusCode::NO_CONTENT,
+        [(header::SET_COOKIE, value)],
+    )
+        .into_response())
+}
+
+async fn logout(State(state): State<AppState>) -> Response {
+    let cookie = state.auth.expired_session_cookie();
+    let value = HeaderValue::from_str(&cookie).unwrap_or_else(|_| HeaderValue::from_static(""));
+    (
+        StatusCode::NO_CONTENT,
+        [(header::SET_COOKIE, value)],
+    )
+        .into_response()
+}
+
+async fn session(
+    State(state): State<AppState>,
+    Extension(principal): Extension<Principal>,
+) -> Result<Json<serde_json::Value>> {
+    let user = sqlx::query_scalar::<_, String>(
+        "SELECT email FROM host_monitoring.auth_users WHERE user_id=$1 AND active=true",
+    )
+    .bind(
+        uuid::Uuid::parse_str(&principal.subject)
+            .map_err(|_| Error::Unauthorized)?,
+    )
+    .fetch_one(&state.pool)
+    .await
+    .map_err(|_| Error::Unauthorized)?;
+    Ok(Json(serde_json::json!({
+        "authenticated": true,
+        "user_id": principal.subject,
+        "email": user
+    })))
 }
 
 async fn live(State(state): State<AppState>) -> Response {
-    with_module_identity(
-        &state,
-        Json(serde_json::json!({ "status": "ok" })).into_response(),
-    )
+    let _ = state;
+    Json(serde_json::json!({ "status": "ok" })).into_response()
 }
 
 async fn ready(State(state): State<AppState>) -> Response {
@@ -155,11 +207,7 @@ async fn ready(State(state): State<AppState>) -> Response {
         })),
     )
         .into_response();
-    with_module_identity(&state, response)
-}
-
-fn with_module_identity(state: &AppState, mut response: Response) -> Response {
-    state.gateway.apply_health_headers(response.headers_mut());
+    let _ = state;
     response
 }
 
@@ -530,28 +578,13 @@ mod tests {
         let pool = sqlx::postgres::PgPoolOptions::new()
             .connect_lazy("postgresql://localhost/unused")
             .unwrap();
-        let gateway = sarmg_platform_gateway::GatewayIdentity::new(
-            auth::MODULE_PROTOCOL,
-            auth::MODULE_AUDIENCE,
-            "ab".repeat(32),
-            auth::MODULE_PREFIX,
-            auth::MODULE_AUDIENCE,
-            auth::MODULE_PREFIX,
+        let auth = crate::auth::Auth::new(
+            vec![7; 32],
+            std::time::Duration::from_secs(60),
+            false,
         )
         .unwrap();
-        router(AppState::new(pool, gateway))
-    }
-
-    fn gateway(request: axum::http::request::Builder) -> axum::http::request::Builder {
-        request
-            .header(auth::MODULE_PROTOCOL_HEADER, auth::MODULE_PROTOCOL)
-            .header(auth::MODULE_AUDIENCE_HEADER, auth::MODULE_AUDIENCE)
-            .header(auth::MODULE_TOKEN_HEADER, "ab".repeat(32))
-            .header(auth::FORWARDED_PREFIX_HEADER, auth::MODULE_PREFIX)
-    }
-
-    fn console_gateway(request: axum::http::request::Builder) -> axum::http::request::Builder {
-        gateway(request).header(auth::PRINCIPAL_HEADER, "operator")
+        router(AppState::new(pool, auth))
     }
 
     #[test]
@@ -564,14 +597,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn health_and_module_routes_require_the_same_gateway_contract() {
+    async fn health_is_public_and_console_routes_require_a_session_cookie() {
         assert_eq!(
             app()
                 .oneshot(Request::get("/health/live").body(Body::empty()).unwrap())
                 .await
                 .unwrap()
                 .status(),
-            StatusCode::UNAUTHORIZED
+            StatusCode::OK
         );
         assert_eq!(
             app()
@@ -585,87 +618,21 @@ mod tests {
                 .status(),
             StatusCode::UNAUTHORIZED
         );
-        assert_eq!(
-            app()
-                .oneshot(
-                    Request::post("/api/host-m-agent/v1/pairing-requests")
-                        .body(Body::empty())
-                        .unwrap()
-                )
-                .await
-                .unwrap()
-                .status(),
-            StatusCode::UNAUTHORIZED
-        );
+    }
+
+    #[tokio::test]
+    async fn login_route_is_public() {
         let response = app()
             .oneshot(
-                gateway(Request::get("/health/live"))
-                    .body(Body::empty())
+                Request::post("/api/v1/auth/login")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        r#"{"email":"admin@example.com","password":"bad-password"}"#,
+                    ))
                     .unwrap(),
             )
             .await
             .unwrap();
-        assert_eq!(response.status(), StatusCode::OK);
-        assert_eq!(
-            response.headers()[auth::MODULE_PROTOCOL_HEADER],
-            auth::MODULE_PROTOCOL
-        );
-        assert_eq!(
-            response.headers()[auth::MODULE_AUDIENCE_HEADER],
-            auth::MODULE_AUDIENCE
-        );
-    }
-
-    #[tokio::test]
-    async fn audience_confusion_and_cookie_forwarding_fail_before_database() {
-        let request = Request::get("/api/monitoring/hosts")
-            .header(auth::MODULE_PROTOCOL_HEADER, auth::MODULE_PROTOCOL)
-            .header(auth::MODULE_AUDIENCE_HEADER, "photo-backup")
-            .header(auth::MODULE_TOKEN_HEADER, "ab".repeat(32))
-            .header(auth::FORWARDED_PREFIX_HEADER, auth::MODULE_PREFIX)
-            .body(Body::empty())
-            .unwrap();
-        assert_eq!(
-            app().oneshot(request).await.unwrap().status(),
-            StatusCode::UNAUTHORIZED
-        );
-        let request = gateway(Request::get("/api/monitoring/hosts"))
-            .header(header::COOKIE, "union=secret")
-            .body(Body::empty())
-            .unwrap();
-        assert_eq!(
-            app().oneshot(request).await.unwrap().status(),
-            StatusCode::MISDIRECTED_REQUEST
-        );
-    }
-
-    #[tokio::test]
-    async fn admin_activation_requires_a_principal_but_capability_activation_does_not() {
-        let request = console_gateway(Request::post("/api/host-m-agent/v1/activate-admin"))
-            .header(header::CONTENT_TYPE, "application/json")
-            .body(Body::from("{}"))
-            .unwrap();
-        assert_eq!(
-            app().oneshot(request).await.unwrap().status(),
-            StatusCode::UNPROCESSABLE_ENTITY
-        );
-
-        let request = gateway(Request::post("/api/host-m-agent/v1/activate-admin"))
-            .header(header::CONTENT_TYPE, "application/json")
-            .body(Body::from("{}"))
-            .unwrap();
-        assert_eq!(
-            app().oneshot(request).await.unwrap().status(),
-            StatusCode::UNAUTHORIZED
-        );
-
-        let request = gateway(Request::post("/api/host-m-agent/v1/activate"))
-            .header(header::CONTENT_TYPE, "application/json")
-            .body(Body::from("{}"))
-            .unwrap();
-        assert_eq!(
-            app().oneshot(request).await.unwrap().status(),
-            StatusCode::UNPROCESSABLE_ENTITY
-        );
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
     }
 }

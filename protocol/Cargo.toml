@@ -1,5 +1,5 @@
 [package]
-name = "unionc-protocol"
+name = "host-protocol"
 description = "Stable wire types shared by the host-m-agent and host-monitoring worker"
 version.workspace = true
 edition.workspace = true

@@ -1,6 +1,6 @@
 [package]
-name = "union-host-monitoring-worker"
-description = "Union-private host monitoring worker backed by PostgreSQL"
+name = "host-monitoring-server"
+description = "Independent host monitoring server backed by PostgreSQL"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -11,9 +11,12 @@ publish = false
 
 [dependencies]
 anyhow = "1"
+argon2 = { version = "0.5", features = ["std"] }
 axum = "0.8"
+base64 = "0.22"
 chrono = { version = "0.4", features = ["clock", "serde"] }
 clap = { version = "4", features = ["derive", "env"] }
+hmac = "0.12"
 http-body-util = "0.1"
 mime = "0.3"
 serde = { version = "1", features = ["derive"] }
@@ -30,13 +33,10 @@ sqlx = { version = "0.8", default-features = false, features = [
 ] }
 thiserror = "2"
 tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "rt-multi-thread", "signal"] }
-tower-http = { version = "0.6", features = ["trace"] }
+tower-http = { version = "0.6", features = ["trace", "fs"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-unionc-protocol.workspace = true
-sarmg-platform-core = { git = "https://github.com/isarmg/sarmg-platform.git", rev = "e7332a13d8ad5a08c7d7115a58a0fa47582c0bef" }
-sarmg-platform-gateway = { git = "https://github.com/isarmg/sarmg-platform.git", rev = "e7332a13d8ad5a08c7d7115a58a0fa47582c0bef" }
-sarmg-platform-sdk = { git = "https://github.com/isarmg/sarmg-platform.git", rev = "e7332a13d8ad5a08c7d7115a58a0fa47582c0bef" }
+host-protocol.workspace = true
 uuid = { version = "1", features = ["serde", "v4"] }
 
 [dev-dependencies]

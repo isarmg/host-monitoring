@@ -1,5 +1,5 @@
 use clap::Parser;
-use union_host_monitoring_worker::{
+use host_monitoring_server::{
     config::{Cli, Command},
     http::{AppState, router},
     store,
@@ -15,12 +15,18 @@ async fn main() -> anyhow::Result<()> {
         .init();
     match Cli::parse().command {
         Command::Serve => {
-            let config = union_host_monitoring_worker::config::ValidatedConfig::from_runtime()?;
+            let config = host_monitoring_server::config::ValidatedConfig::from_runtime()?;
             let pool = store::connect(&config.database_url).await?;
             store::migrate(&pool).await?;
+            store::ensure_admin_user(
+                &pool,
+                &config.bootstrap_admin_email,
+                config.bootstrap_admin_password.as_deref(),
+            )
+            .await?;
             let listener = tokio::net::TcpListener::bind(config.bind).await?;
-            tracing::info!(bind=%config.bind, "Union private host-monitoring worker ready");
-            axum::serve(listener, router(AppState::new(pool, config.gateway)))
+            tracing::info!(bind=%config.bind, "host-monitoring server ready");
+            axum::serve(listener, router(AppState::new(pool, config.auth)))
                 .with_graceful_shutdown(shutdown())
                 .await?;
         }

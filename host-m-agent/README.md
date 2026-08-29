@@ -6,7 +6,7 @@ Union Core 的 HTTPS 网关完成配对、激活和报告。Android、iOS 和 iP
 feature 的 Rust 库，由原生宿主 App 驱动。两种形态都不监听公网端口，也不直接连接
 Host Worker 的私有 loopback 地址或数据库。
 
-Agent 与 `host-monitoring-worker` 共用同仓的 `unionc-protocol`，三者按同一版本发布源码。
+Agent 与 `host-monitoring-worker` 共用同仓的 `host-protocol`，三者按同一版本发布源码。
 示例配置见 [`config.example.json`](config.example.json)。生产配置必须使用 HTTPS；只有明确的
 本地开发场景才能设置 `allow_insecure_http`。
 

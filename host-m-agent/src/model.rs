@@ -3,4 +3,4 @@
 //! Platform collectors convert native values into these fixed-width DTOs at their boundary. Keep
 //! Agent-only configuration and runtime state out of this module.
 
-pub use unionc_protocol::*;
+pub use host_protocol::*;

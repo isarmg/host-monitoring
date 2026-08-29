@@ -1,13 +1,17 @@
 use std::{
+    env,
     net::{IpAddr, SocketAddr},
     str::FromStr,
+    time::Duration,
 };
 
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 use clap::{Parser, Subcommand};
-use serde::Deserialize;
+
+use crate::auth::Auth;
 
 #[derive(Debug, Parser)]
-#[command(name = "union-host-monitoring-worker", version, about)]
+#[command(name = "host-monitoring-server", version, about)]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Command,
@@ -15,9 +19,9 @@ pub struct Cli {
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
-    /// Apply this module's PostgreSQL migrations, then serve its private HTTP API.
+    /// Apply this project's PostgreSQL migrations, then serve its HTTP API.
     Serve,
-    /// Apply only this module's PostgreSQL migrations.
+    /// Apply only this project's PostgreSQL migrations.
     Migrate(Database),
 }
 
@@ -27,58 +31,66 @@ pub struct Database {
     pub database_url: String,
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct RuntimeConfiguration {
-    database_url: String,
-}
-
-impl ValidatedConfig {
-    pub fn from_runtime() -> anyhow::Result<Self> {
-        let manifest =
-            sarmg_platform_core::PluginManifest::parse_json(include_str!("../manifest.json"))?;
-        let context = sarmg_platform_sdk::ProcessContext::from_env(&manifest)?;
-        let configuration: RuntimeConfiguration = context.load_configuration()?;
-        if !configuration.database_url.starts_with("postgresql://")
-            && !configuration.database_url.starts_with("postgres://")
-        {
-            anyhow::bail!("host-monitoring requires a PostgreSQL database URL");
-        }
-        Ok(Self {
-            bind: context.bind,
-            database_url: configuration.database_url,
-            gateway: sarmg_platform_gateway::GatewayIdentity::from_env(
-                crate::auth::MODULE_AUDIENCE,
-                crate::auth::MODULE_PREFIX,
-            )?,
-        })
-    }
-}
-
 #[derive(Debug, Clone)]
 pub struct ValidatedConfig {
     pub bind: SocketAddr,
     pub database_url: String,
-    pub gateway: sarmg_platform_gateway::GatewayIdentity,
+    pub auth: Auth,
+    pub bootstrap_admin_email: String,
+    pub bootstrap_admin_password: Option<String>,
+}
+
+impl ValidatedConfig {
+    pub fn from_runtime() -> anyhow::Result<Self> {
+        let database_url = required("HOST_MONITORING_DATABASE_URL")?;
+        if !database_url.starts_with("postgresql://")
+            && !database_url.starts_with("postgres://")
+        {
+            anyhow::bail!("HOST_MONITORING_DATABASE_URL must be a PostgreSQL URL");
+        }
+        let session_secret = STANDARD
+            .decode(required("HOST_MONITORING_SESSION_SECRET")?)
+            .map_err(|_| anyhow::anyhow!("HOST_MONITORING_SESSION_SECRET must be base64"))?;
+        let session_ttl = Duration::from_secs(parse_u64(
+            "HOST_MONITORING_SESSION_TTL_SECONDS",
+            43_200,
+        )?);
+        let cookie_secure = parse_bool("HOST_MONITORING_SESSION_COOKIE_SECURE", false)?;
+        Ok(Self {
+            bind: value("HOST_MONITORING_BIND", "127.0.0.1:18105")
+                .parse()
+                .map_err(|_| anyhow::anyhow!("HOST_MONITORING_BIND must be a socket address"))?,
+            database_url,
+            auth: Auth::new(session_secret, session_ttl, cookie_secure)?,
+            bootstrap_admin_email: value(
+                "HOST_MONITORING_BOOTSTRAP_ADMIN_EMAIL",
+                "admin@example.com",
+            ),
+            bootstrap_admin_password: env::var("HOST_MONITORING_BOOTSTRAP_ADMIN_PASSWORD").ok(),
+        })
+    }
 }
 
 pub fn forwarded_ip(value: &str) -> Option<IpAddr> {
     IpAddr::from_str(value.split(',').next()?.trim()).ok()
 }
 
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn shared_gateway_contract_accepts_only_host_monitoring_identity() {
-        let token = "ab".repeat(32);
-        let identity = sarmg_platform_gateway::GatewayIdentity::new(
-            sarmg_platform_gateway::PROTOCOL,
-            crate::auth::MODULE_AUDIENCE,
-            token,
-            crate::auth::MODULE_PREFIX,
-            crate::auth::MODULE_AUDIENCE,
-            crate::auth::MODULE_PREFIX,
-        );
-        assert!(identity.is_ok());
-    }
+fn required(name: &str) -> anyhow::Result<String> {
+    env::var(name).map_err(|_| anyhow::anyhow!("{name} is required"))
+}
+
+fn value(name: &str, default: &str) -> String {
+    env::var(name).unwrap_or_else(|_| default.to_string())
+}
+
+fn parse_u64(name: &str, default: u64) -> anyhow::Result<u64> {
+    value(name, &default.to_string())
+        .parse()
+        .map_err(|_| anyhow::anyhow!("{name} must be an unsigned integer"))
+}
+
+fn parse_bool(name: &str, default: bool) -> anyhow::Result<bool> {
+    value(name, if default { "true" } else { "false" })
+        .parse()
+        .map_err(|_| anyhow::anyhow!("{name} must be true or false"))
 }
