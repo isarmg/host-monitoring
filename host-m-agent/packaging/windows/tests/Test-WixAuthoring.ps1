@@ -245,8 +245,8 @@ function Assert-Equal {
 $product = Select-One "/w:Wix/w:Package"
 Assert-Equal $product.Scope "perMachine" "The MSI must be per-machine."
 Assert-Equal $product.InstallerVersion "500" "The MSI must target MSI 5.0."
-Assert-Equal $product.UpgradeCode "{A1AB822F-91BA-4116-A7E3-CE842B93E93C}" `
-    "The x64 upgrade family GUID must remain stable."
+Assert-Equal ($product.GetAttribute("UpgradeCode")) "" `
+    "A current-only MSI must not declare a cross-version product family."
 $infoUrl = Select-One "/w:Wix/w:Package/w:Property[@Id='ARPURLINFOABOUT']"
 Assert-Equal $infoUrl.Value "https://github.com/isarmg/host-monitoring" `
     "The Apps & Features project URL must identify the current repository."
@@ -254,19 +254,9 @@ Assert-Equal $infoUrl.Value "https://github.com/isarmg/host-monitoring" `
 if (@($package.SelectNodes("/w:Wix/w:Package/w:MajorUpgrade", $namespace)).Count -ne 0) {
     throw "The current-only MSI must not author automatic major-upgrade migration."
 }
-$otherVersion = Select-One "/w:Wix/w:Package/w:Upgrade/w:UpgradeVersion"
-Assert-Equal $otherVersion.Minimum "0.0.0" `
-    "Related-product detection must cover every other version in the upgrade family."
-Assert-Equal $otherVersion.IncludeMinimum "yes" `
-    "The related-product lower bound must be inclusive."
-Assert-Equal $otherVersion.OnlyDetect "yes" `
-    "Other versions must be detected but never removed or migrated."
-Assert-Equal $otherVersion.Property "HOST_MONITORING_OTHER_VERSION_FOUND" `
-    "The current-only related-product property drifted."
-$otherVersionLaunch = Select-One `
-    "/w:Wix/w:Package/w:Launch[@Condition='Installed OR NOT HOST_MONITORING_OTHER_VERSION_FOUND']"
-Assert-Contains $otherVersionLaunch.Message "Uninstall it before installing this version" `
-    "The current-only gate must tell operators to remove another version explicitly."
+if (@($package.SelectNodes("/w:Wix/w:Package/w:Upgrade", $namespace)).Count -ne 0) {
+    throw "The current-only MSI must not detect or special-case another product version."
+}
 
 $service = Select-One "//w:ServiceInstall[@Name='host-m-agent']"
 Assert-Equal $service.DisplayName "host-m-agent" "Unexpected service display name."
@@ -505,11 +495,10 @@ Assert-Equal $closeApplicationsSequence.GetAttribute("Before") "" `
     "The CloseApplications override must use exactly one relative sequence anchor."
 Assert-Equal $closeApplicationsSequence.Condition 'VersionNT > 400' `
     "The CloseApplications override must retain the WiX Util platform condition."
-Assert-Contains $packageText 'Property="HOST_MONITORING_OTHER_VERSION_FOUND"' `
-    "A fail-closed other-version detection row is required."
 foreach ($removedUpgradeMechanism in @(
-    '<MajorUpgrade', 'RemoveExistingProducts', 'UPGRADINGPRODUCTCODE',
-    'WIX_UPGRADE_DETECTED', 'HOST_MONITORING_TEST_FAIL_AFTER_REMOVE'
+    'UpgradeCode=', '<Upgrade ', '<MajorUpgrade', 'RemoveExistingProducts',
+    'UPGRADINGPRODUCTCODE', 'WIX_UPGRADE_DETECTED', 'HOST_MONITORING_OTHER_VERSION_FOUND',
+    'HOST_MONITORING_TEST_FAIL_AFTER_REMOVE'
 )) {
     if ($packageText.Contains($removedUpgradeMechanism)) {
         throw "Removed automatic-upgrade mechanism remains in Package.wxs: $removedUpgradeMechanism"

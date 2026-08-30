@@ -6,11 +6,10 @@ Windows 的首选制品是 x64、per-machine 的 WiX MSI：
 host-m-agent-<version>-x64.msi
 ```
 
-终端用户可以双击安装，并在 Windows“设置 → 应用 → 已安装的应用”中卸载。安装、同版本
+终端用户可以双击安装，并在 Windows“设置 → 应用 → 已安装的应用”中卸载。安装、当前版本
 重装、服务注册和卸载均由 Windows Installer 与原生维护程序完成，**不要求系统安装或启用
-PowerShell**。0.7.0 不提供跨版本升级或状态迁移；检测到同一 UpgradeCode 的其他版本时会
-fail closed，必须用与已安装产品同版本的可信 MSI 执行同一次 `/x ... PURGE=1` 永久清理，
-再安装、创建新实例并配对。
+PowerShell**。0.7.0 不声明 `UpgradeCode`，也不检测、接管、移除或迁移任何其他版本；跨版本
+升级由独立升级仓库负责，产品 MSI 只处理自己的当前版本和当前状态。
 
 当前只发布 `x86_64-pc-windows-msvc` 制品；尚未提供 ARM64 MSI，也不把 Windows 的 x64
 仿真能力声明为原生 ARM64 支持。
@@ -85,9 +84,9 @@ sc.exe stop host-m-agent
 sc.exe start host-m-agent
 ```
 
-WiX 只用 `UpgradeVersion OnlyDetect=yes` 检测同一产品族的其他版本，不编排
-`RemoveExistingProducts`，也没有 major-upgrade rollback 或故障注入路径。0.7.0 的 repair/
-reinstall 仍使用相同 ProductCode 和当前事务快照。repair 和卸载会在 Windows Installer
+WiX 不声明跨版本产品族、`Upgrade` 或 `MajorUpgrade`，也不编排
+`RemoveExistingProducts`。0.7.0 的 repair/reinstall 仍使用相同 ProductCode 和当前事务快照。
+repair 和卸载会在 Windows Installer
 事务开始后、`StopServices`、`RemoveShortcuts` 和 `RemoveFiles` 之前，向托盘发送 `WM_CLOSE`
 并等待其优雅退出；不强杀跨会话进程，文件仍被占用时走 Windows Installer 标准重启机制。
 只有 fresh interactive install 会在事务提交后通过 WiX unelevated ShellExecute helper 启动
@@ -197,7 +196,7 @@ PE 校验默认读取仓库的 `target\x86_64-pc-windows-msvc\release`，也可�
 host-m-agent 状态的主机上执行。
 
 发布前还必须在一次性、干净的 x64 Windows VM 中执行：恶意预置状态拒绝、同名 service
-碰撞拒绝、其他 UpgradeCode 版本 fail closed、fresh install、同一 0.7.0 repair/reinstall、浏览器
+碰撞拒绝、fresh install、同一 0.7.0 repair/reinstall、浏览器
 配对、托盘单实例/本地 capability URL、登录自启动、运行中托盘的优雅卸载、fresh-install
 rollback、普通卸载/当前 marker 重装、显式 purge，以及 program/state root junction 防护。
 测试需同时核对 SCM 配置、service SID 类型、托盘不是

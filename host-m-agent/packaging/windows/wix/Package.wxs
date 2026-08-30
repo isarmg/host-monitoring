@@ -18,7 +18,6 @@
     Codepage="1252"
     Scope="perMachine"
     InstallerVersion="500"
-    UpgradeCode="{A1AB822F-91BA-4116-A7E3-CE842B93E93C}"
     Compressed="yes">
 
     <SummaryInformation
@@ -27,18 +26,6 @@
       Manufacturer="Host Monitoring" />
     <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
 
-    <!-- Another product version in this family must be removed explicitly; no migration runs. -->
-    <Upgrade Id="{A1AB822F-91BA-4116-A7E3-CE842B93E93C}">
-      <UpgradeVersion
-        Minimum="0.0.0"
-        IncludeMinimum="yes"
-        OnlyDetect="yes"
-        Property="HOST_MONITORING_OTHER_VERSION_FOUND" />
-    </Upgrade>
-
-    <Launch
-      Condition="Installed OR NOT HOST_MONITORING_OTHER_VERSION_FOUND"
-      Message="Another host-m-agent version is installed. Uninstall it before installing this version; automatic migration is not supported." />
     <Launch
       Condition="VersionNT64"
       Message="[ProductName] requires 64-bit Windows." />
@@ -373,7 +360,7 @@
         irreversible: if it cannot finish, the protected quarantine may remain for explicit
         administrator cleanup, but Windows Installer must not roll an already uninstalled product
         back onto a partially deleted state tree.
-        Version migration is not supported, so no upgrade transaction can enter this path.
+        This current-version package has no cross-version product-family or upgrade path.
       -->
       <Custom
         Action="RollbackPurgedState"
