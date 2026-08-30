@@ -31,9 +31,13 @@ async fn main() -> anyhow::Result<()> {
             .await?;
             let listener = tokio::net::TcpListener::bind(config.bind).await?;
             tracing::info!(bind=%config.bind, "host-monitoring server ready");
-            axum::serve(listener, router(AppState::new(pool, config.auth)))
-                .with_graceful_shutdown(shutdown())
-                .await?;
+            axum::serve(
+                listener,
+                router(AppState::new(pool, config.auth))
+                    .into_make_service_with_connect_info::<std::net::SocketAddr>(),
+            )
+            .with_graceful_shutdown(shutdown())
+            .await?;
         }
         Command::Migrate(database) => {
             let pool = store::connect(&database.database_url).await?;

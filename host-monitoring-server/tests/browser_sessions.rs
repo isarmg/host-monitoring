@@ -3,6 +3,7 @@ use std::time::Duration;
 use axum::{
     Router,
     body::Body,
+    extract::ConnectInfo,
     http::{Method, Request, Response, StatusCode, header},
 };
 use chrono::Utc;
@@ -81,7 +82,13 @@ fn request(
     } else {
         Body::empty()
     };
-    builder.body(body).expect("build request")
+    let mut request = builder.body(body).expect("build request");
+    request.extensions_mut().insert(ConnectInfo(
+        "192.0.2.10:41000"
+            .parse::<std::net::SocketAddr>()
+            .expect("test peer address"),
+    ));
+    request
 }
 
 async fn send(fixture: &Fixture, request: Request<Body>) -> Response<Body> {

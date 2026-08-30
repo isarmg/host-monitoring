@@ -6,6 +6,7 @@ pub mod domain;
 pub mod error;
 pub mod http;
 pub mod infrastructure;
+mod login;
 pub mod model;
 pub mod operations;
 pub mod store;

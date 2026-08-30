@@ -53,7 +53,7 @@ pub async fn find_active_user_by_email(
     pool: &SqlitePool,
     email: &str,
 ) -> anyhow::Result<Option<StoredUser>> {
-    let normalized = email.trim().to_lowercase();
+    let normalized = normalize_user_email(email);
     let row = sqlx::query_as::<_, StoredUser>(
         "SELECT user_id,email,password_hash,active,session_version FROM auth_users \
          WHERE email=? AND active=true",
@@ -62,6 +62,10 @@ pub async fn find_active_user_by_email(
     .fetch_optional(pool)
     .await?;
     Ok(row)
+}
+
+pub fn normalize_user_email(email: &str) -> String {
+    email.trim().to_lowercase()
 }
 
 pub async fn ensure_admin_user(
@@ -78,7 +82,7 @@ pub async fn ensure_admin_user(
     let password = password.ok_or_else(|| {
         anyhow::anyhow!("HOST_MONITORING_BOOTSTRAP_ADMIN_PASSWORD is required while no users exist")
     })?;
-    let normalized = email.trim().to_lowercase();
+    let normalized = normalize_user_email(email);
     let password_hash = crate::auth::hash_password(password)?;
     sqlx::query(
         "INSERT INTO auth_users(user_id,email,password_hash,active,created_at) \
@@ -97,7 +101,7 @@ pub async fn reset_admin_password(
     email: &str,
     password: &str,
 ) -> anyhow::Result<()> {
-    let normalized = email.trim().to_lowercase();
+    let normalized = normalize_user_email(email);
     let password_hash = crate::auth::hash_password(password)?;
     let result = sqlx::query("UPDATE auth_users SET password_hash=? WHERE email=?")
         .bind(password_hash)

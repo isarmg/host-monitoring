@@ -1,8 +1,8 @@
-use std::{collections::HashMap, sync::Arc, time::Instant};
+use std::{collections::HashMap, net::SocketAddr, sync::Arc, time::Instant};
 
 use axum::{
     Json, Router,
-    extract::{DefaultBodyLimit, Extension, Path, Query, Request, State},
+    extract::{ConnectInfo, DefaultBodyLimit, Extension, Path, Query, Request, State},
     http::{HeaderMap, HeaderValue, Method, StatusCode, header},
     middleware::{self, Next},
     response::{IntoResponse, Response},
@@ -32,6 +32,7 @@ use crate::{
 pub struct AppState {
     pub pool: sqlx::SqlitePool,
     pub auth: crate::auth::Auth,
+    login_admission: crate::login::LoginAdmission,
     report_buckets: Arc<Mutex<HashMap<String, TokenBucket>>>,
 }
 
@@ -40,6 +41,21 @@ impl AppState {
         Self {
             pool,
             auth,
+            login_admission: crate::login::LoginAdmission::production(),
+            report_buckets: Arc::new(Mutex::new(HashMap::new())),
+        }
+    }
+
+    #[cfg(test)]
+    fn with_login_admission(
+        pool: sqlx::SqlitePool,
+        auth: crate::auth::Auth,
+        login_admission: crate::login::LoginAdmission,
+    ) -> Self {
+        Self {
+            pool,
+            auth,
+            login_admission,
             report_buckets: Arc::new(Mutex::new(HashMap::new())),
         }
     }
@@ -65,7 +81,13 @@ impl TokenBucket {
 }
 
 pub fn router(state: AppState) -> Router {
-    let public_auth = Router::new().route("/api/v1/auth/login", post(login));
+    let public_auth = Router::new()
+        .route("/api/v1/auth/login", post(login))
+        .layer(DefaultBodyLimit::max(crate::login::LOGIN_BODY_LIMIT_BYTES))
+        .route_layer(middleware::from_fn_with_state(
+            state.clone(),
+            login_source_admission,
+        ));
 
     let protected_auth = Router::new()
         .route("/api/v1/auth/logout", post(logout))
@@ -127,6 +149,22 @@ pub fn router(state: AppState) -> Router {
         .with_state(state)
 }
 
+async fn login_source_admission(
+    State(state): State<AppState>,
+    request: Request,
+    next: Next,
+) -> Result<Response> {
+    // This is the transport peer installed by Axum's make-service. Forwarded
+    // headers are intentionally not trusted without an explicit proxy policy.
+    let peer_ip = request
+        .extensions()
+        .get::<ConnectInfo<SocketAddr>>()
+        .map(|connect| connect.0.ip())
+        .ok_or(Error::Forbidden)?;
+    state.login_admission.check_source(peer_ip)?;
+    Ok(next.run(request).await)
+}
+
 async fn console_admission(
     State(state): State<AppState>,
     mut request: Request,
@@ -164,13 +202,16 @@ async fn login(
     State(state): State<AppState>,
     Json(request): Json<LoginRequest>,
 ) -> Result<Response> {
-    let user = store::find_active_user_by_email(&state.pool, &request.email)
+    let normalized_email = store::normalize_user_email(&request.email);
+    state.login_admission.check_account(&normalized_email)?;
+    let user = store::find_active_user_by_email(&state.pool, &normalized_email)
         .await
-        .map_err(database)?
+        .map_err(database)?;
+    let user = state
+        .login_admission
+        .verify_user(user, request.password)
+        .await?
         .ok_or(Error::Unauthorized)?;
-    if !crate::auth::verify_password(&request.password, &user.password_hash) {
-        return Err(Error::Unauthorized);
-    }
     let issued = state.auth.issue_session(&state.pool, &user).await?;
     let cookie = state.auth.session_cookie(&issued.token);
     let value =
@@ -615,6 +656,7 @@ fn authorization<'a>(headers: &'a HeaderMap, expected_scheme: &str) -> Option<&'
 mod tests {
     use super::*;
     use axum::{body::Body, http::Request};
+    use http_body_util::BodyExt;
     use tower::ServiceExt;
 
     async fn app() -> Router {
@@ -634,6 +676,16 @@ mod tests {
     }
 
     async fn app_with_admin(email: &str, password: &str) -> Router {
+        app_with_admin_and_admission(email, password, crate::login::LoginAdmission::production())
+            .await
+            .0
+    }
+
+    async fn app_with_admin_and_admission(
+        email: &str,
+        password: &str,
+        login_admission: crate::login::LoginAdmission,
+    ) -> (Router, sqlx::SqlitePool) {
         let pool = sqlx::sqlite::SqlitePoolOptions::new()
             .max_connections(1)
             .connect("sqlite::memory:")
@@ -649,7 +701,35 @@ mod tests {
             crate::auth::CookieMode::LoopbackDevelopment,
         )
         .unwrap();
-        router(AppState::new(pool, auth))
+        (
+            router(AppState::with_login_admission(
+                pool.clone(),
+                auth,
+                login_admission,
+            )),
+            pool,
+        )
+    }
+
+    fn login_request(body: impl Into<Body>, peer: &str) -> Request<Body> {
+        let mut request = Request::post("/api/v1/auth/login")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(body.into())
+            .unwrap();
+        request.extensions_mut().insert(ConnectInfo(
+            peer.parse::<SocketAddr>().expect("test peer address"),
+        ));
+        request
+    }
+
+    async fn body_bytes(response: Response) -> Vec<u8> {
+        response
+            .into_body()
+            .collect()
+            .await
+            .expect("collect response body")
+            .to_bytes()
+            .to_vec()
     }
 
     #[test]
@@ -691,18 +771,138 @@ mod tests {
     async fn login_route_is_public() {
         let response = app_with_admin("admin@example.com", "correct-password")
             .await
-            .oneshot(
-                Request::post("/api/v1/auth/login")
-                    .header(header::CONTENT_TYPE, "application/json")
-                    .body(Body::from(
-                        r#"{"email":"admin@example.com","password":"correct-password"}"#,
-                    ))
-                    .unwrap(),
-            )
+            .oneshot(login_request(
+                r#"{"email":"admin@example.com","password":"correct-password"}"#,
+                "192.0.2.10:41000",
+            ))
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
         assert!(response.headers().contains_key(header::SET_COOKIE));
+    }
+
+    #[tokio::test]
+    async fn login_json_body_is_bounded_before_password_work() {
+        let body = format!(
+            r#"{{"email":"admin@example.com","password":"{}"}}"#,
+            "x".repeat(crate::login::LOGIN_BODY_LIMIT_BYTES)
+        );
+        let response = app()
+            .await
+            .oneshot(login_request(body, "192.0.2.20:41000"))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+    }
+
+    #[tokio::test]
+    async fn source_rate_limit_returns_retry_after() {
+        let admission =
+            crate::login::LoginAdmission::for_test(1, 8, 1, std::time::Duration::from_millis(50));
+        let (app, _) =
+            app_with_admin_and_admission("admin@example.com", "correct-password", admission).await;
+        let first = app
+            .clone()
+            .oneshot(login_request("{", "192.0.2.30:41000"))
+            .await
+            .unwrap();
+        assert_ne!(first.status(), StatusCode::TOO_MANY_REQUESTS);
+
+        let limited = app
+            .oneshot(login_request(
+                r#"{"email":"other@example.com","password":"wrong-password"}"#,
+                "192.0.2.30:41001",
+            ))
+            .await
+            .unwrap();
+        assert_eq!(limited.status(), StatusCode::TOO_MANY_REQUESTS);
+        let retry_after = limited.headers()[header::RETRY_AFTER]
+            .to_str()
+            .unwrap()
+            .parse::<u64>()
+            .unwrap();
+        assert!((1..=60).contains(&retry_after));
+    }
+
+    #[tokio::test]
+    async fn normalized_account_limit_spans_distinct_sources() {
+        let admission =
+            crate::login::LoginAdmission::for_test(8, 1, 1, std::time::Duration::from_secs(1));
+        let (app, _) =
+            app_with_admin_and_admission("admin@example.com", "correct-password", admission).await;
+        let first = app
+            .clone()
+            .oneshot(login_request(
+                r#"{"email":" Admin@Example.COM ","password":"wrong-password"}"#,
+                "192.0.2.31:41000",
+            ))
+            .await
+            .unwrap();
+        assert_eq!(first.status(), StatusCode::UNAUTHORIZED);
+
+        let limited = app
+            .oneshot(login_request(
+                r#"{"email":"admin@example.com","password":"wrong-password"}"#,
+                "192.0.2.32:41000",
+            ))
+            .await
+            .unwrap();
+        assert_eq!(limited.status(), StatusCode::TOO_MANY_REQUESTS);
+        let retry_after = limited.headers()[header::RETRY_AFTER]
+            .to_str()
+            .unwrap()
+            .parse::<u64>()
+            .unwrap();
+        assert!((1..=60).contains(&retry_after));
+    }
+
+    #[tokio::test]
+    async fn unknown_wrong_and_disabled_users_share_the_unauthorized_semantics() {
+        let (app, pool) = app_with_admin_and_admission(
+            "admin@example.com",
+            "correct-password",
+            crate::login::LoginAdmission::production(),
+        )
+        .await;
+        let cases = [
+            (
+                r#"{"email":"admin@example.com","password":"wrong-password"}"#,
+                "192.0.2.40:41000",
+            ),
+            (
+                r#"{"email":"missing@example.com","password":"wrong-password"}"#,
+                "192.0.2.41:41000",
+            ),
+        ];
+        for (body, peer) in cases {
+            let response = app
+                .clone()
+                .oneshot(login_request(body, peer))
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+            assert_eq!(body_bytes(response).await, br#"{"message":"unauthorized"}"#);
+        }
+
+        sqlx::query("UPDATE auth_users SET active=false WHERE email=?")
+            .bind("admin@example.com")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let disabled = app
+            .oneshot(login_request(
+                r#"{"email":"admin@example.com","password":"correct-password"}"#,
+                "192.0.2.42:41000",
+            ))
+            .await
+            .unwrap();
+        assert_eq!(disabled.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(body_bytes(disabled).await, br#"{"message":"unauthorized"}"#);
+        let sessions: i64 = sqlx::query_scalar("SELECT count(*) FROM auth_sessions")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(sessions, 0);
     }
 
     #[test]
