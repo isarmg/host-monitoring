@@ -572,9 +572,27 @@ mod tests {
     use axum::{body::Body, http::Request};
     use tower::ServiceExt;
 
-    fn app() -> Router {
+    async fn app() -> Router {
         let pool = sqlx::sqlite::SqlitePoolOptions::new()
-            .connect_lazy("postgresql://localhost/unused")
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        store::migrate(&pool).await.unwrap();
+        let auth =
+            crate::auth::Auth::new(vec![7; 32], std::time::Duration::from_secs(60), false).unwrap();
+        router(AppState::new(pool, auth))
+    }
+
+    async fn app_with_admin(email: &str, password: &str) -> Router {
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        store::migrate(&pool).await.unwrap();
+        store::ensure_admin_user(&pool, email, Some(password))
+            .await
             .unwrap();
         let auth =
             crate::auth::Auth::new(vec![7; 32], std::time::Duration::from_secs(60), false).unwrap();
@@ -594,6 +612,7 @@ mod tests {
     async fn health_is_public_and_console_routes_require_a_session_cookie() {
         assert_eq!(
             app()
+                .await
                 .oneshot(Request::get("/health/live").body(Body::empty()).unwrap())
                 .await
                 .unwrap()
@@ -602,6 +621,7 @@ mod tests {
         );
         assert_eq!(
             app()
+                .await
                 .oneshot(
                     Request::get("/api/monitoring/hosts")
                         .body(Body::empty())
@@ -616,17 +636,19 @@ mod tests {
 
     #[tokio::test]
     async fn login_route_is_public() {
-        let response = app()
+        let response = app_with_admin("admin@example.com", "correct-password")
+            .await
             .oneshot(
                 Request::post("/api/v1/auth/login")
                     .header(header::CONTENT_TYPE, "application/json")
                     .body(Body::from(
-                        r#"{"email":"admin@example.com","password":"bad-password"}"#,
+                        r#"{"email":"admin@example.com","password":"correct-password"}"#,
                     ))
                     .unwrap(),
             )
             .await
             .unwrap();
-        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+        assert!(response.headers().contains_key(header::SET_COOKIE));
     }
 }

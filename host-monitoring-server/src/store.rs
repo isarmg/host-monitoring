@@ -106,13 +106,16 @@ async fn audit(
     detail: Option<&str>,
     actor: &str,
 ) -> anyhow::Result<()> {
-    sqlx::query("INSERT INTO audit_events(action,target,detail,actor) VALUES(?,?,?,?)")
-        .bind(action)
-        .bind(target)
-        .bind(detail)
-        .bind(actor)
-        .execute(&mut **tx)
-        .await?;
+    sqlx::query(
+        "INSERT INTO audit_events(action,target,detail,actor,created_at) VALUES(?,?,?,?,?)",
+    )
+    .bind(action)
+    .bind(target)
+    .bind(detail)
+    .bind(actor)
+    .bind(Utc::now())
+    .execute(&mut **tx)
+    .await?;
     Ok(())
 }
 
@@ -292,12 +295,13 @@ pub async fn create_pairing(
         return Ok(CreatePairingResult::AtCapacity);
     }
     let request_id = Uuid::new_v4();
-    let expires_at = Utc::now() + chrono::Duration::minutes(15);
+    let created_at = Utc::now();
+    let expires_at = created_at + chrono::Duration::minutes(15);
     let result = sqlx::query(
         r#"INSERT INTO agent_pairing_requests(
                request_id,requested_host_id,os,os_version,kernel_version,arch,agent_version,
-               token_hash,polling_secret_hash,expires_at)
-           VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING"#,
+               token_hash,polling_secret_hash,expires_at,created_at)
+           VALUES(?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING"#,
     )
     .bind(request_id)
     .bind(Uuid::parse_str(&request.host.id)?)
@@ -309,6 +313,7 @@ pub async fn create_pairing(
     .bind(&request.token_hash)
     .bind(&request.polling_secret_hash)
     .bind(expires_at)
+    .bind(created_at)
     .execute(&mut *tx)
     .await?;
     if result.rows_affected() != 1 {
@@ -437,7 +442,7 @@ pub async fn activate(
     ).bind(instance_id).bind(invite.try_get::<String,_>("display_name")?)
       .bind(pairing.try_get::<String,_>("os")?).bind(pairing.try_get::<Option<String>,_>("os_version")?)
       .bind(pairing.try_get::<Option<String>,_>("kernel_version")?).bind(pairing.try_get::<String,_>("arch")?)
-      .bind(pairing.try_get::<String,_>("agent_version")?).bind(now).execute(&mut *tx).await?;
+      .bind(pairing.try_get::<String,_>("agent_version")?).bind(now).bind(now).execute(&mut *tx).await?;
     sqlx::query(
         "INSERT INTO agent_credentials(credential_id,host_id,token_hash,issued_at) VALUES(?,?,?,?)",
     )
@@ -448,12 +453,12 @@ pub async fn activate(
     .execute(&mut *tx)
     .await?;
     sqlx::query("UPDATE agent_pairing_requests SET status='active',invite_id=?,instance_id=?,activated_at=? WHERE request_id=?")
-        .bind(request_id).bind(invite_id).bind(instance_id).bind(now).execute(&mut *tx).await?;
+        .bind(invite_id).bind(instance_id).bind(now).bind(request_id).execute(&mut *tx).await?;
     sqlx::query(
         "UPDATE agent_instance_invites SET status='active',activated_at=? WHERE invite_id=?",
     )
-    .bind(invite_id)
     .bind(now)
+    .bind(invite_id)
     .execute(&mut *tx)
     .await?;
     audit(
@@ -544,10 +549,9 @@ pub async fn store_report(
         sqlx::query(
             r#"UPDATE monitored_hosts SET
                  os=?,os_version=?,kernel_version=?,arch=?,agent_version=?,capabilities=?,
-                 last_seen_at=GREATEST(last_seen_at,?),latest_report_id=?,
+                 last_seen_at=CASE WHEN last_seen_at > ? THEN last_seen_at ELSE ? END,latest_report_id=?,
                  latest_collected_at=?,latest_interval_seconds=? WHERE host_id=?"#,
         )
-        .bind(host_id)
         .bind(report.host.os.trim())
         .bind(&report.host.os_version)
         .bind(&report.host.kernel_version)
@@ -555,9 +559,11 @@ pub async fn store_report(
         .bind(report.host.agent_version.trim())
         .bind(Json(&report.capabilities))
         .bind(stored_received)
+        .bind(stored_received)
         .bind(report_id)
         .bind(report.collected_at)
         .bind(report.interval_seconds)
+        .bind(host_id)
         .execute(&mut *tx)
         .await?;
         if let Some(previous) = previous_report.filter(|previous| *previous != report_id) {
@@ -568,8 +574,8 @@ pub async fn store_report(
         }
     }
     sqlx::query("UPDATE agent_credentials SET last_used_at=? WHERE token_hash=?")
-        .bind(token_hash)
         .bind(stored_received)
+        .bind(token_hash)
         .execute(&mut *tx)
         .await?;
     tx.commit().await?;
@@ -710,10 +716,10 @@ pub async fn history(
         r#"SELECT report_id,collected_at,received_at,cpu_usage_percent,memory_usage_percent,
          network_received_bytes_per_second,network_transmitted_bytes_per_second,disk_read_bytes_per_second,
          disk_written_bytes_per_second,max_temperature_celsius,gpu_utilization_percent,gpu_memory_usage_percent
-         FROM agent_metric_reports WHERE host_id=?
-           AND (? IS NULL OR collected_at >= ?)
-           AND (? IS NULL OR collected_at <= ?)
-         ORDER BY collected_at DESC,report_id DESC LIMIT ?"#,
+         FROM agent_metric_reports WHERE host_id=?1
+           AND (?2 IS NULL OR collected_at >= ?2)
+           AND (?3 IS NULL OR collected_at <= ?3)
+         ORDER BY collected_at DESC,report_id DESC LIMIT ?4"#,
     ).bind(host_id).bind(from).bind(to).bind(limit).fetch_all(pool).await?;
     let mut points: Vec<_> = rows
         .into_iter()
@@ -746,8 +752,8 @@ pub async fn update_remark(
 ) -> anyhow::Result<bool> {
     let mut tx = pool.begin().await?;
     let changed = sqlx::query("UPDATE monitored_hosts SET name=? WHERE host_id=?")
-        .bind(host_id)
         .bind(remark)
+        .bind(host_id)
         .execute(&mut *tx)
         .await?
         .rows_affected()
@@ -788,7 +794,7 @@ pub async fn delete_host(pool: &SqlitePool, host_id: Uuid, actor: &str) -> anyho
     )
     .await?;
     sqlx::query("DELETE FROM agent_pairing_requests WHERE instance_id=? OR (requested_host_id=? AND status IN ('pending','denied'))")
-        .bind(host_id).execute(&mut *tx).await?;
+        .bind(host_id).bind(host_id).execute(&mut *tx).await?;
     sqlx::query("DELETE FROM agent_instance_invites WHERE instance_id=?")
         .bind(host_id)
         .execute(&mut *tx)
