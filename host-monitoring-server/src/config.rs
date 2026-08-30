@@ -3,6 +3,7 @@ use std::{env, net::SocketAddr, time::Duration};
 use clap::{Parser, Subcommand};
 
 use crate::auth::{Auth, CookieMode};
+use crate::telemetry::TelemetryWriterConfig;
 
 #[derive(Debug, Parser)]
 #[command(name = "host-monitoring-server", version, about)]
@@ -70,6 +71,7 @@ pub struct ValidatedConfig {
     pub auth: Auth,
     pub bootstrap_admin_email: String,
     pub bootstrap_admin_password: Option<String>,
+    pub telemetry: TelemetryWriterConfig,
 }
 
 impl ValidatedConfig {
@@ -91,6 +93,26 @@ impl ValidatedConfig {
             "HOST_MONITORING_SESSION_ABSOLUTE_TTL_SECONDS",
             43_200,
         )?);
+        let telemetry = TelemetryWriterConfig::new(
+            parse_usize("HOST_MONITORING_TELEMETRY_QUEUE_CAPACITY", 256)?,
+            parse_usize("HOST_MONITORING_TELEMETRY_BATCH_SIZE", 64)?,
+            Duration::from_millis(parse_u64(
+                "HOST_MONITORING_TELEMETRY_FLUSH_MILLISECONDS",
+                25,
+            )?),
+            Duration::from_millis(parse_u64(
+                "HOST_MONITORING_TELEMETRY_ENQUEUE_WAIT_MILLISECONDS",
+                10,
+            )?),
+            Duration::from_millis(parse_u64(
+                "HOST_MONITORING_TELEMETRY_REQUEST_TIMEOUT_MILLISECONDS",
+                10_000,
+            )?),
+            Duration::from_millis(parse_u64(
+                "HOST_MONITORING_TELEMETRY_SHUTDOWN_DRAIN_MILLISECONDS",
+                15_000,
+            )?),
+        )?;
         Ok(Self {
             bind,
             database_url,
@@ -100,6 +122,7 @@ impl ValidatedConfig {
                 "admin@example.com",
             ),
             bootstrap_admin_password: env::var("HOST_MONITORING_BOOTSTRAP_ADMIN_PASSWORD").ok(),
+            telemetry,
         })
     }
 }
@@ -116,6 +139,11 @@ fn parse_u64(name: &str, default: u64) -> anyhow::Result<u64> {
     value(name, &default.to_string())
         .parse()
         .map_err(|_| anyhow::anyhow!("{name} must be an unsigned integer"))
+}
+
+fn parse_usize(name: &str, default: usize) -> anyhow::Result<usize> {
+    usize::try_from(parse_u64(name, default as u64)?)
+        .map_err(|_| anyhow::anyhow!("{name} is too large for this platform"))
 }
 
 fn parse_bool(name: &str, default: bool) -> anyhow::Result<bool> {

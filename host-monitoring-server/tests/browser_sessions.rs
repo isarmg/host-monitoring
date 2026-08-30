@@ -10,7 +10,9 @@ use chrono::Utc;
 use host_monitoring_server::{
     auth::{Auth, CSRF_HEADER, CookieMode},
     http::{AppState, router},
-    store, token_hash,
+    store,
+    telemetry::{TelemetryWriterConfig, TelemetryWriterTask},
+    token_hash,
 };
 use http_body_util::BodyExt;
 use serde_json::{Value, json};
@@ -21,6 +23,7 @@ use uuid::Uuid;
 struct Fixture {
     app: Router,
     pool: SqlitePool,
+    _telemetry_writer: TelemetryWriterTask,
 }
 
 struct BrowserCredentials {
@@ -45,9 +48,12 @@ async fn fixture() -> Fixture {
         CookieMode::LoopbackDevelopment,
     )
     .expect("build development auth");
+    let (state, telemetry_writer) =
+        AppState::with_telemetry_config(pool.clone(), auth, TelemetryWriterConfig::production());
     Fixture {
-        app: router(AppState::new(pool.clone(), auth)),
+        app: router(state),
         pool,
+        _telemetry_writer: telemetry_writer,
     }
 }
 

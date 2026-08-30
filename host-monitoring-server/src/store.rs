@@ -1,7 +1,7 @@
 use chrono::{DateTime, Utc};
 use host_protocol::{AgentPairingRequest, AgentReport, Capability, PairingStatus};
 use sqlx::{
-    FromRow, Row, SqlitePool,
+    Acquire, FromRow, Row, Sqlite, SqlitePool, Transaction,
     sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous},
     types::Json,
 };
@@ -526,21 +526,96 @@ pub enum ReportStoreError {
     ReportIdConflict,
 }
 
+/// A report that has already passed the HTTP trust-boundary checks. The token
+/// hash is intentionally private and this type does not implement `Debug`, so
+/// telemetry credentials cannot be included accidentally in writer logs.
+pub struct ReportWrite {
+    report: AgentReport,
+    token_hash: String,
+    metrics: MetricSummary,
+}
+
+impl ReportWrite {
+    pub fn new(report: AgentReport, token_hash: String, metrics: MetricSummary) -> Self {
+        Self {
+            report,
+            token_hash,
+            metrics,
+        }
+    }
+}
+
 pub async fn store_report(
     pool: &SqlitePool,
     report: &AgentReport,
     token_hash: &str,
     metrics: &MetricSummary,
 ) -> anyhow::Result<(bool, DateTime<Utc>)> {
+    let mut tx = pool.begin().await?;
+    let result = store_report_in_transaction(&mut tx, report, token_hash, metrics).await;
+    match result {
+        Ok(result) => {
+            tx.commit().await?;
+            Ok(result)
+        }
+        Err(error) => {
+            tx.rollback().await?;
+            Err(error)
+        }
+    }
+}
+
+/// Persist a bounded writer batch in one SQLite transaction. Every report is
+/// wrapped in a savepoint so an authentication race, report-id conflict, or a
+/// single malformed/corrupt row rolls back only that report. Results are
+/// returned only after the outer transaction commits; an uncertain batch
+/// commit therefore never produces a false acknowledgement.
+pub async fn store_report_batch(
+    pool: &SqlitePool,
+    reports: &[ReportWrite],
+) -> anyhow::Result<Vec<anyhow::Result<(bool, DateTime<Utc>)>>> {
+    // Acquire SQLite's single-writer slot before taking any read snapshot.
+    // A deferred transaction can otherwise fail with SQLITE_BUSY_SNAPSHOT
+    // when another product mutation commits between this batch's read/write.
+    let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
+    let mut results = Vec::with_capacity(reports.len());
+    for write in reports {
+        let mut savepoint = tx.begin().await?;
+        match store_report_in_transaction(
+            &mut savepoint,
+            &write.report,
+            &write.token_hash,
+            &write.metrics,
+        )
+        .await
+        {
+            Ok(result) => {
+                savepoint.commit().await?;
+                results.push(Ok(result));
+            }
+            Err(error) => {
+                savepoint.rollback().await?;
+                results.push(Err(error));
+            }
+        }
+    }
+    tx.commit().await?;
+    Ok(results)
+}
+
+async fn store_report_in_transaction(
+    tx: &mut Transaction<'_, Sqlite>,
+    report: &AgentReport,
+    token_hash: &str,
+    metrics: &MetricSummary,
+) -> anyhow::Result<(bool, DateTime<Utc>)> {
     let host_id = Uuid::parse_str(&report.host.id)?;
     let report_id = Uuid::parse_str(&report.report_id)?;
-    let mut tx = pool.begin().await?;
     let current = sqlx::query(
         "SELECT latest_report_id,latest_collected_at FROM monitored_hosts h \
          WHERE host_id=? AND h.lifecycle_status='active' AND EXISTS(SELECT 1 FROM agent_credentials c WHERE c.host_id=h.host_id AND c.token_hash=? AND c.revoked_at IS NULL)",
-    ).bind(host_id).bind(token_hash).fetch_optional(&mut *tx).await?;
+    ).bind(host_id).bind(token_hash).fetch_optional(&mut **tx).await?;
     let Some(current) = current else {
-        tx.rollback().await?;
         return Err(ReportStoreError::Unauthorized.into());
     };
     let previous_report: Option<Uuid> = current.try_get("latest_report_id")?;
@@ -566,15 +641,14 @@ pub async fn store_report(
       .bind(metrics.network_received_bytes_per_second).bind(metrics.network_transmitted_bytes_per_second)
       .bind(metrics.disk_read_bytes_per_second).bind(metrics.disk_written_bytes_per_second)
       .bind(metrics.max_temperature_celsius).bind(metrics.gpu_utilization_percent).bind(metrics.gpu_memory_usage_percent)
-      .fetch_optional(&mut *tx).await?;
+      .fetch_optional(&mut **tx).await?;
     let Some(row) = inserted else {
         let existing: Option<(Uuid, DateTime<Utc>)> = sqlx::query_as(
             "SELECT host_id,received_at FROM agent_metric_reports WHERE report_id=?",
         )
         .bind(report_id)
-        .fetch_optional(&mut *tx)
+        .fetch_optional(&mut **tx)
         .await?;
-        tx.rollback().await?;
         return match existing {
             Some((owner, timestamp)) if owner == host_id => Ok((false, timestamp)),
             _ => Err(ReportStoreError::ReportIdConflict.into()),
@@ -600,21 +674,20 @@ pub async fn store_report(
         .bind(report.collected_at)
         .bind(report.interval_seconds)
         .bind(host_id)
-        .execute(&mut *tx)
+        .execute(&mut **tx)
         .await?;
         if let Some(previous) = previous_report.filter(|previous| *previous != report_id) {
             sqlx::query("UPDATE agent_metric_reports SET payload=NULL WHERE report_id=?")
                 .bind(previous)
-                .execute(&mut *tx)
+                .execute(&mut **tx)
                 .await?;
         }
     }
     sqlx::query("UPDATE agent_credentials SET last_used_at=? WHERE token_hash=?")
         .bind(stored_received)
         .bind(token_hash)
-        .execute(&mut *tx)
+        .execute(&mut **tx)
         .await?;
-    tx.commit().await?;
     Ok((true, stored_received))
 }
 

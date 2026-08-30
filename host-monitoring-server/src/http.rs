@@ -31,6 +31,9 @@ use crate::{
         canonical_uuid, validate_pairing, validate_report,
     },
     store,
+    telemetry::{
+        TelemetrySubmitError, TelemetryWriter, TelemetryWriterConfig, TelemetryWriterTask,
+    },
 };
 
 #[derive(Clone)]
@@ -40,16 +43,36 @@ pub struct AppState {
     login_admission: crate::login::LoginAdmission,
     pairing_admission: crate::pairing_admission::PairingAdmission,
     report_buckets: Arc<Mutex<ReportBuckets>>,
+    telemetry: TelemetryWriter,
 }
 
 impl AppState {
+    #[cfg(test)]
     pub fn new(pool: sqlx::SqlitePool, auth: crate::auth::Auth) -> Self {
+        Self::with_telemetry_config(pool, auth, TelemetryWriterConfig::production()).0
+    }
+
+    pub fn with_telemetry_config(
+        pool: sqlx::SqlitePool,
+        auth: crate::auth::Auth,
+        config: TelemetryWriterConfig,
+    ) -> (Self, TelemetryWriterTask) {
+        let (telemetry, task) = TelemetryWriter::start(pool.clone(), config);
+        (Self::with_telemetry_writer(pool, auth, telemetry), task)
+    }
+
+    pub fn with_telemetry_writer(
+        pool: sqlx::SqlitePool,
+        auth: crate::auth::Auth,
+        telemetry: TelemetryWriter,
+    ) -> Self {
         Self {
             pool,
             auth,
             login_admission: crate::login::LoginAdmission::production(),
             pairing_admission: crate::pairing_admission::PairingAdmission::production(),
             report_buckets: Arc::new(Mutex::new(ReportBuckets::production())),
+            telemetry,
         }
     }
 
@@ -59,13 +82,9 @@ impl AppState {
         auth: crate::auth::Auth,
         login_admission: crate::login::LoginAdmission,
     ) -> Self {
-        Self {
-            pool,
-            auth,
-            login_admission,
-            pairing_admission: crate::pairing_admission::PairingAdmission::production(),
-            report_buckets: Arc::new(Mutex::new(ReportBuckets::production())),
-        }
+        let mut state = Self::new(pool, auth);
+        state.login_admission = login_admission;
+        state
     }
 
     #[cfg(test)]
@@ -74,13 +93,9 @@ impl AppState {
         auth: crate::auth::Auth,
         pairing_admission: crate::pairing_admission::PairingAdmission,
     ) -> Self {
-        Self {
-            pool,
-            auth,
-            login_admission: crate::login::LoginAdmission::production(),
-            pairing_admission,
-            report_buckets: Arc::new(Mutex::new(ReportBuckets::production())),
-        }
+        let mut state = Self::new(pool, auth);
+        state.pairing_admission = pairing_admission;
+        state
     }
 }
 
@@ -392,20 +407,21 @@ async fn live(State(state): State<AppState>) -> Response {
 
 async fn ready(State(state): State<AppState>) -> Response {
     let database = store::ready(&state.pool).await;
-    let response = (
-        if database {
+    let telemetry_writer = !state.telemetry.is_closed();
+    let ready = database && telemetry_writer;
+    (
+        if ready {
             StatusCode::OK
         } else {
             StatusCode::SERVICE_UNAVAILABLE
         },
         Json(serde_json::json!({
-            "status": if database { "ready" } else { "not-ready" },
-            "database": database
+            "status": if ready { "ready" } else { "not-ready" },
+            "database": database,
+            "telemetry_writer": telemetry_writer
         })),
     )
-        .into_response();
-    let _ = state;
-    response
+        .into_response()
 }
 
 async fn create_instance(
@@ -664,30 +680,56 @@ async fn report(
                 .max(1),
         });
     }
-    let result = store::store_report(&state.pool, &report, &credential_hash, &metrics).await;
+    let host_id = report.host.id.clone();
+    let report_id = report.report_id.clone();
+    let result = state
+        .telemetry
+        .submit(store::ReportWrite::new(report, credential_hash, metrics))
+        .await;
     let (accepted, received_at) = match result {
         Ok(value) => value,
-        Err(error)
-            if error
-                .downcast_ref::<store::ReportStoreError>()
-                .is_some_and(|e| matches!(e, store::ReportStoreError::Unauthorized)) =>
-        {
-            return Err(Error::Unauthorized);
+        Err(TelemetrySubmitError::QueueFull) => {
+            return Err(Error::RateLimited {
+                message: "telemetry queue is full",
+                retry_after: 1,
+            });
         }
-        Err(error)
-            if error
-                .downcast_ref::<store::ReportStoreError>()
-                .is_some_and(|e| matches!(e, store::ReportStoreError::ReportIdConflict)) =>
-        {
-            return Err(Error::Conflict(error.to_string()));
+        Err(TelemetrySubmitError::WriterUnavailable) => {
+            return Err(Error::RetryableUnavailable {
+                message: "telemetry writer is unavailable",
+                retry_after: 1,
+            });
         }
-        Err(error) => return Err(database(error)),
+        Err(TelemetrySubmitError::ResponseDeadline) => {
+            return Err(Error::RetryableUnavailable {
+                message: "telemetry persistence exceeded its response deadline",
+                retry_after: 1,
+            });
+        }
+        Err(error) if error.is_unauthorized() => return Err(Error::Unauthorized),
+        Err(error) if error.is_report_id_conflict() => {
+            return Err(Error::Conflict(
+                "report_id already belongs to another host".into(),
+            ));
+        }
+        Err(error) => {
+            tracing::warn!(
+                %host_id,
+                %report_id,
+                error = %error,
+                "telemetry writer could not persist a validated report"
+            );
+            return Err(Error::RetryableUnavailable {
+                message: "telemetry persistence is unavailable",
+                retry_after: 1,
+            });
+        }
     };
     Ok((
         StatusCode::ACCEPTED,
         Json(AgentReportAck {
-            host_id: report.host.id,
-            report_id: report.report_id,
+            host_id,
+            report_id,
             accepted,
             received_at,
         }),

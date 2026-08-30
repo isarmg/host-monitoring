@@ -12,6 +12,7 @@ pub mod model;
 pub mod operations;
 mod pairing_admission;
 pub mod store;
+pub mod telemetry;
 
 use sha2::{Digest, Sha256};
 

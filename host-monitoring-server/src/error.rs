@@ -30,6 +30,11 @@ pub enum Error {
     },
     #[error("{0}")]
     Unavailable(String),
+    #[error("{message}")]
+    RetryableUnavailable {
+        message: &'static str,
+        retry_after: u64,
+    },
     #[error("database is unavailable")]
     Database(#[source] anyhow::Error),
 }
@@ -51,13 +56,16 @@ impl IntoResponse for Error {
             Self::LoginRateLimited { .. } | Self::RateLimited { .. } => {
                 StatusCode::TOO_MANY_REQUESTS
             }
-            Self::Unavailable(_) => StatusCode::SERVICE_UNAVAILABLE,
+            Self::Unavailable(_) | Self::RetryableUnavailable { .. } => {
+                StatusCode::SERVICE_UNAVAILABLE
+            }
             Self::Database(_) => StatusCode::SERVICE_UNAVAILABLE,
         };
         let retry_after = match &self {
             Self::LoginRateLimited { retry_after } | Self::RateLimited { retry_after, .. } => {
                 Some(*retry_after)
             }
+            Self::RetryableUnavailable { retry_after, .. } => Some(*retry_after),
             _ => None,
         };
         let message = self.to_string();

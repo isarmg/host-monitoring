@@ -31,14 +31,18 @@ async fn main() -> anyhow::Result<()> {
             )
             .await?;
             let listener = tokio::net::TcpListener::bind(config.bind).await?;
+            let (state, telemetry_writer) =
+                AppState::with_telemetry_config(pool, config.auth, config.telemetry);
             tracing::info!(bind=%config.bind, "host-monitoring server ready");
-            axum::serve(
+            let server_result = axum::serve(
                 listener,
-                router(AppState::new(pool, config.auth))
-                    .into_make_service_with_connect_info::<std::net::SocketAddr>(),
+                router(state).into_make_service_with_connect_info::<std::net::SocketAddr>(),
             )
             .with_graceful_shutdown(shutdown())
-            .await?;
+            .await;
+            let drain_result = telemetry_writer.shutdown().await;
+            server_result?;
+            drain_result?;
         }
         Command::Migrate(database) => {
             let pool = store::connect(&database.database_url).await?;

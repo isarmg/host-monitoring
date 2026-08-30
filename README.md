@@ -9,6 +9,8 @@ Host Monitoring is an independent product containing:
 
 The server and agent communicate over the project's own pairing and report endpoints. They do
 not depend on a central runtime or a shared session service.
+Validated reports enter a bounded queue and one batched SQLite writer, so concurrent agents do
+not each compete independently for the database write lock.
 
 ## Build
 
