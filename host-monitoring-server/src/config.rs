@@ -1,4 +1,9 @@
-use std::{env, net::SocketAddr, time::Duration};
+use std::{
+    env, fs,
+    net::SocketAddr,
+    path::{Path, PathBuf},
+    time::Duration,
+};
 
 use clap::{Parser, Subcommand};
 
@@ -50,6 +55,7 @@ pub struct ValidatedConfig {
     pub bootstrap_admin_password: Option<String>,
     pub telemetry: TelemetryWriterConfig,
     pub retention: RetentionConfig,
+    pub static_dir: PathBuf,
 }
 
 impl ValidatedConfig {
@@ -63,6 +69,8 @@ impl ValidatedConfig {
             .map_err(|_| anyhow::anyhow!("HOST_MONITORING_BIND must be a socket address"))?;
         let development = parse_bool("HOST_MONITORING_DEVELOPMENT", false)?;
         let cookie_mode = cookie_mode(bind, development)?;
+        let static_dir =
+            validate_static_dir(&required("HOST_MONITORING_STATIC_DIR")?, !development)?;
         let idle_ttl = Duration::from_secs(parse_u64(
             "HOST_MONITORING_SESSION_IDLE_TTL_SECONDS",
             1_800,
@@ -120,8 +128,83 @@ impl ValidatedConfig {
             bootstrap_admin_password: env::var("HOST_MONITORING_BOOTSTRAP_ADMIN_PASSWORD").ok(),
             telemetry,
             retention,
+            static_dir,
         })
     }
+}
+
+fn validate_static_dir(value: &str, production: bool) -> anyhow::Result<PathBuf> {
+    let configured = Path::new(value);
+    anyhow::ensure!(
+        configured.is_absolute(),
+        "HOST_MONITORING_STATIC_DIR must be an absolute path"
+    );
+    let root = fs::canonicalize(configured)
+        .map_err(|error| anyhow::anyhow!("resolve HOST_MONITORING_STATIC_DIR: {error}"))?;
+    validate_static_tree(&root, production)?;
+    anyhow::ensure!(
+        root.join("index.html").is_file() && root.join("assets").is_dir(),
+        "HOST_MONITORING_STATIC_DIR must contain index.html and the current assets directory"
+    );
+    let mut root_entries = fs::read_dir(&root)?
+        .map(|entry| entry.map(|entry| entry.file_name()))
+        .collect::<Result<Vec<_>, _>>()?;
+    root_entries.sort();
+    anyhow::ensure!(
+        root_entries
+            == [
+                std::ffi::OsString::from("assets"),
+                std::ffi::OsString::from("index.html"),
+            ],
+        "HOST_MONITORING_STATIC_DIR is not the exact current asset layout"
+    );
+    Ok(root)
+}
+
+fn validate_static_tree(root: &Path, production: bool) -> anyhow::Result<()> {
+    let mut pending = vec![(root.to_path_buf(), 0_usize)];
+    let mut entries = 0_usize;
+    while let Some((path, depth)) = pending.pop() {
+        anyhow::ensure!(depth <= 32, "static asset tree exceeds maximum depth");
+        entries += 1;
+        anyhow::ensure!(entries <= 10_000, "static asset tree is too large");
+        let metadata = fs::symlink_metadata(&path)?;
+        anyhow::ensure!(
+            !metadata.file_type().is_symlink() && (metadata.is_dir() || metadata.is_file()),
+            "static assets must contain only real directories and regular files"
+        );
+        #[cfg(unix)]
+        validate_static_metadata(&metadata, production)?;
+        if metadata.is_dir() {
+            for child in fs::read_dir(&path)? {
+                pending.push((child?.path(), depth + 1));
+            }
+        }
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn validate_static_metadata(metadata: &fs::Metadata, production: bool) -> anyhow::Result<()> {
+    use std::os::unix::fs::MetadataExt;
+
+    if production {
+        anyhow::ensure!(
+            metadata.uid() != rustix::process::geteuid().as_raw(),
+            "production static assets must not be owned by the service account"
+        );
+        anyhow::ensure!(
+            metadata.mode() & 0o022 == 0,
+            "production static assets must not be group- or world-writable"
+        );
+    }
+    if metadata.is_file() {
+        anyhow::ensure!(
+            metadata.nlink() == 1,
+            "static asset files must have exactly one hard link"
+        );
+    }
+    Ok(())
 }
 
 fn required(name: &str) -> anyhow::Result<String> {
@@ -193,5 +276,42 @@ mod tests {
                 "removed product command {removed} was still accepted"
             );
         }
+    }
+
+    #[test]
+    fn static_directory_is_absolute_and_exact() {
+        let directory = tempfile::tempdir().unwrap();
+        fs::write(directory.path().join("index.html"), "current").unwrap();
+        fs::create_dir(directory.path().join("assets")).unwrap();
+        fs::write(directory.path().join("assets/app.js"), "current").unwrap();
+
+        assert_eq!(
+            validate_static_dir(directory.path().to_str().unwrap(), false).unwrap(),
+            directory.path().canonicalize().unwrap()
+        );
+        assert!(validate_static_dir(directory.path().to_str().unwrap(), true).is_err());
+        assert!(validate_static_dir("web/dist", false).is_err());
+        fs::write(directory.path().join("unexpected"), "not current").unwrap();
+        assert!(validate_static_dir(directory.path().to_str().unwrap(), false).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn static_directory_rejects_symbolic_and_hard_linked_assets() {
+        use std::os::unix::fs::symlink;
+
+        let directory = tempfile::tempdir().unwrap();
+        let index = directory.path().join("index.html");
+        fs::write(&index, "current").unwrap();
+        fs::create_dir(directory.path().join("assets")).unwrap();
+        fs::write(directory.path().join("assets/app.js"), "current").unwrap();
+        let alias = directory.path().join("alias.html");
+        fs::hard_link(&index, &alias).unwrap();
+        assert!(validate_static_dir(directory.path().to_str().unwrap(), false).is_err());
+
+        fs::remove_file(&alias).unwrap();
+        let outside = tempfile::NamedTempFile::new().unwrap();
+        symlink(outside.path(), directory.path().join("linked.js")).unwrap();
+        assert!(validate_static_dir(directory.path().to_str().unwrap(), false).is_err());
     }
 }

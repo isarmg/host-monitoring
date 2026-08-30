@@ -18,6 +18,7 @@ Environment variables use the `HOST_MONITORING_` prefix:
 
 ```text
 HOST_MONITORING_DATABASE_URL=sqlite:///var/lib/isarmg/host-monitoring/db/app.db
+HOST_MONITORING_STATIC_DIR=/opt/isarmg/host-monitoring/current/web
 HOST_MONITORING_BOOTSTRAP_ADMIN_EMAIL=admin@example.com
 HOST_MONITORING_BOOTSTRAP_ADMIN_PASSWORD=<initial admin password>
 HOST_MONITORING_SESSION_IDLE_TTL_SECONDS=1800
@@ -42,6 +43,12 @@ Then:
 ```bash
 host-monitoring-server serve
 ```
+
+`HOST_MONITORING_STATIC_DIR` is mandatory and resolves once to the current release's exact
+`index.html` plus `assets/` tree. Production rejects links, special files, hard-linked files,
+service-owned assets and group/world-writable content. The systemd unit uses the immutable
+versioned release through `current/web`; it never depends on the build checkout or working
+directory.
 
 `serve` acquires an exclusive instance lock plus a shared maintenance lock for the configured
 SQLite file before opening it, and holds both until HTTP and background workers have stopped.

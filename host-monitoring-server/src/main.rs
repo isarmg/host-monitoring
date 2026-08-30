@@ -39,7 +39,8 @@ async fn main() -> anyhow::Result<()> {
             tracing::info!(bind=%config.bind, "host-monitoring server ready");
             let server_result = axum::serve(
                 listener,
-                router(state).into_make_service_with_connect_info::<std::net::SocketAddr>(),
+                router(state, config.static_dir)
+                    .into_make_service_with_connect_info::<std::net::SocketAddr>(),
             )
             .with_graceful_shutdown(shutdown())
             .await;

@@ -1,4 +1,7 @@
-use std::time::{Duration, Instant};
+use std::{
+    path::PathBuf,
+    time::{Duration, Instant},
+};
 
 use axum::{
     Router,
@@ -156,7 +159,10 @@ fn application(pool: SqlitePool, writer: TelemetryWriter) -> Router {
         CookieMode::LoopbackDevelopment,
     )
     .unwrap();
-    router(AppState::with_telemetry_writer(pool, auth, writer))
+    router(
+        AppState::with_telemetry_writer(pool, auth, writer),
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("web"),
+    )
 }
 
 async fn begin_write_lock(pool: &SqlitePool) -> PoolConnection<Sqlite> {

@@ -1,6 +1,7 @@
 use std::{
     collections::HashMap,
     net::SocketAddr,
+    path::PathBuf,
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -208,7 +209,7 @@ impl ReportBuckets {
     }
 }
 
-pub fn router(state: AppState) -> Router {
+pub fn router(state: AppState, static_dir: PathBuf) -> Router {
     let public_auth = Router::new()
         .route("/api/v1/auth/login", post(login))
         .layer(DefaultBodyLimit::max(crate::login::LOGIN_BODY_LIMIT_BYTES))
@@ -271,9 +272,7 @@ pub fn router(state: AppState) -> Router {
         .merge(protected_auth)
         .merge(console)
         .merge(agent)
-        .fallback_service(ServeDir::new(
-            std::env::var("HOST_MONITORING_STATIC_DIR").unwrap_or_else(|_| "web/dist".to_string()),
-        ))
+        .fallback_service(ServeDir::new(static_dir))
         .with_state(state)
 }
 
@@ -842,6 +841,10 @@ mod tests {
     use http_body_util::BodyExt;
     use tower::ServiceExt;
 
+    fn test_static_dir() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("web")
+    }
+
     async fn app() -> Router {
         let pool = sqlx::sqlite::SqlitePoolOptions::new()
             .max_connections(1)
@@ -855,7 +858,7 @@ mod tests {
             crate::auth::CookieMode::LoopbackDevelopment,
         )
         .unwrap();
-        router(AppState::new(pool, auth))
+        router(AppState::new(pool, auth), test_static_dir())
     }
 
     async fn app_with_admin(email: &str, password: &str) -> Router {
@@ -879,11 +882,10 @@ mod tests {
             crate::auth::CookieMode::LoopbackDevelopment,
         )
         .unwrap();
-        router(AppState::with_pairing_admission(
-            pool,
-            auth,
-            pairing_admission,
-        ))
+        router(
+            AppState::with_pairing_admission(pool, auth, pairing_admission),
+            test_static_dir(),
+        )
     }
 
     async fn app_with_admin_and_admission(
@@ -907,11 +909,10 @@ mod tests {
         )
         .unwrap();
         (
-            router(AppState::with_login_admission(
-                pool.clone(),
-                auth,
-                login_admission,
-            )),
+            router(
+                AppState::with_login_admission(pool.clone(), auth, login_admission),
+                test_static_dir(),
+            ),
             pool,
         )
     }

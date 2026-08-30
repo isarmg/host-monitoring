@@ -36,6 +36,11 @@ async fn lock_identity_survives_working_directory_and_sqlite_restarts() {
     let directory = tempfile::tempdir().expect("create database directory");
     let database = directory.path().join("app.sqlite3");
     let url = database_url(&database);
+    let static_dir = directory.path().join("static");
+    std::fs::create_dir(&static_dir).unwrap();
+    std::fs::create_dir(static_dir.join("assets")).unwrap();
+    std::fs::write(static_dir.join("index.html"), "current").unwrap();
+    std::fs::write(static_dir.join("assets/app.js"), "current").unwrap();
 
     // The application uses an absolute path in this process. Child commands
     // below use `sqlite:app.sqlite3` from a different working directory.
@@ -81,6 +86,8 @@ async fn lock_identity_survives_working_directory_and_sqlite_restarts() {
         .arg("doctor")
         .current_dir(directory.path())
         .env("HOST_MONITORING_DATABASE_URL", "sqlite:app.sqlite3")
+        .env("HOST_MONITORING_STATIC_DIR", &static_dir)
+        .env("HOST_MONITORING_DEVELOPMENT", "true")
         .output()
         .expect("run doctor through a relative database path");
     assert!(
@@ -94,6 +101,8 @@ async fn lock_identity_survives_working_directory_and_sqlite_restarts() {
         .current_dir(directory.path())
         .env("HOST_MONITORING_DATABASE_URL", "sqlite:app.sqlite3")
         .env("HOST_MONITORING_BIND", "127.0.0.1:0")
+        .env("HOST_MONITORING_STATIC_DIR", &static_dir)
+        .env("HOST_MONITORING_DEVELOPMENT", "true")
         .env(
             "HOST_MONITORING_BOOTSTRAP_ADMIN_PASSWORD",
             BOOTSTRAP_PASSWORD,

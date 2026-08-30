@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::{path::PathBuf, time::Duration};
 
 use axum::{
     Router,
@@ -53,7 +53,7 @@ async fn fixture() -> Fixture {
     let (state, telemetry_writer) =
         AppState::with_telemetry_config(pool.clone(), auth, TelemetryWriterConfig::production());
     Fixture {
-        app: router(state),
+        app: router(state, PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("web")),
         pool,
         _telemetry_writer: telemetry_writer,
     }
