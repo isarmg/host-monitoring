@@ -14,5 +14,6 @@ Thumbs.db
 .idea/
 .vscode/
 *.swp
-module-web/node_modules/
-module-web/dist/
+host-monitoring-server/web/node_modules/
+host-monitoring-server/web/dist/
+host-monitoring-server/web/*.tsbuildinfo
