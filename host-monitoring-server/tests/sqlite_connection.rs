@@ -1,19 +1,13 @@
-use std::path::{Path, PathBuf};
+use std::{fs, path::Path};
 
 use chrono::Utc;
-use host_monitoring_server::store;
+use host_monitoring_server::{database_schema, store};
+use sha2::Digest;
 use sqlx::{Sqlite, pool::PoolConnection};
 use uuid::Uuid;
 
-fn database_path() -> PathBuf {
-    std::env::temp_dir().join(format!(
-        "host-monitoring-connection-regression-{}.db",
-        Uuid::new_v4()
-    ))
-}
-
 fn database_url(path: &Path) -> String {
-    format!("sqlite://{}", path.to_string_lossy().replace('\\', "/"))
+    format!("sqlite://{}", path.display())
 }
 
 async fn assert_connection_baseline(connection: &mut PoolConnection<Sqlite>) {
@@ -56,22 +50,76 @@ async fn assert_database_checks(pool: &sqlx::SqlitePool) {
     assert!(foreign_key_violations.is_empty());
 }
 
+fn directory_snapshot(directory: &Path) -> Vec<(String, Vec<u8>)> {
+    let mut files = fs::read_dir(directory)
+        .unwrap()
+        .map(|entry| {
+            let entry = entry.unwrap();
+            let name = entry.file_name().to_string_lossy().into_owned();
+            let bytes = if entry.file_type().unwrap().is_file() {
+                fs::read(entry.path()).unwrap()
+            } else {
+                Vec::new()
+            };
+            (name, bytes)
+        })
+        .collect::<Vec<_>>();
+    files.sort_by(|left, right| left.0.cmp(&right.0));
+    files
+}
+
+fn assert_snapshot_unchanged(before: &[(String, Vec<u8>)], after: &[(String, Vec<u8>)]) {
+    let summary = |snapshot: &[(String, Vec<u8>)]| {
+        snapshot
+            .iter()
+            .map(|(name, bytes)| {
+                let digest = sha2::Sha256::digest(bytes);
+                format!("{name}:{}:{digest:x}", bytes.len())
+            })
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(summary(after), summary(before));
+}
+
+fn mutate_and_checkpoint(path: &Path, sql: &str) {
+    let connection = rusqlite::Connection::open(path).unwrap();
+    connection.execute(sql, []).unwrap();
+    connection
+        .execute_batch("PRAGMA wal_checkpoint(TRUNCATE)")
+        .unwrap();
+}
+
 #[tokio::test]
-async fn production_connection_config_survives_close_and_reopen() {
-    let path = database_path();
-    assert!(!path.exists());
+async fn exact_current_schema_survives_close_and_reopen() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("current.sqlite3");
     let url = database_url(&path);
 
-    let pool = store::connect(&url)
+    let pool = store::open_or_initialize(&url)
         .await
-        .expect("production connection creates the database");
-    assert!(path.is_file());
-    assert!(
-        !store::ready(&pool).await,
-        "an unmigrated database must not report ready"
-    );
-    store::migrate(&pool).await.expect("migrate database");
+        .expect("initialize the one current schema");
     assert!(store::ready(&pool).await);
+    assert_eq!(
+        database_schema::actual_schema_sha256(&pool).await.unwrap(),
+        database_schema::SCHEMA_SHA256
+    );
+    let metadata: (i64, String, String, i64, String) = sqlx::query_as(
+        "SELECT singleton,application,application_version,schema_revision,schema_sha256 \
+         FROM product_metadata",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        metadata,
+        (
+            1,
+            database_schema::APPLICATION.to_string(),
+            env!("CARGO_PKG_VERSION").to_string(),
+            database_schema::SCHEMA_REVISION,
+            database_schema::SCHEMA_SHA256.to_string(),
+        )
+    );
 
     let mut first = pool.acquire().await.expect("acquire first connection");
     let mut second = pool.acquire().await.expect("acquire second connection");
@@ -115,23 +163,9 @@ async fn production_connection_config_survives_close_and_reopen() {
     assert_database_checks(&pool).await;
     pool.close().await;
 
-    let reopened = store::connect(&url).await.expect("reopen database");
-    store::migrate(&reopened)
+    let reopened = store::open_existing(&url)
         .await
-        .expect("migrations remain idempotent after reopening");
-    let mut first = reopened
-        .acquire()
-        .await
-        .expect("acquire reopened connection");
-    let mut second = reopened
-        .acquire()
-        .await
-        .expect("acquire second reopened connection");
-    assert_connection_baseline(&mut first).await;
-    assert_connection_baseline(&mut second).await;
-    drop(first);
-    drop(second);
-
+        .expect("reopen exact current database");
     let stored_name: String =
         sqlx::query_scalar("SELECT name FROM monitored_hosts WHERE host_id=?")
             .bind(host_id)
@@ -141,25 +175,72 @@ async fn production_connection_config_survives_close_and_reopen() {
     assert_eq!(stored_name, "Persistent Host");
     assert_database_checks(&reopened).await;
     reopened.close().await;
-
-    std::fs::remove_file(path).expect("remove temporary SQLite database");
 }
 
 #[tokio::test]
-async fn readiness_requires_the_retention_migration_shape() {
-    let path = database_path();
-    let url = database_url(&path);
-    let pool = store::connect(&url).await.expect("open database");
-    store::migrate(&pool).await.expect("migrate database");
+async fn old_version_missing_metadata_and_schema_drift_are_read_only_rejections() {
+    let directory = tempfile::tempdir().unwrap();
+
+    let legacy = directory.path().join("legacy.sqlite3");
+    rusqlite::Connection::open(&legacy)
+        .unwrap()
+        .execute("CREATE TABLE legacy_data(id INTEGER PRIMARY KEY)", [])
+        .unwrap();
+    let before = directory_snapshot(directory.path());
+    assert!(
+        store::open_or_initialize(&database_url(&legacy))
+            .await
+            .is_err()
+    );
+    assert_snapshot_unchanged(&before, &directory_snapshot(directory.path()));
+
+    let wrong_version = directory.path().join("wrong-version.sqlite3");
+    let pool = store::open_or_initialize(&database_url(&wrong_version))
+        .await
+        .unwrap();
+    pool.close().await;
+    mutate_and_checkpoint(
+        &wrong_version,
+        "UPDATE product_metadata SET application_version='0.6.0'",
+    );
+    let before = directory_snapshot(directory.path());
+    assert!(
+        store::open_or_initialize(&database_url(&wrong_version))
+            .await
+            .is_err()
+    );
+    assert_snapshot_unchanged(&before, &directory_snapshot(directory.path()));
+
+    let drifted = directory.path().join("drifted.sqlite3");
+    let pool = store::open_or_initialize(&database_url(&drifted))
+        .await
+        .unwrap();
+    pool.close().await;
+    mutate_and_checkpoint(&drifted, "CREATE TABLE unexpected(id INTEGER)");
+    let before = directory_snapshot(directory.path());
+    assert!(
+        store::open_or_initialize(&database_url(&drifted))
+            .await
+            .is_err()
+    );
+    assert_snapshot_unchanged(&before, &directory_snapshot(directory.path()));
+}
+
+#[tokio::test]
+async fn readiness_rejects_live_schema_drift() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("ready.sqlite3");
+    let pool = store::open_or_initialize(&database_url(&path))
+        .await
+        .unwrap();
     assert!(store::ready(&pool).await);
     assert!(store::retention_ready(&pool).await);
 
     sqlx::query("DROP TABLE agent_metric_hourly_aggregates")
         .execute(&pool)
         .await
-        .expect("remove retention table for readiness regression");
+        .unwrap();
     assert!(!store::retention_ready(&pool).await);
     assert!(!store::ready(&pool).await);
     pool.close().await;
-    std::fs::remove_file(path).expect("remove temporary SQLite database");
 }

@@ -47,12 +47,9 @@ async fn lock_identity_survives_working_directory_and_sqlite_restarts() {
         "offline maintenance entered while the application was live"
     );
 
-    let pool = store::connect(&application.database_url())
+    let pool = store::open_or_initialize(&application.database_url())
         .await
         .expect("open SQLite through the trusted directory descriptor");
-    store::migrate(&pool)
-        .await
-        .expect("migrate a real SQLite database");
     let host_id = Uuid::new_v4();
     let now = Utc::now();
     sqlx::query(
@@ -122,7 +119,7 @@ async fn lock_identity_survives_working_directory_and_sqlite_restarts() {
     drop(offline);
 
     let restarted = ApplicationLock::acquire(&url).expect("reacquire lock after restart");
-    let reopened = store::connect(&restarted.database_url())
+    let reopened = store::open_existing(&restarted.database_url())
         .await
         .expect("reopen SQLite through a new trusted directory descriptor");
     let stored_name: String =

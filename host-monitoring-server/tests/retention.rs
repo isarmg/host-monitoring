@@ -27,8 +27,7 @@ impl TestDatabase {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("retention.sqlite3");
         let database_url = format!("sqlite://{}", path.display());
-        let pool = store::connect(&database_url).await.unwrap();
-        store::migrate(&pool).await.unwrap();
+        let pool = store::open_or_initialize(&database_url).await.unwrap();
         Self {
             _directory: directory,
             database_url,
@@ -476,12 +475,16 @@ async fn aggregate_commit_survives_delete_failure_and_restart_without_double_cou
     assert_eq!(count_before, 1);
 
     database.pool.close().await;
-    let reopened = store::connect(&database.database_url).await.unwrap();
-    store::migrate(&reopened).await.unwrap();
-    sqlx::query("DROP TRIGGER fail_retention_delete")
-        .execute(&reopened)
-        .await
-        .unwrap();
+    rusqlite::Connection::open(
+        database
+            .database_url
+            .strip_prefix("sqlite://")
+            .expect("test database URL"),
+    )
+    .unwrap()
+    .execute("DROP TRIGGER fail_retention_delete", [])
+    .unwrap();
+    let reopened = store::open_existing(&database.database_url).await.unwrap();
     let retry = run_once_at(&reopened, retention_config(8, 3), now)
         .await
         .unwrap();
@@ -531,13 +534,12 @@ async fn startup_period_failure_and_shutdown_are_supervised() {
     assert!(!maintenance.is_running());
 
     let closed_directory = tempfile::tempdir().unwrap();
-    let closed_pool = store::connect(&format!(
+    let closed_pool = store::open_or_initialize(&format!(
         "sqlite://{}",
         closed_directory.path().join("closed.sqlite3").display()
     ))
     .await
     .unwrap();
-    store::migrate(&closed_pool).await.unwrap();
     closed_pool.close().await;
     let (failed, failed_task) = RetentionMaintenance::start(closed_pool, config);
     wait_until(|| async { failed.stats().failures >= 1 }).await;

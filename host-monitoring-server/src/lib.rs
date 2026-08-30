@@ -1,9 +1,9 @@
 pub mod application;
 pub mod auth;
-pub mod backup;
 pub mod cli;
 pub mod config;
 pub mod database_lock;
+pub mod database_schema;
 pub mod domain;
 pub mod error;
 pub mod http;

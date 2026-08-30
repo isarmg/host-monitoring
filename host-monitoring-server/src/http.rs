@@ -848,7 +848,7 @@ mod tests {
             .connect("sqlite::memory:")
             .await
             .unwrap();
-        store::migrate(&pool).await.unwrap();
+        store::initialize_empty(&pool).await.unwrap();
         let auth = crate::auth::Auth::new(
             std::time::Duration::from_secs(60),
             std::time::Duration::from_secs(600),
@@ -872,7 +872,7 @@ mod tests {
             .connect("sqlite::memory:")
             .await
             .unwrap();
-        store::migrate(&pool).await.unwrap();
+        store::initialize_empty(&pool).await.unwrap();
         let auth = crate::auth::Auth::new(
             std::time::Duration::from_secs(60),
             std::time::Duration::from_secs(600),
@@ -896,7 +896,7 @@ mod tests {
             .connect("sqlite::memory:")
             .await
             .unwrap();
-        store::migrate(&pool).await.unwrap();
+        store::initialize_empty(&pool).await.unwrap();
         store::ensure_admin_user(&pool, email, Some(password))
             .await
             .unwrap();

@@ -15,22 +15,14 @@ pub struct Cli {
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
-    /// Apply this product's SQLite migrations, then serve its HTTP API.
+    /// Initialize the exact current schema if absent, then serve the HTTP API.
     Serve,
-    /// Apply only this product's SQLite migrations.
-    Migrate(Database),
     /// Run a deployment health check against the configured instance.
     Doctor,
     /// Create the initial local administrator in the configured database.
     AdminCreate(Database),
     /// Reset an existing local administrator password.
     AdminResetPassword(AdminResetPassword),
-    /// Create a verified online SQLite backup without overwriting a file.
-    BackupCreate(Backup),
-    /// Verify SQLite integrity, foreign keys and the product schema.
-    BackupVerify(Backup),
-    /// Atomically restore a verified SQLite backup while the service is stopped.
-    Restore(Restore),
 }
 
 #[derive(Debug, Clone, clap::Args)]
@@ -47,22 +39,6 @@ pub struct AdminResetPassword {
     pub email: String,
     #[arg(long, hide_env_values = true)]
     pub password: String,
-}
-
-#[derive(Debug, Clone, clap::Args)]
-pub struct Backup {
-    #[arg(long)]
-    pub database_url: String,
-    #[arg(long)]
-    pub output: std::path::PathBuf,
-}
-
-#[derive(Debug, Clone, clap::Args)]
-pub struct Restore {
-    #[arg(long)]
-    pub database_url: String,
-    #[arg(long)]
-    pub input: std::path::PathBuf,
 }
 
 #[derive(Clone)]
@@ -207,5 +183,15 @@ mod tests {
             CookieMode::LoopbackDevelopment
         );
         assert!(cookie_mode("0.0.0.0:18105".parse().unwrap(), true).is_err());
+    }
+
+    #[test]
+    fn product_cli_has_no_schema_upgrade_backup_or_restore_commands() {
+        for removed in ["migrate", "backup-create", "backup-verify", "restore"] {
+            assert!(
+                Cli::try_parse_from(["host-monitoring-server", removed]).is_err(),
+                "removed product command {removed} was still accepted"
+            );
+        }
     }
 }

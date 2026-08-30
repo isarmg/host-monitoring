@@ -1,6 +1,5 @@
 use clap::Parser;
 use host_monitoring_server::{
-    backup,
     config::{Cli, Command},
     database_lock::{ApplicationLock, MaintenanceLock},
     http::{AppState, router},
@@ -25,8 +24,7 @@ async fn main() -> anyhow::Result<()> {
                 );
             }
             let application_lock = ApplicationLock::acquire(&config.database_url)?;
-            let pool = store::connect(&application_lock.database_url()).await?;
-            store::migrate(&pool).await?;
+            let pool = store::open_or_initialize(&application_lock.database_url()).await?;
             store::ensure_admin_user(
                 &pool,
                 &config.bootstrap_admin_email,
@@ -51,15 +49,9 @@ async fn main() -> anyhow::Result<()> {
             retention_result?;
             drain_result?;
         }
-        Command::Migrate(database) => {
-            let maintenance = MaintenanceLock::exclusive(&database.database_url)?;
-            let pool = store::connect(&maintenance.database_url()).await?;
-            store::migrate(&pool).await?;
-        }
         Command::AdminCreate(database) => {
             let maintenance = MaintenanceLock::exclusive(&database.database_url)?;
-            let pool = store::connect(&maintenance.database_url()).await?;
-            store::migrate(&pool).await?;
+            let pool = store::open_or_initialize(&maintenance.database_url()).await?;
             let email = std::env::var("HOST_MONITORING_BOOTSTRAP_ADMIN_EMAIL")
                 .unwrap_or_else(|_| "admin@example.com".to_string());
             let password = std::env::var("HOST_MONITORING_BOOTSTRAP_ADMIN_PASSWORD").ok();
@@ -68,36 +60,17 @@ async fn main() -> anyhow::Result<()> {
         }
         Command::AdminResetPassword(args) => {
             let maintenance = MaintenanceLock::exclusive(&args.database_url)?;
-            let pool = store::connect(&maintenance.database_url()).await?;
-            store::migrate(&pool).await?;
+            let pool = store::open_existing(&maintenance.database_url()).await?;
             store::reset_admin_password(&pool, &args.email, &args.password).await?;
             println!(
                 "{{\"status\":\"password-reset\",\"email\":{:?}}}",
                 args.email
             );
         }
-        Command::BackupCreate(args) => {
-            backup::create(&args.database_url, &args.output)?;
-            println!(
-                "{{\"status\":\"backup-created\",\"output\":{:?}}}",
-                args.output
-            );
-        }
-        Command::BackupVerify(args) => {
-            backup::verify(&args.output)?;
-            println!(
-                "{{\"status\":\"backup-verified\",\"output\":{:?}}}",
-                args.output
-            );
-        }
-        Command::Restore(args) => {
-            backup::restore(&args.database_url, &args.input)?;
-            println!("{{\"status\":\"restored\",\"input\":{:?}}}", args.input);
-        }
         Command::Doctor => {
             let config = host_monitoring_server::config::ValidatedConfig::from_runtime()?;
             let maintenance = MaintenanceLock::shared(&config.database_url)?;
-            let pool = store::connect(&maintenance.database_url()).await?;
+            let pool = store::open_existing(&maintenance.database_url()).await?;
             let database_ready = store::ready(&pool).await;
             let retention_ready = store::retention_ready(&pool).await;
             println!(

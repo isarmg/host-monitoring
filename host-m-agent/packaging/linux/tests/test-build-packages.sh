@@ -6,7 +6,7 @@ packaging_dir=$(CDPATH= cd -- "$script_dir/.." && pwd)
 test_root=$(mktemp -d "${TMPDIR:-/tmp}/host-m-agent-package-builder-test.XXXXXX")
 fixture_root=$test_root/repository
 mock_bin=$test_root/bin
-package_version=0.6.0
+package_version=0.7.0
 execution_marker=$test_root/payload-executed
 nfpm_log=$test_root/nfpm.log
 builder_output=$test_root/builder.output

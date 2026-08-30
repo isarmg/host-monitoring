@@ -5,7 +5,7 @@ PATH=/usr/sbin:/usr/bin:/sbin:/bin
 export PATH
 
 service_name=host-m-agent.service
-package_version=0.6.0
+package_version=0.7.0
 account_state_dir=/var/lib/host-m-agent-package
 config_dir=/etc/host-m-agent
 config_path="$config_dir/config.json"

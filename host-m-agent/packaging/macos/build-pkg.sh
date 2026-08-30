@@ -8,7 +8,7 @@ die() {
 }
 
 : "${BINARY:?set BINARY to the host-m-agent binary}"
-: "${VERSION:?set VERSION to the current numeric package version, for example 0.6.0}"
+: "${VERSION:?set VERSION to the current numeric package version, for example 0.7.0}"
 
 script_dir="$(CDPATH= cd "$(dirname "$0")" && pwd)"
 agent_dir="$(CDPATH= cd "$script_dir/../.." && pwd)"

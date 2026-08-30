@@ -1,52 +1,16 @@
 use chrono::{DateTime, Utc};
 use host_protocol::{AgentPairingRequest, AgentReport, Capability, PairingStatus};
-use sqlx::{
-    Acquire, FromRow, Row, Sqlite, SqlitePool, Transaction,
-    sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous},
-    types::Json,
-};
+use sqlx::{Acquire, FromRow, Row, Sqlite, SqlitePool, Transaction, types::Json};
 use uuid::Uuid;
 
+pub use crate::database_schema::{initialize_empty, open_existing, open_or_initialize};
 use crate::model::{
     AgentInstanceSummary, AgentPairingPublicSummary, HistoryPoint, HostSummary, MetricSummary,
     host_status,
 };
 
-pub async fn connect(database_url: &str) -> anyhow::Result<SqlitePool> {
-    let options = database_url
-        .parse::<SqliteConnectOptions>()?
-        .create_if_missing(true)
-        .journal_mode(SqliteJournalMode::Wal)
-        .foreign_keys(true)
-        .busy_timeout(std::time::Duration::from_secs(5))
-        .synchronous(SqliteSynchronous::Full);
-    Ok(SqlitePoolOptions::new()
-        .max_connections(16)
-        .min_connections(1)
-        .acquire_timeout(std::time::Duration::from_secs(5))
-        .connect_with(options)
-        .await?)
-}
-
-pub async fn migrate(pool: &SqlitePool) -> anyhow::Result<()> {
-    sqlx::migrate!("./migrations").run(pool).await?;
-    Ok(())
-}
-
 pub async fn ready(pool: &SqlitePool) -> bool {
-    let tables = sqlx::query_scalar::<_, i64>(
-        "SELECT COUNT(*) FROM sqlite_master \
-         WHERE type='table' AND name IN (\
-           'monitored_hosts','agent_metric_reports','agent_credentials',\
-           'agent_instance_invites','agent_pairing_requests','audit_events',\
-           'auth_users','auth_sessions','auth_session_csrf_tokens',\
-           'agent_metric_hourly_aggregates'\
-         )",
-    )
-    .fetch_one(pool)
-    .await
-    .is_ok_and(|count| count == 10);
-    tables && retention_ready(pool).await
+    crate::database_schema::is_current(pool).await
 }
 
 pub async fn retention_ready(pool: &SqlitePool) -> bool {

@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Duration, Utc};
-use host_monitoring_server::{model, store, token_hash};
+use host_monitoring_server::{database_schema, model, store, token_hash};
 use host_protocol::{
     AgentHealth, AgentPairingRequest, AgentReport, Capability, CpuSnapshot, DiskSnapshot,
     HostIdentity, MemorySnapshot, NetworkSnapshot, PairingStatus, SystemSnapshot,
@@ -99,7 +99,9 @@ fn report(host_id: Uuid, collected_at: DateTime<Utc>) -> AgentReport {
 async fn pending_pairings_are_capped_per_device_without_breaking_idempotent_retries() {
     let path = database_path();
     let pool = open_database(&path).await;
-    store::migrate(&pool).await.expect("run real migrations");
+    store::initialize_empty(&pool)
+        .await
+        .expect("initialize current schema");
     let host_id = Uuid::new_v4();
     let mut first = None;
 
@@ -141,10 +143,12 @@ async fn pending_pairings_are_capped_per_device_without_breaking_idempotent_retr
 }
 
 #[tokio::test]
-async fn migrated_sqlite_supports_pair_activate_report_remark_and_delete() {
+async fn current_sqlite_supports_pair_activate_report_remark_and_delete() {
     let path = database_path();
     let pool = open_database(&path).await;
-    store::migrate(&pool).await.expect("run real migrations");
+    store::initialize_empty(&pool)
+        .await
+        .expect("initialize current schema");
 
     let (invite_result, activation_code) = store::create_invite(&pool, "Server One", 15, "admin")
         .await
@@ -284,9 +288,9 @@ async fn migrated_sqlite_supports_pair_activate_report_remark_and_delete() {
 
     pool.close().await;
     let reopened = open_database(&path).await;
-    store::migrate(&reopened)
+    database_schema::validate_pool(&reopened)
         .await
-        .expect("migrations remain idempotent after reopening");
+        .expect("reopened database retains exact current schema");
     assert!(
         store::get_host(&reopened, instance_id)
             .await

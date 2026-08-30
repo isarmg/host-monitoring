@@ -45,12 +45,20 @@ host-monitoring-server serve
 
 `serve` acquires an exclusive instance lock plus a shared maintenance lock for the configured
 SQLite file before opening it, and holds both until HTTP and background workers have stopped.
-`doctor` takes the shared maintenance lock, while `migrate`, `admin-create` and
-`admin-reset-password` take it exclusively and fail closed while the server is running. Locks are
-per database, stored beside it, and opened on Linux through a trusted directory descriptor with
-`openat2`; symbolic links, parent traversal, hard-linked files and special database/lock files are
-rejected. Absolute and relative paths resolving to the same database share the same lock identity
-across process working directories.
+`doctor` takes the shared maintenance lock, while `admin-create` and `admin-reset-password` take it
+exclusively and fail closed while the server is running. Locks are per database, stored beside it,
+and opened on Linux through a trusted directory descriptor with `openat2`; symbolic links, parent
+traversal, hard-linked files and special database/lock files are rejected. Absolute and relative
+paths resolving to the same database share the same lock identity across process working
+directories.
+
+The product initializes only a missing database with the one schema compiled into the current
+Cargo version. `product_metadata` contains exactly one row binding application `host-monitoring`,
+the package version, revision 1 and the fixed schema SHA-256. Before any existing database receives
+a write-capable connection, those values and a freshly computed `sqlite_schema` fingerprint must
+both match. Older, metadata-free or structurally changed databases are rejected without modifying
+their bytes. Migration, version upgrade, backup and restore are responsibilities of the independent
+upgrade tool and are intentionally absent from this binary.
 
 The local console API uses `POST /api/v1/auth/login`, `POST /api/v1/auth/logout` and
 `GET /api/v1/auth/session`. Agent pairing and reporting endpoints are authenticated with

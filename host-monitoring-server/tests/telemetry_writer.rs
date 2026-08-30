@@ -34,8 +34,7 @@ impl TestDatabase {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("telemetry.sqlite3");
         let database_url = format!("sqlite://{}", path.display());
-        let pool = store::connect(&database_url).await.unwrap();
-        store::migrate(&pool).await.unwrap();
+        let pool = store::open_or_initialize(&database_url).await.unwrap();
         Self {
             _directory: directory,
             database_url,
@@ -475,8 +474,7 @@ async fn writer_failure_is_503_and_restart_preserves_report_idempotency() {
         "sqlite://{}",
         failed_directory.path().join("closed.sqlite3").display()
     );
-    let failed_pool = store::connect(&failed_url).await.unwrap();
-    store::migrate(&failed_pool).await.unwrap();
+    let failed_pool = store::open_or_initialize(&failed_url).await.unwrap();
     failed_pool.close().await;
     let (failed_writer, failed_task) =
         TelemetryWriter::start(failed_pool, config(4, 2, 5, 10, 500, 1_000));
@@ -499,8 +497,7 @@ async fn writer_failure_is_503_and_restart_preserves_report_idempotency() {
     first_task.shutdown().await.unwrap();
     database.pool.close().await;
 
-    let reopened = store::connect(&database.database_url).await.unwrap();
-    store::migrate(&reopened).await.unwrap();
+    let reopened = store::open_existing(&database.database_url).await.unwrap();
     let (second_writer, second_task) =
         TelemetryWriter::start(reopened.clone(), config(4, 2, 5, 10, 1_000, 1_000));
     let replay = second_writer.submit(write(item, &token)).await.unwrap();

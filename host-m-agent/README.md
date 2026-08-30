@@ -10,7 +10,7 @@ Agent 与 `host-monitoring-server` 共用同仓的 `host-protocol`，三者按�
 示例配置见 [`config.example.json`](config.example.json)。生产配置必须使用 HTTPS；只有明确的
 本地开发场景才能设置 `allow_insecure_http`。
 
-0.6 是不兼容断点：配置和配对状态带有精确应用版本，旧文件会被拒绝；安装前必须卸载旧包、
+0.7 是不兼容断点：配置和配对状态带有精确应用版本，旧文件会被拒绝；安装前必须卸载旧包、
 显式 purge 旧状态并重新配对。Agent 不读取旧路径、不转换旧凭据，也不回退到旧网关路由。
 
 主要能力包括：

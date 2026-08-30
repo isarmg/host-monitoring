@@ -38,7 +38,9 @@ async fn fixture() -> Fixture {
         .connect("sqlite::memory:")
         .await
         .expect("open test database");
-    store::migrate(&pool).await.expect("migrate test database");
+    store::initialize_empty(&pool)
+        .await
+        .expect("initialize current test schema");
     store::ensure_admin_user(&pool, "admin@example.com", Some("correct-password"))
         .await
         .expect("seed administrator");
