@@ -26,6 +26,20 @@ jobs:
           persist-credentials: false
       - name: Enforce workflow supply-chain policy
         run: python3 scripts/check-workflow-supply-chain.py
+      - name: Validate immutable server release tooling
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m py_compile \
+            scripts/package-server-release.py \
+            scripts/write-server-release-manifest.py \
+            scripts/test-server-release-tooling.py
+          python3 scripts/test-server-release-tooling.py
+          mutable_root='/opt/isarmg/host-monitoring/'current
+          if git grep -nF "$mutable_root" -- .; then
+            echo 'Mutable Host Monitoring server release paths are forbidden.' >&2
+            exit 1
+          fi
       - name: Install exact Rust toolchain
         run: rustup toolchain install 1.98.0 --profile minimal --component rustfmt,clippy
       - name: Format

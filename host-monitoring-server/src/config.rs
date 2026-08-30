@@ -20,16 +20,26 @@ pub struct Cli {
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
-    /// Initialize the exact current schema if absent, then serve the HTTP API.
+    /// Serve an unbound development build; source-bound release binaries reject this command.
     Serve,
+    /// Verify and serve the exact immutable Host Monitoring 0.7 release tree.
+    ServeRelease(ReleaseRoot),
     /// Run a deployment health check against the configured instance.
     Doctor,
     /// Print the exact machine-readable binary release identity.
     Identity,
+    /// Verify an immutable release tree with the binary contained in that tree.
+    VerifyRelease(ReleaseRoot),
     /// Create the initial local administrator in the configured database.
     AdminCreate(Database),
     /// Reset an existing local administrator password.
     AdminResetPassword(AdminResetPassword),
+}
+
+#[derive(Debug, Clone, clap::Args)]
+pub struct ReleaseRoot {
+    #[arg(long)]
+    pub root: PathBuf,
 }
 
 #[derive(Debug, Clone, clap::Args)]
@@ -278,6 +288,21 @@ mod tests {
                 "removed product command {removed} was still accepted"
             );
         }
+    }
+
+    #[test]
+    fn immutable_release_commands_require_an_explicit_root() {
+        let root = "/opt/isarmg/host-monitoring/releases/0.7.0";
+        assert!(
+            Cli::try_parse_from(["host-monitoring-server", "serve-release", "--root", root])
+                .is_ok()
+        );
+        assert!(
+            Cli::try_parse_from(["host-monitoring-server", "verify-release", "--root", root])
+                .is_ok()
+        );
+        assert!(Cli::try_parse_from(["host-monitoring-server", "serve-release"]).is_err());
+        assert!(Cli::try_parse_from(["host-monitoring-server", "verify-release"]).is_err());
     }
 
     #[test]

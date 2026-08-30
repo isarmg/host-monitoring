@@ -8,8 +8,8 @@ Type=simple
 User=isarmg-host
 Group=isarmg-host
 EnvironmentFile=/etc/isarmg/host-monitoring.env
-Environment=HOST_MONITORING_STATIC_DIR=/opt/isarmg/host-monitoring/current/web
-ExecStart=/opt/isarmg/host-monitoring/current/bin/host-monitoring-server serve
+Environment=HOST_MONITORING_STATIC_DIR=/opt/isarmg/host-monitoring/releases/0.7.0/web
+ExecStart=/opt/isarmg/host-monitoring/releases/0.7.0/bin/host-monitoring-server serve-release --root /opt/isarmg/host-monitoring/releases/0.7.0
 StateDirectory=isarmg/host-monitoring/db
 StateDirectoryMode=0700
 RuntimeDirectory=isarmg/host-monitoring

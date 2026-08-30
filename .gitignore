@@ -14,6 +14,8 @@ Thumbs.db
 .idea/
 .vscode/
 *.swp
+__pycache__/
+*.pyc
 host-monitoring-server/web/node_modules/
 host-monitoring-server/web/dist/
 host-monitoring-server/web/*.tsbuildinfo

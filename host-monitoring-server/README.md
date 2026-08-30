@@ -12,13 +12,13 @@ From the repository root:
 cargo build --release -p host-monitoring-server
 ```
 
-## Run
+## Run an unbound development build
 
 Environment variables use the `HOST_MONITORING_` prefix:
 
 ```text
 HOST_MONITORING_DATABASE_URL=sqlite:///var/lib/isarmg/host-monitoring/db/app.db
-HOST_MONITORING_STATIC_DIR=/opt/isarmg/host-monitoring/current/web
+HOST_MONITORING_STATIC_DIR=/absolute/development/web/dist
 HOST_MONITORING_BOOTSTRAP_ADMIN_EMAIL=admin@example.com
 HOST_MONITORING_BOOTSTRAP_ADMIN_PASSWORD=<initial admin password>
 HOST_MONITORING_SESSION_IDLE_TTL_SECONDS=1800
@@ -46,9 +46,11 @@ host-monitoring-server serve
 
 `HOST_MONITORING_STATIC_DIR` is mandatory and resolves once to the current release's exact
 `index.html` plus `assets/` tree. Production rejects links, special files, hard-linked files,
-service-owned assets and group/world-writable content. The systemd unit uses the immutable
-versioned release through `current/web`; it never depends on the build checkout or working
-directory.
+service-owned assets and group/world-writable content. Official source-bound binaries reject
+ordinary `serve`. The systemd unit invokes only the physical
+`/opt/isarmg/host-monitoring/releases/0.7.0/bin/host-monitoring-server` with `serve-release` and the
+physical `/opt/isarmg/host-monitoring/releases/0.7.0` root; it never resolves a mutable deployment
+alias and never depends on the build checkout or working directory.
 
 `serve` acquires an exclusive instance lock plus a shared maintenance lock for the configured
 SQLite file before opening it, and holds both until HTTP and background workers have stopped.
@@ -76,6 +78,25 @@ their own agent tokens or one-time pairing secrets.
 release must match the exact application version, API prefix, schema revision/fingerprint,
 compilation target and full source revision. Ordinary development builds report `unbound` and are
 not accepted as official release artifacts.
+
+`host-monitoring-server verify-release --root /absolute/releases/0.7.0` is accepted only when the
+invoked executable is that tree's own `bin/host-monitoring-server` and the binary has a full bound
+source revision. The root must be a normalized, real absolute `releases/0.7.0` directory. Its
+strict manifest covers every file's SHA-256, size and identity, requires 0555 directories and
+server binary plus 0444 data files, rejects links/special files/unknown fields/extra or missing
+layout, and enforces bounded entry and byte counts. `serve-release` repeats this verification and
+also requires `HOST_MONITORING_STATIC_DIR` to equal the verified root's `web` directory before any
+database, listener or background worker is opened.
+
+Create the official archive only with the following command from a clean checkout whose annotated
+`v0.7.0` tag identifies `HEAD`:
+
+```bash
+python3 scripts/package-server-release.py /absolute/output-directory
+```
+
+The script refuses to replace an archive or checksum and performs extraction, independent
+re-verification, relocation, live/static-asset and tamper-rejection tests before publishing.
 
 Pairing admission uses the TCP peer address directly; forwarded-address headers are not trusted.
 Source, device, request/invite and administrator-account buckets are independently bounded and

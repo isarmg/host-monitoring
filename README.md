@@ -21,7 +21,7 @@ retention window so neither history table grows without limit.
 cargo build --workspace --release
 ```
 
-## Run the server
+## Run an unbound development server
 
 ```text
 HOST_MONITORING_DATABASE_URL=sqlite:///var/lib/isarmg/host-monitoring/db/app.db
@@ -32,6 +32,28 @@ HOST_MONITORING_BOOTSTRAP_ADMIN_PASSWORD=<initial admin password>
 ```bash
 host-monitoring-server serve
 ```
+
+`serve` is deliberately limited to ordinary development binaries whose source identity is
+`unbound`. An official source-bound server rejects it. Production has no mutable `current` link:
+systemd executes the physical
+`/opt/isarmg/host-monitoring/releases/0.7.0/bin/host-monitoring-server` with
+`serve-release --root /opt/isarmg/host-monitoring/releases/0.7.0`, and the process verifies its
+complete immutable tree before opening application state.
+
+## Build the immutable 0.7 server release
+
+From a completely clean checkout whose annotated `v0.7.0` tag dereferences to `HEAD`, publish to
+an existing output directory outside the repository:
+
+```bash
+python3 scripts/package-server-release.py /absolute/output-directory
+```
+
+The builder binds the full lowercase source commit into the binary, runs `npm ci` and the Web
+build, writes a strict whole-tree manifest, creates a deterministic archive and checksum without
+overwriting either output, extracts and re-verifies the archive, then starts it from `/` and probes
+both liveness and a compiled JavaScript asset. Release archives contain no migration, backup or
+restore implementation.
 
 Browser sessions and CSRF tokens are random, revocable SQLite records. Pairing admission applies
 separate bounded budgets to the real TCP source, device, pairing request/invite and administrator
