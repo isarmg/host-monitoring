@@ -176,7 +176,7 @@ pub fn validate_server_base(value: &str) -> anyhow::Result<String> {
 
 /// Validates a URL before handing it to ShellExecute. This is kept separate
 /// from `validate_server_base` because activation URLs may contain a path,
-/// query and fragment issued by the trusted UnionC server.
+/// query and fragment issued by the trusted Host Monitoring server.
 pub fn validate_browser_url(value: &str) -> anyhow::Result<String> {
     let value = value.trim();
     ensure!(!value.is_empty(), "browser URL is empty");

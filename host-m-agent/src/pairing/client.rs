@@ -88,7 +88,7 @@ pub(super) fn parse_pairing_json<T: DeserializeOwned>(
         let origin = pairing_origin_for_diagnostics(endpoint);
         let content_type = pairing_content_type_for_diagnostics(content_type);
         anyhow::anyhow!(
-            "UnionC returned an unexpected or malformed {response_kind} from Server origin {origin} (HTTP 2xx Content-Type: {content_type}); the configured Server address or port may be wrong. Use the complete UnionC management-console origin, including its port"
+            "Host Monitoring returned an unexpected or malformed {response_kind} from Server origin {origin} (HTTP 2xx Content-Type: {content_type}); the configured Server address or port may be wrong. Use the complete Host Monitoring management-console origin, including its port"
         )
     };
     if pairing_content_type_for_diagnostics(content_type) != "application/json" {
@@ -108,12 +108,14 @@ pub(super) fn ensure_pairing_status(
     }
     let detail: String = String::from_utf8_lossy(body).chars().take(512).collect();
     if status.is_success() {
-        bail!("UnionC returned an unexpected HTTP {status} while attempting to {operation}");
+        bail!(
+            "Host Monitoring returned an unexpected HTTP {status} while attempting to {operation}"
+        );
     }
     if matches!(status, StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN) {
         bail!(
-            "UnionC refused to {operation}: HTTP {status}; start a new browser pairing ({detail})"
+            "Host Monitoring refused to {operation}: HTTP {status}; start a new browser pairing ({detail})"
         );
     }
-    bail!("UnionC failed to {operation}: HTTP {status}: {detail}")
+    bail!("Host Monitoring failed to {operation}: HTTP {status}: {detail}")
 }

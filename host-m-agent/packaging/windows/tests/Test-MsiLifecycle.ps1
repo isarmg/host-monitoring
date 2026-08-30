@@ -57,13 +57,13 @@ $maximumMaintenanceDiagnosticBytes = 64KB
 $logs = $LogDirectory
 New-Item -ItemType Directory -Force $logs | Out-Null
 
-if (-not ("UnionC.MsiNativeMethods" -as [type])) {
+if (-not ("HostMonitoring.MsiNativeMethods" -as [type])) {
     Add-Type -TypeDefinition @"
 using System;
 using System.Runtime.InteropServices;
 using System.Text;
 
-namespace UnionC {
+namespace Host Monitoring {
     public static class MsiNativeMethods {
         [DllImport("msi.dll", EntryPoint = "MsiGetShortcutTargetW",
             CharSet = CharSet.Unicode, ExactSpelling = true)]
@@ -224,7 +224,7 @@ function Invoke-Msi {
     Assert-MaintenanceDiagnosticAbsent "Before MSI operation '$Name'"
     $log = Join-Path $logs "${Name}.log"
     $arguments = ("${Operation} `"${Package}`" ${Properties} " +
-        "UNIONC_MAINTENANCE_DIAGNOSTICS=1 /qn /norestart /l*v `"${log}`"")
+        "HOST_MONITORING_MAINTENANCE_DIAGNOSTICS=1 /qn /norestart /l*v `"${log}`"")
     $process = Start-Process -FilePath msiexec.exe -ArgumentList $arguments -Wait -PassThru
     $diagnostic = Read-AndRemoveMaintenanceDiagnostic
     $succeeded = $process.ExitCode -in @(0, 3010)
@@ -365,7 +365,7 @@ function Assert-TrayIntegration {
     $productCode = New-Object System.Text.StringBuilder 39
     $featureId = New-Object System.Text.StringBuilder 39
     $componentCode = New-Object System.Text.StringBuilder 39
-    $shortcutResult = [UnionC.MsiNativeMethods]::MsiGetShortcutTarget(
+    $shortcutResult = [HostMonitoring.MsiNativeMethods]::MsiGetShortcutTarget(
         $trayShortcut, $productCode, $featureId, $componentCode
     )
     if ($shortcutResult -ne 0 -or $featureId.ToString() -cne "AgentFeature" -or
@@ -375,7 +375,7 @@ function Assert-TrayIntegration {
 
     $componentPath = New-Object System.Text.StringBuilder 32768
     [uint32]$componentPathLength = $componentPath.Capacity
-    $componentState = [UnionC.MsiNativeMethods]::MsiGetComponentPath(
+    $componentState = [HostMonitoring.MsiNativeMethods]::MsiGetComponentPath(
         $productCode.ToString(), $componentCode.ToString(),
         $componentPath, [ref]$componentPathLength
     )

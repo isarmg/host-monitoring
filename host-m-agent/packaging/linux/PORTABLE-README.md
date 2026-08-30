@@ -19,4 +19,4 @@ For a managed installation, use the DEB or RPM built from
 If you deliberately use the portable binary, you own its service definition,
 configuration and state paths, permissions, replacement, and removal. Never clone
 an already-paired state directory to another machine. Removing local files does
-not revoke the server-side instance; revoke it in the UnionC Web console first.
+not revoke the server-side instance; revoke it in the Host Monitoring Web console first.

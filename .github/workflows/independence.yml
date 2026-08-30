@@ -17,5 +17,5 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if grep -R -n -E --exclude-dir=.git --exclude-dir=target --exclude-dir=node_modules --exclude-dir=.github 'UNION_|X-Union-|PluginManifest|ProcessContext|sarmg-platform|sarmg_platform|@unionc|unionc-protocol' .; then exit 1; fi
+          if grep -R -n -E --exclude-dir=.git --exclude-dir=target --exclude-dir=node_modules --exclude-dir=.github 'UNION_|X-Union-|[Uu]nion[Cc]|PluginManifest|ProcessContext|sarmg-platform|sarmg_platform' .; then exit 1; fi
           if find . -maxdepth 4 \( -iname 'Dockerfile*' -o -iname 'docker-compose*.yml' -o -iname 'docker-compose*.yaml' \) | grep .; then exit 1; fi

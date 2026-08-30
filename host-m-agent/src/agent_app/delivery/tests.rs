@@ -110,7 +110,7 @@ mod tests {
     #[tokio::test]
     async fn cancelled_one_shot_retains_the_current_report_for_idempotent_retry() {
         let directory = std::env::temp_dir().join(format!(
-            "unionc-once-shutdown-{}",
+            "host-monitoring-once-shutdown-{}",
             Uuid::new_v4()
         ));
         let spool = Spool::open(&directory, 1024 * 1024).unwrap();

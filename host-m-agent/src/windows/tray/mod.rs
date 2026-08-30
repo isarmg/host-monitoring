@@ -217,11 +217,11 @@ mod cross_platform_tests {
             false,
             "exit code 1",
             Err(MissingAuthorizationKeyEvent.into()),
-            "Error: UnionC returned a non-JSON pairing response",
+            "Error: Host Monitoring returned a non-JSON pairing response",
         )
         .unwrap_err();
         let rendered = format!("{error:#}");
-        assert!(rendered.contains("UnionC returned a non-JSON pairing response"));
+        assert!(rendered.contains("Host Monitoring returned a non-JSON pairing response"));
         assert!(!rendered.contains("Agent did not request an authorization key"));
     }
 
@@ -356,7 +356,7 @@ mod cross_platform_tests {
     #[test]
     fn tray_preferences_reader_stops_after_the_size_limit_sentinel() {
         let path = std::env::temp_dir().join(format!(
-            "unionc-tray-preferences-bounds-{}.json",
+            "host-monitoring-tray-preferences-bounds-{}.json",
             uuid::Uuid::new_v4()
         ));
         let file = std::fs::File::create(&path).unwrap();

@@ -542,7 +542,7 @@ type TrayActivationCodeReceiver =
 fn spawn_tray_activation_code_reader() -> anyhow::Result<TrayActivationCodeReceiver> {
     let (sender, receiver) = tokio::sync::oneshot::channel();
     std::thread::Builder::new()
-        .name("unionc-pair-stdin".into())
+        .name("host-monitoring-pair-stdin".into())
         .spawn(move || {
             // A standard-input read has no portable asynchronous cancellation. Keep it off the
             // Tokio blocking pool so process shutdown does not wait for a broker that failed to

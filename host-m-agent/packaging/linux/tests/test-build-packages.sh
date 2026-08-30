@@ -72,7 +72,7 @@ while [ "$#" -gt 0 ]; do
     -h) mode=header ;;
     -p)
       shift
-      [ "${1:-}" = .unionc.version ] || exit 65
+      [ "${1:-}" = .host_m_agent.version ] || exit 65
       mode=version
       ;;
     --) ;;
@@ -90,7 +90,7 @@ case "$mode" in
   version)
     version=$(sed -n 's/^# fixture-version=//p' "$payload")
     [ -n "$version" ] || exit 68
-    printf "String dump of section '.unionc.version':\n  [     0]  %s\n" "$version"
+    printf "String dump of section '.host_m_agent.version':\n  [     0]  %s\n" "$version"
     ;;
   *) exit 69 ;;
 esac

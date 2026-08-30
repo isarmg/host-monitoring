@@ -165,7 +165,7 @@ fn start_stop_progress_reporter() {
         return;
     }
     if let Err(error) = std::thread::Builder::new()
-        .name("unionc-service-stop-progress".into())
+        .name("host-monitoring-service-stop-progress".into())
         .spawn(|| {
             let mut checkpoint = 2;
             loop {

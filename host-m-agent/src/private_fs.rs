@@ -175,7 +175,7 @@ mod tests {
     use super::*;
 
     fn temp_dir() -> std::path::PathBuf {
-        std::env::temp_dir().join(format!("unionc-private-fs-{}", Uuid::new_v4()))
+        std::env::temp_dir().join(format!("host-monitoring-private-fs-{}", Uuid::new_v4()))
     }
 
     #[test]

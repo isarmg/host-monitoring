@@ -536,7 +536,7 @@ mod tests {
         fn new() -> Self {
             let sequence = NEXT_TREE.fetch_add(1, Ordering::Relaxed);
             let path = std::env::temp_dir().join(format!(
-                "unionc-linux-hwmon-{}-{sequence}",
+                "host-monitoring-linux-hwmon-{}-{sequence}",
                 std::process::id()
             ));
             fs::create_dir(&path).expect("create isolated hwmon test root");

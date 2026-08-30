@@ -30,7 +30,7 @@ const fn nul_terminated<const N: usize>(value: &str) -> [u8; N] {
 /// ELF section so the package builder can inspect the payload without running it.
 #[cfg(target_os = "linux")]
 #[used]
-#[unsafe(link_section = ".unionc.version")]
+#[unsafe(link_section = ".host_m_agent.version")]
 static LINUX_PACKAGE_VERSION_MARKER: [u8; AGENT_VERSION_OUTPUT.len() + 1] =
     nul_terminated::<{ AGENT_VERSION_OUTPUT.len() + 1 }>(AGENT_VERSION_OUTPUT);
 

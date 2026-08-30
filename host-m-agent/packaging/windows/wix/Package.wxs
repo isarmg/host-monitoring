@@ -12,7 +12,7 @@
   -->
   <Package
     Name="host-m-agent"
-    Manufacturer="UnionC"
+    Manufacturer="Host Monitoring"
     Version="$(var.ProductVersion)"
     Language="1033"
     Codepage="1252"
@@ -22,9 +22,9 @@
     Compressed="yes">
 
     <SummaryInformation
-      Description="UnionC read-only host telemetry agent"
-      Keywords="UnionC,agent,telemetry,service"
-      Manufacturer="UnionC" />
+      Description="Host Monitoring read-only host telemetry agent"
+      Keywords="Host Monitoring,agent,telemetry,service"
+      Manufacturer="Host Monitoring" />
     <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
 
     <!-- Another product version in this family must be removed explicitly; no migration runs. -->
@@ -33,11 +33,11 @@
         Minimum="0.0.0"
         IncludeMinimum="yes"
         OnlyDetect="yes"
-        Property="UNIONC_OTHER_VERSION_FOUND" />
+        Property="HOST_MONITORING_OTHER_VERSION_FOUND" />
     </Upgrade>
 
     <Launch
-      Condition="Installed OR NOT UNIONC_OTHER_VERSION_FOUND"
+      Condition="Installed OR NOT HOST_MONITORING_OTHER_VERSION_FOUND"
       Message="Another host-m-agent version is installed. Uninstall it before installing this version; automatic migration is not supported." />
     <Launch
       Condition="VersionNT64"
@@ -50,15 +50,15 @@
       Condition="NOT PURGE OR PURGE = &quot;1&quot;"
       Message="PURGE accepts only the value 1. Omit it for a state-preserving uninstall." />
     <Launch
-      Condition="NOT UNIONC_MAINTENANCE_DIAGNOSTICS OR UNIONC_MAINTENANCE_DIAGNOSTICS = &quot;1&quot;"
-      Message="UNIONC_MAINTENANCE_DIAGNOSTICS accepts only the value 1. Omit it to disable maintenance diagnostics." />
+      Condition="NOT HOST_MONITORING_MAINTENANCE_DIAGNOSTICS OR HOST_MONITORING_MAINTENANCE_DIAGNOSTICS = &quot;1&quot;"
+      Message="HOST_MONITORING_MAINTENANCE_DIAGNOSTICS accepts only the value 1. Omit it to disable maintenance diagnostics." />
 
-    <Property Id="ARPCONTACT" Value="UnionC maintainers" />
+    <Property Id="ARPCONTACT" Value="Host Monitoring maintainers" />
     <Property Id="ARPURLINFOABOUT" Value="https://github.com/isarmg/host-monitoring" />
     <Property Id="ARPNOMODIFY" Value="1" />
     <Property Id="ARPNOREPAIR" Value="1" />
     <Property Id="PURGE" Secure="yes" />
-    <Property Id="UNIONC_MAINTENANCE_DIAGNOSTICS" Secure="yes" />
+    <Property Id="HOST_MONITORING_MAINTENANCE_DIAGNOSTICS" Secure="yes" />
     <!-- Formatted only after costing; the WiX helper launches it with Explorer's normal token. -->
     <Property Id="WixUnelevatedShellExecTarget" Value="[#TrayExecutable]" />
     <StandardDirectory Id="ProgramFiles64Folder">
@@ -85,7 +85,7 @@
           Id="HostMAgentServiceInstall"
           Name="host-m-agent"
           DisplayName="host-m-agent"
-          Description="Collects and securely reports read-only host telemetry to UnionC."
+          Description="Collects and securely reports read-only host telemetry to Host Monitoring."
           Type="ownProcess"
           Start="auto"
           ErrorControl="normal"
@@ -156,7 +156,7 @@
         Bitness="always64">
         <RegistryValue
           Root="HKLM"
-          Key="Software\UnionC\host-m-agent"
+          Key="Software\Host Monitoring\host-m-agent"
           Name="ManagedStateDirectory"
           Type="string"
           Value="[STATEDIRECTORY]"
@@ -198,28 +198,28 @@
     <CustomAction
       Id="RollbackAgentInstall"
       BinaryRef="HostMAgentMaintenance.exe"
-      ExeCommand="rollback-install [UNIONC_MAINTENANCE_DIAGNOSTICS]"
+      ExeCommand="rollback-install [HOST_MONITORING_MAINTENANCE_DIAGNOSTICS]"
       Execute="rollback"
       Impersonate="no"
       Return="check" />
     <CustomAction
       Id="PrepareAgentInstall"
       BinaryRef="HostMAgentMaintenance.exe"
-      ExeCommand="prepare-install [UNIONC_MAINTENANCE_DIAGNOSTICS]"
+      ExeCommand="prepare-install [HOST_MONITORING_MAINTENANCE_DIAGNOSTICS]"
       Execute="deferred"
       Impersonate="no"
       Return="check" />
     <CustomAction
       Id="ApplyAgentInstall"
       BinaryRef="HostMAgentMaintenance.exe"
-      ExeCommand="apply-install [UNIONC_MAINTENANCE_DIAGNOSTICS]"
+      ExeCommand="apply-install [HOST_MONITORING_MAINTENANCE_DIAGNOSTICS]"
       Execute="deferred"
       Impersonate="no"
       Return="check" />
     <CustomAction
       Id="CommitAgentInstall"
       BinaryRef="HostMAgentMaintenance.exe"
-      ExeCommand="commit-install [UNIONC_MAINTENANCE_DIAGNOSTICS]"
+      ExeCommand="commit-install [HOST_MONITORING_MAINTENANCE_DIAGNOSTICS]"
       Execute="commit"
       Impersonate="no"
       Return="ignore" />
@@ -227,56 +227,56 @@
     <CustomAction
       Id="RollbackUninstallPreflight"
       BinaryRef="HostMAgentMaintenance.exe"
-      ExeCommand="rollback-uninstall-preflight [UNIONC_MAINTENANCE_DIAGNOSTICS]"
+      ExeCommand="rollback-uninstall-preflight [HOST_MONITORING_MAINTENANCE_DIAGNOSTICS]"
       Execute="rollback"
       Impersonate="no"
       Return="check" />
     <CustomAction
       Id="PreflightAgentUninstall"
       BinaryRef="HostMAgentMaintenance.exe"
-      ExeCommand="preflight-uninstall [UNIONC_MAINTENANCE_DIAGNOSTICS]"
+      ExeCommand="preflight-uninstall [HOST_MONITORING_MAINTENANCE_DIAGNOSTICS]"
       Execute="deferred"
       Impersonate="no"
       Return="check" />
     <CustomAction
       Id="RollbackPreservedState"
       BinaryRef="HostMAgentMaintenance.exe"
-      ExeCommand="rollback-uninstall [UNIONC_MAINTENANCE_DIAGNOSTICS]"
+      ExeCommand="rollback-uninstall [HOST_MONITORING_MAINTENANCE_DIAGNOSTICS]"
       Execute="rollback"
       Impersonate="no"
       Return="check" />
     <CustomAction
       Id="PreserveAgentState"
       BinaryRef="HostMAgentMaintenance.exe"
-      ExeCommand="preserve-state [UNIONC_MAINTENANCE_DIAGNOSTICS]"
+      ExeCommand="preserve-state [HOST_MONITORING_MAINTENANCE_DIAGNOSTICS]"
       Execute="deferred"
       Impersonate="no"
       Return="check" />
     <CustomAction
       Id="CommitPreservedState"
       BinaryRef="HostMAgentMaintenance.exe"
-      ExeCommand="commit-uninstall [UNIONC_MAINTENANCE_DIAGNOSTICS]"
+      ExeCommand="commit-uninstall [HOST_MONITORING_MAINTENANCE_DIAGNOSTICS]"
       Execute="commit"
       Impersonate="no"
       Return="ignore" />
     <CustomAction
       Id="RollbackPurgedState"
       BinaryRef="HostMAgentMaintenance.exe"
-      ExeCommand="rollback-purge [UNIONC_MAINTENANCE_DIAGNOSTICS]"
+      ExeCommand="rollback-purge [HOST_MONITORING_MAINTENANCE_DIAGNOSTICS]"
       Execute="rollback"
       Impersonate="no"
       Return="check" />
     <CustomAction
       Id="PreparePurgedState"
       BinaryRef="HostMAgentMaintenance.exe"
-      ExeCommand="prepare-purge [UNIONC_MAINTENANCE_DIAGNOSTICS]"
+      ExeCommand="prepare-purge [HOST_MONITORING_MAINTENANCE_DIAGNOSTICS]"
       Execute="deferred"
       Impersonate="no"
       Return="check" />
     <CustomAction
       Id="CommitPurgedState"
       BinaryRef="HostMAgentMaintenance.exe"
-      ExeCommand="commit-purge [UNIONC_MAINTENANCE_DIAGNOSTICS]"
+      ExeCommand="commit-purge [HOST_MONITORING_MAINTENANCE_DIAGNOSTICS]"
       Execute="commit"
       Impersonate="no"
       Return="ignore" />

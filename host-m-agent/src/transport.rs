@@ -79,7 +79,7 @@ impl Reporter {
         })
     }
 
-    pub async fn send_unionc(&self, report: &AgentReport) -> Result<(), SendError> {
+    pub async fn send_host_monitoring(&self, report: &AgentReport) -> Result<(), SendError> {
         let (bounded, body) = report_contract::encode_report_body(report)
             .map_err(|error| SendError::Permanent(format!("invalid Agent report: {error}")))?;
         let response = self
@@ -90,17 +90,19 @@ impl Reporter {
             .body(body)
             .send()
             .await
-            .map_err(|error| SendError::Transient(format!("UnionC request failed: {error}")))?;
+            .map_err(|error| {
+                SendError::Transient(format!("Host Monitoring request failed: {error}"))
+            })?;
         let status = response.status();
         let content_type = response
             .headers()
             .get(reqwest::header::CONTENT_TYPE)
             .and_then(|value| value.to_str().ok())
             .map(str::to_owned);
-        let body = read_limited(response, MAX_ERROR_RESPONSE_BYTES, "UnionC")
+        let body = read_limited(response, MAX_ERROR_RESPONSE_BYTES, "Host Monitoring")
             .await
             .map_err(SendError::Transient)?;
-        validate_unionc_ack(status, content_type.as_deref(), &body, &bounded)
+        validate_host_monitoring_ack(status, content_type.as_deref(), &body, &bounded)
     }
 
     #[cfg(feature = "otlp")]
@@ -257,7 +259,7 @@ pub enum SendError {
     /// 继续入队只会让 spool 被必失败的数据占满并挤掉后续有效报文。
     #[error("{0}")]
     Permanent(String),
-    /// UnionC 以 401 和稳定 `unauthorized` 机器码确认凭据不被接受。主机进入
+    /// Host Monitoring 以 401 和稳定 `unauthorized` 机器码确认凭据不被接受。主机进入
     /// `reauth_required`，只能通过创建新实例并执行当前 v2 配对流程恢复；Agent 不会自动生成
     /// 或替换凭据。代理/WAF 生成的未知 401 不得使用此变体。
     #[error("{0}")]
@@ -278,7 +280,7 @@ impl SendError {
     }
 }
 
-fn validate_unionc_ack(
+fn validate_host_monitoring_ack(
     status: StatusCode,
     content_type: Option<&str>,
     body: &[u8],
@@ -287,24 +289,24 @@ fn validate_unionc_ack(
     if status != StatusCode::ACCEPTED {
         if status.is_success() {
             return Err(SendError::Transient(format!(
-                "UnionC returned unexpected HTTP {status}; report acknowledgements require HTTP 202 Accepted"
+                "Host Monitoring returned unexpected HTTP {status}; report acknowledgements require HTTP 202 Accepted"
             )));
         }
-        return ensure_success(status, body, "UnionC");
+        return ensure_success(status, body, "Host Monitoring");
     }
     if !content_type.is_some_and(is_application_json) {
         return Err(SendError::Transient(format!(
-            "UnionC returned HTTP {status} without Content-Type application/json"
+            "Host Monitoring returned HTTP {status} without Content-Type application/json"
         )));
     }
     let ack: AgentReportAck = serde_json::from_slice(body).map_err(|error| {
         SendError::Transient(format!(
-            "UnionC returned HTTP {status} without a valid report acknowledgement: {error}"
+            "Host Monitoring returned HTTP {status} without a valid report acknowledgement: {error}"
         ))
     })?;
     if ack.host_id != report.host.id || ack.report_id != report.report_id {
         return Err(SendError::Transient(format!(
-            "UnionC acknowledgement identity mismatch: expected host {} report {}, got host {} \
+            "Host Monitoring acknowledgement identity mismatch: expected host {} report {}, got host {} \
              report {}",
             report.host.id, report.report_id, ack.host_id, ack.report_id
         )));
@@ -344,7 +346,7 @@ fn ensure_success(status: StatusCode, body: &[u8], target: &str) -> Result<(), S
         StatusCode::UNAUTHORIZED => match error_code.as_deref() {
             Some("unauthorized") => Err(SendError::Unauthorized(message)),
             // A reverse proxy, WAF, or temporary upstream auth layer may generate its own 401.
-            // Only UnionC's stable machine code proves that the host credential is invalid;
+            // Only Host Monitoring's stable machine code proves that the host credential is invalid;
             // otherwise keep the report queued and retry after the deployment recovers.
             _ => Err(SendError::Transient(message)),
         },
@@ -488,7 +490,7 @@ mod tests {
         let error = ensure_success(
             StatusCode::CONFLICT,
             b"report_id already belongs to another host",
-            "UnionC",
+            "Host Monitoring",
         )
         .expect_err("409 cannot become successful by retrying the same report");
         assert!(error.is_permanent());
@@ -499,7 +501,7 @@ mod tests {
         let error = ensure_success(
             StatusCode::UNPROCESSABLE_ENTITY,
             b"unexpected response",
-            "UnionC",
+            "Host Monitoring",
         )
         .expect_err("422 is not part of the current Server report contract");
         assert!(matches!(error, SendError::Transient(_)));
@@ -515,7 +517,7 @@ mod tests {
             "received_at": Utc::now()
         }))
         .unwrap();
-        validate_unionc_ack(
+        validate_host_monitoring_ack(
             StatusCode::ACCEPTED,
             Some("application/json; charset=utf-8"),
             &body,
@@ -523,16 +525,17 @@ mod tests {
         )
         .unwrap();
 
-        let error = validate_unionc_ack(StatusCode::OK, Some("application/json"), &body, &report)
-            .expect_err("a structurally valid HTTP 200 must not acknowledge a report");
+        let error =
+            validate_host_monitoring_ack(StatusCode::OK, Some("application/json"), &body, &report)
+                .expect_err("a structurally valid HTTP 200 must not acknowledge a report");
         assert!(matches!(error, SendError::Transient(_)));
 
         assert!(matches!(
-            validate_unionc_ack(StatusCode::ACCEPTED, Some("text/plain"), &body, &report),
+            validate_host_monitoring_ack(StatusCode::ACCEPTED, Some("text/plain"), &body, &report),
             Err(SendError::Transient(_))
         ));
         assert!(matches!(
-            validate_unionc_ack(StatusCode::ACCEPTED, None, &body, &report),
+            validate_host_monitoring_ack(StatusCode::ACCEPTED, None, &body, &report),
             Err(SendError::Transient(_))
         ));
     }
@@ -548,7 +551,7 @@ mod tests {
         }))
         .unwrap();
         assert!(matches!(
-            validate_unionc_ack(
+            validate_host_monitoring_ack(
                 StatusCode::ACCEPTED,
                 Some("application/json"),
                 &body,
@@ -568,7 +571,7 @@ mod tests {
         }))
         .unwrap();
         assert!(matches!(
-            validate_unionc_ack(
+            validate_host_monitoring_ack(
                 StatusCode::ACCEPTED,
                 Some("application/json"),
                 &without_accepted,
@@ -586,7 +589,7 @@ mod tests {
         }))
         .unwrap();
         assert!(matches!(
-            validate_unionc_ack(
+            validate_host_monitoring_ack(
                 StatusCode::ACCEPTED,
                 Some("application/json"),
                 &with_obsolete_field,
@@ -603,7 +606,7 @@ mod tests {
         }))
         .unwrap();
         assert!(matches!(
-            validate_unionc_ack(
+            validate_host_monitoring_ack(
                 StatusCode::ACCEPTED,
                 Some("application/json"),
                 &noncanonical_uuid,
@@ -618,9 +621,11 @@ mod tests {
         let error = ensure_success(
             StatusCode::UNAUTHORIZED,
             br#"{"code":"unauthorized","message":"unauthorized"}"#,
-            "UnionC",
+            "Host Monitoring",
         )
-        .expect_err("UnionC's stable unauthorized code must require a newly authorized pairing");
+        .expect_err(
+            "Host Monitoring's stable unauthorized code must require a newly authorized pairing",
+        );
         assert!(error.is_unauthorized());
     }
 
@@ -634,7 +639,7 @@ mod tests {
             b"{\"code\":\"unauthorized\",\"message\":\"invalid UTF-8: \xff\"}",
         ];
         for body in responses {
-            let error = ensure_success(StatusCode::UNAUTHORIZED, body, "UnionC")
+            let error = ensure_success(StatusCode::UNAUTHORIZED, body, "Host Monitoring")
                 .expect_err("an unknown 401 must not be accepted");
             assert!(matches!(error, SendError::Transient(_)));
             assert!(!error.is_unauthorized());
@@ -646,7 +651,7 @@ mod tests {
         let error = ensure_success(
             StatusCode::FORBIDDEN,
             br#"{"code":"agent_host_mismatch","message":"token does not belong to host"}"#,
-            "UnionC",
+            "Host Monitoring",
         )
         .expect_err("a queued report for another host can never match the current credential");
         assert!(error.is_permanent());
@@ -658,7 +663,7 @@ mod tests {
             b"temporary policy rejection".as_slice(),
             br#"{"code":"forbidden","message":"unrelated access policy"}"#,
         ] {
-            let error = ensure_success(StatusCode::FORBIDDEN, body, "UnionC")
+            let error = ensure_success(StatusCode::FORBIDDEN, body, "Host Monitoring")
                 .expect_err("an unknown 403 must not be accepted");
             assert!(matches!(error, SendError::Transient(_)));
             assert!(!error.is_permanent());

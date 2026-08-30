@@ -40,7 +40,7 @@ impl LocalControlServer {
         let thread_state = Arc::clone(&state);
         let thread_origin = origin.clone();
         thread::Builder::new()
-            .name("unionc-tray-http".into())
+            .name("host-monitoring-tray-http".into())
             .spawn(move || serve_local(listener, thread_origin, thread_state))
             .context("failed to start the private local configuration server")?;
         Ok(Self { origin, state })
@@ -103,7 +103,7 @@ fn serve_local(listener: TcpListener, origin: String, state: Arc<LocalControlSta
         let origin = origin.clone();
         let active = ActiveConnection(Arc::clone(&active));
         let _ = thread::Builder::new()
-            .name("unionc-tray-http-request".into())
+            .name("host-monitoring-tray-http-request".into())
             .spawn(move || {
                 let _active = active;
                 let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));

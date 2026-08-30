@@ -69,7 +69,7 @@ elf_machine=$(
 ) || die "Agent package payload is not a readable ELF binary: $agent_binary"
 [ "$elf_machine" = "$expected_elf_machine" ] ||
   die "Agent package payload architecture $elf_machine does not match $package_arch"
-LC_ALL=C readelf -p .unionc.version -- "$agent_binary" 2>/dev/null |
+LC_ALL=C readelf -p .host_m_agent.version -- "$agent_binary" 2>/dev/null |
   awk -v expected="host-m-agent $package_version" '
     /^[[:space:]]*\[[[:space:]]*[[:xdigit:]]+\][[:space:]]+/ {
       value = $0

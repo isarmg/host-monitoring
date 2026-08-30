@@ -42,7 +42,7 @@ fn prepare_start(config: &AgentConfig, host: &HostIdentity) -> anyhow::Result<Pa
             if !config.replace_pending_pairing && expires_at > Utc::now() =>
         {
             bail!(
-                "a browser pairing request for a different UnionC server is still pending; \
+                "a browser pairing request for a different Host Monitoring server is still pending; \
                  finish it or wait until {expires_at} before changing servers"
             );
         }
@@ -62,7 +62,7 @@ fn prepare_start(config: &AgentConfig, host: &HostIdentity) -> anyhow::Result<Pa
             }
             if !config.replace_pending_pairing {
                 bail!(
-                    "a browser pairing request for a different UnionC server is being created; \
+                    "a browser pairing request for a different Host Monitoring server is being created; \
                      retry with the original server before changing servers"
                 );
             }
@@ -169,10 +169,10 @@ async fn finish_create_request(
     let created_request_id = Uuid::parse_str(&created.request_id)
         .expect("protocol rejected a non-canonical pairing request UUID");
     if created.expires_in == 0 || created.expires_in > 7 * 24 * 60 * 60 {
-        bail!("UnionC returned an invalid pairing expiration");
+        bail!("Host Monitoring returned an invalid pairing expiration");
     }
     if created.poll_interval == 0 || created.poll_interval > 300 {
-        bail!("UnionC returned an invalid pairing poll interval");
+        bail!("Host Monitoring returned an invalid pairing poll interval");
     }
     let activation_url = resolve_activation_url(&pairing_endpoint, &created.activation_url)?;
     // Validate the browser destination before it is persisted or shown. Waiting

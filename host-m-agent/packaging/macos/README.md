@@ -120,7 +120,7 @@ identity and diagnostic state for a safe reinstall:
 sudo /usr/local/share/host-m-agent/uninstall.sh
 ```
 
-For permanent decommissioning, **first revoke the instance in the UnionC Web console**. Then
+For permanent decommissioning, **first revoke the instance in the Host Monitoring Web console**. Then
 delete local credentials, pairing state, spool, configuration, logs, receipt, and the dedicated
 account/group created by this package:
 

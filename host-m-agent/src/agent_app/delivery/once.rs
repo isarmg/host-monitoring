@@ -39,7 +39,7 @@ pub(super) async fn run_once(
         }
     }
 
-    let Some(send) = finish_before_shutdown(shutdown, reporter.send_unionc(&report)).await else {
+    let Some(send) = finish_before_shutdown(shutdown, reporter.send_host_monitoring(&report)).await else {
         return retain_once_report(spool, &report);
     };
     if let Err(error) = send {
@@ -51,7 +51,7 @@ pub(super) async fn run_once(
         return Err(anyhow::anyhow!(error).context("report was retained in the local spool"));
     }
     let Some(otlp) = finish_before_shutdown(shutdown, reporter.send_otlp(&report)).await else {
-        // UnionC has acknowledged this report already. OTLP is optional, so there is nothing
+        // Host Monitoring has acknowledged this report already. OTLP is optional, so there is nothing
         // left to retain when shutdown wins this final best-effort export.
         return Ok(RunOnceOutcome::Shutdown);
     };
@@ -87,7 +87,7 @@ struct OtlpQueue {
 impl OtlpQueue {
     fn spawn(reporter: Reporter) -> Self {
         // OTLP is an optional secondary output. A bounded worker prevents a slow
-        // collector from delaying host sampling or primary UnionC delivery.
+        // collector from delaying host sampling or primary Host Monitoring delivery.
         let (sender, mut receiver) = mpsc::channel::<AgentReport>(128);
         let worker = tokio::spawn(async move {
             while let Some(report) = receiver.recv().await {

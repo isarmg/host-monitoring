@@ -118,7 +118,7 @@ fn start_pair_from_browser(
     let operation_state = Arc::clone(state);
     let server_for_ipc = server.clone();
     thread::Builder::new()
-        .name("unionc-pair-ipc".into())
+        .name("host-monitoring-pair-ipc".into())
         .spawn(move || {
             update_operation(
                 &operation_state,
@@ -229,7 +229,7 @@ fn change_service_from_browser(
     let worker_operation_id = operation_id.clone();
     let operation_state = Arc::clone(state);
     thread::Builder::new()
-        .name("unionc-browser-service-operation".into())
+        .name("host-monitoring-browser-service-operation".into())
         .spawn(move || {
             update_operation(
                 &operation_state,
@@ -344,7 +344,7 @@ fn server_connection_response(
 /// Lightweight management-origin reachability check for the standard-user tray.
 ///
 /// This deliberately calls only the public `/api/health` endpoint and never reads
-/// ProgramData credentials. It answers "can this desktop session reach UnionC?";
+/// ProgramData credentials. It answers "can this desktop session reach Host Monitoring?";
 /// the Server's host list remains authoritative for authenticated telemetry recency.
 fn probe_server_connection(server: &str) -> ServerConnectionStatus {
     if server.trim().is_empty() {
@@ -460,7 +460,7 @@ fn probe_server_connection(server: &str) -> ServerConnectionStatus {
         Err(_) => {
             return ServerConnectionStatus {
                 status: "offline",
-                message: "Server 未返回可用的 UnionC 健康状态（格式或版本信息无效）".to_string(),
+                message: "Server 未返回可用的 Host Monitoring 健康状态（格式或版本信息无效）".to_string(),
                 version: None,
                 latency_ms: Some(elapsed_milliseconds(started)),
             };

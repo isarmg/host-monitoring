@@ -281,7 +281,7 @@ pub fn encode_report(report: &AgentReport) -> ExportMetricsServiceRequest {
                     dropped_attributes_count: 0,
                 }),
                 metrics: metrics.into_vec(),
-                schema_url: "https://unionc.local/schemas/hostmetrics/1".into(),
+                schema_url: "https://host-monitoring.local/schemas/hostmetrics/1".into(),
             }],
             schema_url: "https://opentelemetry.io/schemas/1.36.0".into(),
         }],

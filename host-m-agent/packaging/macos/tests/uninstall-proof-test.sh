@@ -3,7 +3,7 @@ set -eu
 
 script_dir="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 uninstaller="$script_dir/../uninstall.sh"
-test_root="$(mktemp -d "${TMPDIR:-/tmp}/unionc-macos-uninstall.XXXXXX")"
+test_root="$(mktemp -d "${TMPDIR:-/tmp}/host-monitoring-macos-uninstall.XXXXXX")"
 
 cleanup() {
   rm -rf "$test_root"
@@ -177,7 +177,7 @@ EOF
 printf '%s\n' "$*" >>"$CASE_ROOT/pkgutil-calls"
 case "${1:-}" in
   --pkgs=*)
-    [ "$1" = '--pkgs=^com[.]unionc[.]agent$' ] || exit 64
+    [ "$1" = '--pkgs=^org[.]sarmg[.]hostmagent$' ] || exit 64
     case "${PKGUTIL_RECEIPT_STATE:-present}" in
       present) printf 'org.sarmg.hostmagent\n' ;;
       absent) ;;

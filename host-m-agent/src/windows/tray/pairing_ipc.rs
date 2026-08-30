@@ -5,7 +5,7 @@ fn elevated_pair(server: String, callback_nonce: String) -> anyhow::Result<()> {
     let server = validate_server_base(&server)?;
     let origin = reqwest::Url::parse(&server)?.origin().ascii_serialization();
     let confirmation = format!(
-        "即将把此 Windows 设备配对到：\n\n{origin}\n\n配对成功会替换当前本地绑定，并在 Server 中创建新的主机实例。只有确认该地址属于你的 UnionC 服务器时才继续。",
+        "即将把此 Windows 设备配对到：\n\n{origin}\n\n配对成功会替换当前本地绑定，并在 Server 中创建新的主机实例。只有确认该地址属于你的 Host Monitoring 服务器时才继续。",
     );
     match message_box(
         &confirmation,
@@ -144,7 +144,7 @@ fn run_hidden_pair(server: &str, callback_nonce: &str) -> anyhow::Result<()> {
     let nonce_for_output = callback_nonce.to_string();
     let mut stdout_thread = Some(
         thread::Builder::new()
-            .name("unionc-pair-stdout".into())
+            .name("host-monitoring-pair-stdout".into())
             .spawn(move || {
                 process_pair_events(
                     stdout,
@@ -157,7 +157,7 @@ fn run_hidden_pair(server: &str, callback_nonce: &str) -> anyhow::Result<()> {
             .context("failed to start pairing event reader")?,
     );
     let stderr_thread = thread::Builder::new()
-        .name("unionc-pair-stderr".into())
+        .name("host-monitoring-pair-stderr".into())
         .spawn(move || drain_limited(stderr, MAX_CHILD_STDERR_BYTES))
         .context("failed to start pairing diagnostics reader")?;
     let deadline = Instant::now() + PAIR_OPERATION_TIMEOUT + Duration::from_secs(15);

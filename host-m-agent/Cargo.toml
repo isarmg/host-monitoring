@@ -1,6 +1,6 @@
 [package]
 name = "host-m-agent"
-description = "Read-only cross-platform host telemetry agent for UnionC"
+description = "Read-only cross-platform host telemetry agent for Host Monitoring"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

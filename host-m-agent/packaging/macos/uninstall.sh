@@ -34,7 +34,7 @@ credentials, configuration, spool, logs, the dedicated account, package receipt,
 maintenance helper so a reinstall can resume the same instance.
 
 --purge  Permanently delete all preserved local Agent data, logs, account/group, helper,
-         and package receipt. Revoke the instance in the UnionC Web console first.
+         and package receipt. Revoke the instance in the Host Monitoring Web console first.
 --yes    Skip the interactive PURGE confirmation (for managed, non-interactive removal).
 EOF
 }
@@ -46,7 +46,7 @@ die() {
 
 inspect_package_receipt() {
   receipt_listing=""
-  if receipt_listing="$(LC_ALL=C pkgutil --pkgs='^com[.]unionc[.]agent$' 2>&1)"; then
+  if receipt_listing="$(LC_ALL=C pkgutil --pkgs='^org[.]sarmg[.]hostmagent$' 2>&1)"; then
     case "$receipt_listing" in
       "$identifier") return 0 ;;
       '') return 1 ;;
@@ -151,7 +151,7 @@ fi
 if [ "$purge" -eq 1 ]; then
   cat >&2 <<'EOF'
 WARNING: --purge does not revoke the server-side Agent credential.
-First revoke/decommission this instance in the UnionC Web console. Continuing permanently
+First revoke/decommission this instance in the Host Monitoring Web console. Continuing permanently
 deletes this Mac's host-id, agent-token, pairing state, queued reports, configuration, and logs.
 EOF
   if [ "$assume_yes" -ne 1 ]; then

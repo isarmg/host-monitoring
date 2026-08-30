@@ -24,7 +24,7 @@ pub(super) fn open(name: &str) -> anyhow::Result<ShutdownSignal> {
     let event_raw = event.0 as isize;
     let (controller, signal) = shutdown_channel();
     thread::Builder::new()
-        .name("unionc-pair-cancel".into())
+        .name("host-monitoring-pair-cancel".into())
         .spawn(move || {
             let event = windows::Win32::Foundation::HANDLE(event_raw as *mut c_void);
             let result = unsafe { WaitForSingleObject(event, u32::MAX) };

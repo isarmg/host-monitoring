@@ -125,7 +125,7 @@ Assert-Contains $trayText `
 Assert-Contains $trayText `
     'placeholder=\"https://host-monitoring.example.com\"' `
     "The local pairing form must show a secure, complete management-console origin."
-if ($trayText -match 'COMMAND_OPEN_MANAGEMENT|open_management_console|id=management|\u6253\u5f00 UnionC \u7ba1\u7406\u53f0') {
+if ($trayText -match 'COMMAND_OPEN_MANAGEMENT|open_management_console|id=management|\u6253\u5f00 Host Monitoring \u7ba1\u7406\u53f0') {
     throw "The Agent tray and its local configuration page must not provide a direct management-console link."
 }
 Assert-Contains $trayText 'id=check-connection' `
@@ -261,10 +261,10 @@ Assert-Equal $otherVersion.IncludeMinimum "yes" `
     "The related-product lower bound must be inclusive."
 Assert-Equal $otherVersion.OnlyDetect "yes" `
     "Other versions must be detected but never removed or migrated."
-Assert-Equal $otherVersion.Property "UNIONC_OTHER_VERSION_FOUND" `
+Assert-Equal $otherVersion.Property "HOST_MONITORING_OTHER_VERSION_FOUND" `
     "The current-only related-product property drifted."
 $otherVersionLaunch = Select-One `
-    "/w:Wix/w:Package/w:Launch[@Condition='Installed OR NOT UNIONC_OTHER_VERSION_FOUND']"
+    "/w:Wix/w:Package/w:Launch[@Condition='Installed OR NOT HOST_MONITORING_OTHER_VERSION_FOUND']"
 Assert-Contains $otherVersionLaunch.Message "Uninstall it before installing this version" `
     "The current-only gate must tell operators to remove another version explicitly."
 
@@ -341,25 +341,25 @@ Assert-Equal $closeTray.GetAttribute("TerminateProcess") "" `
 
 $purgeProperty = Select-One "//w:Property[@Id='PURGE']"
 Assert-Equal $purgeProperty.Secure "yes" "PURGE must survive the client/server MSI boundary."
-$diagnosticsProperty = Select-One "//w:Property[@Id='UNIONC_MAINTENANCE_DIAGNOSTICS']"
+$diagnosticsProperty = Select-One "//w:Property[@Id='HOST_MONITORING_MAINTENANCE_DIAGNOSTICS']"
 Assert-Equal $diagnosticsProperty.Secure "yes" `
     "The maintenance diagnostics switch must survive the client/server MSI boundary."
 Assert-Equal $diagnosticsProperty.GetAttribute("Value") "" `
     "Maintenance diagnostics must remain disabled unless the operator explicitly requests them."
 $diagnosticsLaunches = @($package.SelectNodes(
-    "//w:Launch[contains(@Condition, 'UNIONC_MAINTENANCE_DIAGNOSTICS')]",
+    "//w:Launch[contains(@Condition, 'HOST_MONITORING_MAINTENANCE_DIAGNOSTICS')]",
     $namespace
 ))
 if ($diagnosticsLaunches.Count -ne 1) {
     throw "Expected exactly one maintenance diagnostics value gate; found $($diagnosticsLaunches.Count)."
 }
 $diagnosticsLaunch = Select-One `
-    '//w:Launch[@Condition=''NOT UNIONC_MAINTENANCE_DIAGNOSTICS OR UNIONC_MAINTENANCE_DIAGNOSTICS = "1"'']'
+    '//w:Launch[@Condition=''NOT HOST_MONITORING_MAINTENANCE_DIAGNOSTICS OR HOST_MONITORING_MAINTENANCE_DIAGNOSTICS = "1"'']'
 Assert-Contains $diagnosticsLaunch.Message "accepts only the value 1" `
     "The diagnostics gate must explain that only an exact value of 1 is accepted."
 
 $testOnlyProperties = @($package.SelectNodes(
-    "//w:Property[starts-with(@Id, 'UNIONC_TEST_')]",
+    "//w:Property[starts-with(@Id, 'HOST_MONITORING_TEST_')]",
     $namespace
 ))
 if ($testOnlyProperties.Count -ne 0) {
@@ -372,18 +372,18 @@ if (@($package.SelectNodes("//w:DirectoryRef[@Id='STATEDIRECTORY']/w:Component/w
 
 $actions = @($package.SelectNodes("//w:CustomAction", $namespace))
 $expectedActions = [ordered]@{
-    "RollbackAgentInstall" = @("rollback-install [UNIONC_MAINTENANCE_DIAGNOSTICS]", "rollback", "check")
-    "PrepareAgentInstall" = @("prepare-install [UNIONC_MAINTENANCE_DIAGNOSTICS]", "deferred", "check")
-    "ApplyAgentInstall" = @("apply-install [UNIONC_MAINTENANCE_DIAGNOSTICS]", "deferred", "check")
-    "CommitAgentInstall" = @("commit-install [UNIONC_MAINTENANCE_DIAGNOSTICS]", "commit", "ignore")
-    "RollbackUninstallPreflight" = @("rollback-uninstall-preflight [UNIONC_MAINTENANCE_DIAGNOSTICS]", "rollback", "check")
-    "PreflightAgentUninstall" = @("preflight-uninstall [UNIONC_MAINTENANCE_DIAGNOSTICS]", "deferred", "check")
-    "RollbackPreservedState" = @("rollback-uninstall [UNIONC_MAINTENANCE_DIAGNOSTICS]", "rollback", "check")
-    "PreserveAgentState" = @("preserve-state [UNIONC_MAINTENANCE_DIAGNOSTICS]", "deferred", "check")
-    "CommitPreservedState" = @("commit-uninstall [UNIONC_MAINTENANCE_DIAGNOSTICS]", "commit", "ignore")
-    "RollbackPurgedState" = @("rollback-purge [UNIONC_MAINTENANCE_DIAGNOSTICS]", "rollback", "check")
-    "PreparePurgedState" = @("prepare-purge [UNIONC_MAINTENANCE_DIAGNOSTICS]", "deferred", "check")
-    "CommitPurgedState" = @("commit-purge [UNIONC_MAINTENANCE_DIAGNOSTICS]", "commit", "ignore")
+    "RollbackAgentInstall" = @("rollback-install [HOST_MONITORING_MAINTENANCE_DIAGNOSTICS]", "rollback", "check")
+    "PrepareAgentInstall" = @("prepare-install [HOST_MONITORING_MAINTENANCE_DIAGNOSTICS]", "deferred", "check")
+    "ApplyAgentInstall" = @("apply-install [HOST_MONITORING_MAINTENANCE_DIAGNOSTICS]", "deferred", "check")
+    "CommitAgentInstall" = @("commit-install [HOST_MONITORING_MAINTENANCE_DIAGNOSTICS]", "commit", "ignore")
+    "RollbackUninstallPreflight" = @("rollback-uninstall-preflight [HOST_MONITORING_MAINTENANCE_DIAGNOSTICS]", "rollback", "check")
+    "PreflightAgentUninstall" = @("preflight-uninstall [HOST_MONITORING_MAINTENANCE_DIAGNOSTICS]", "deferred", "check")
+    "RollbackPreservedState" = @("rollback-uninstall [HOST_MONITORING_MAINTENANCE_DIAGNOSTICS]", "rollback", "check")
+    "PreserveAgentState" = @("preserve-state [HOST_MONITORING_MAINTENANCE_DIAGNOSTICS]", "deferred", "check")
+    "CommitPreservedState" = @("commit-uninstall [HOST_MONITORING_MAINTENANCE_DIAGNOSTICS]", "commit", "ignore")
+    "RollbackPurgedState" = @("rollback-purge [HOST_MONITORING_MAINTENANCE_DIAGNOSTICS]", "rollback", "check")
+    "PreparePurgedState" = @("prepare-purge [HOST_MONITORING_MAINTENANCE_DIAGNOSTICS]", "deferred", "check")
+    "CommitPurgedState" = @("commit-purge [HOST_MONITORING_MAINTENANCE_DIAGNOSTICS]", "commit", "ignore")
 }
 $nativeActions = @($actions | Where-Object {
     $_.GetAttribute("BinaryRef") -eq "HostMAgentMaintenance.exe"
@@ -505,11 +505,11 @@ Assert-Equal $closeApplicationsSequence.GetAttribute("Before") "" `
     "The CloseApplications override must use exactly one relative sequence anchor."
 Assert-Equal $closeApplicationsSequence.Condition 'VersionNT > 400' `
     "The CloseApplications override must retain the WiX Util platform condition."
-Assert-Contains $packageText 'Property="UNIONC_OTHER_VERSION_FOUND"' `
+Assert-Contains $packageText 'Property="HOST_MONITORING_OTHER_VERSION_FOUND"' `
     "A fail-closed other-version detection row is required."
 foreach ($removedUpgradeMechanism in @(
     '<MajorUpgrade', 'RemoveExistingProducts', 'UPGRADINGPRODUCTCODE',
-    'WIX_UPGRADE_DETECTED', 'UNIONC_TEST_FAIL_AFTER_REMOVE'
+    'WIX_UPGRADE_DETECTED', 'HOST_MONITORING_TEST_FAIL_AFTER_REMOVE'
 )) {
     if ($packageText.Contains($removedUpgradeMechanism)) {
         throw "Removed automatic-upgrade mechanism remains in Package.wxs: $removedUpgradeMechanism"

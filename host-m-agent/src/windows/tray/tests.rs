@@ -130,7 +130,7 @@ mod tests {
     #[test]
     fn existing_preferences_can_be_atomically_replaced() {
         let directory =
-            std::env::temp_dir().join(format!("unionc-tray-preferences-{}", random_secret()));
+            std::env::temp_dir().join(format!("host-monitoring-tray-preferences-{}", random_secret()));
         let path = directory.join("tray.json");
         let first = TrayPreferences {
             application_version: CurrentPackageVersion,
@@ -222,7 +222,7 @@ mod tests {
         assert!(missing.version.is_none());
         assert_eq!(
             missing.message,
-            "Server 未返回可用的 UnionC 健康状态（格式或版本信息无效）"
+            "Server 未返回可用的 Host Monitoring 健康状态（格式或版本信息无效）"
         );
 
         let mismatched = probe_health_body(
@@ -238,10 +238,10 @@ mod tests {
     }
 
     #[test]
-    fn connection_probe_rejects_non_unionc_success_response() {
-        let invalid = probe_health_body("<html>not UnionC</html>");
+    fn connection_probe_rejects_non_host_monitoring_success_response() {
+        let invalid = probe_health_body("<html>not Host Monitoring</html>");
         assert_eq!(invalid.status, "offline");
-        assert!(invalid.message.contains("UnionC"));
+        assert!(invalid.message.contains("Host Monitoring"));
 
         let current_body = format!(
             r#"{{"status":"ok","version":"{}","uptime_seconds":1}}"#,
@@ -255,7 +255,7 @@ mod tests {
         for content_type in [
             None,
             Some("text/plain"),
-            Some("application/vnd.unionc+json"),
+            Some("application/vnd.host-monitoring+json"),
         ] {
             let wrong_type = probe_health_response("200 OK", content_type, &current_body);
             assert_eq!(wrong_type.status, "offline");

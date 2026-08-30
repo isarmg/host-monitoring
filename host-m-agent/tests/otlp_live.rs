@@ -5,7 +5,8 @@ use host_m_agent::{
 use uuid::Uuid;
 
 fn otlp_test_config(endpoint: String) -> (AgentConfig, std::path::PathBuf) {
-    let state_dir = std::env::temp_dir().join(format!("unionc-otlp-live-{}", Uuid::new_v4()));
+    let state_dir =
+        std::env::temp_dir().join(format!("host-monitoring-otlp-live-{}", Uuid::new_v4()));
     std::fs::create_dir_all(&state_dir).expect("create OTLP test state directory");
     let instance_id = Uuid::new_v4();
     let request_id = Uuid::new_v4();

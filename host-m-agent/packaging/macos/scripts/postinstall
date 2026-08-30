@@ -1339,7 +1339,7 @@ cat <<'EOF'
 host-m-agent's LaunchDaemon is started, but this new installation is not paired yet and is not
 sending authorized telemetry.
 
-Create an instance and one-time activation code in the UnionC Web console, then run this
+Create an instance and one-time activation code in the Host Monitoring Web console, then run this
 command locally. It deliberately runs as the service account so the daemon owns and can read
 the generated credential files:
 
@@ -1347,7 +1347,7 @@ the generated credential files:
     --config '/Library/Application Support/host-m-agent/config.json' \
     --server https://host-monitoring.example.com
 
-Replace the example URL with your UnionC console origin. The package does not contain a
+Replace the example URL with your Host Monitoring console origin. The package does not contain a
 deployment token, and pairing does not expose the long-lived Agent secret to the browser.
 
 After pairing, inspect local state and run the read-only doctor as the same service account:

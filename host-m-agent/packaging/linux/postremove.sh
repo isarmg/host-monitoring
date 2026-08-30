@@ -481,7 +481,7 @@ restore_rpm_config() {
 case "${1:-}" in
   purge)
     # Debian's explicit purge is the only package-manager transaction that
-    # removes local identity. It never contacts the UnionC Server.
+    # removes local identity. It never contacts the Host Monitoring Server.
     purge_local_data
     ;;
   0)
@@ -502,7 +502,7 @@ case "${1:-}" in
     fi
     cat <<'EOF'
 host-m-agent 的本地配置、凭据、spool、GPU drop-in 和包管理的专用账户已清理。
-此操作没有连接 UnionC Server；请确认已在管理台永久删除对应实例。
+此操作没有连接 Host Monitoring Server；请确认已在管理台永久删除对应实例。
 EOF
     ;;
   *)

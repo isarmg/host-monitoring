@@ -73,7 +73,7 @@ async fn flush_spool(
         let Some(pending) = spool.oldest()? else {
             return Ok(FlushOutcome::Drained);
         };
-        match reporter.send_unionc(&pending.report).await {
+        match reporter.send_host_monitoring(&pending.report).await {
             Ok(()) => {
                 // 顺序很重要：**先确认出队，再导出 OTLP**。
                 //

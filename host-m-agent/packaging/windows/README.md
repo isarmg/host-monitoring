@@ -50,7 +50,7 @@ Agent 是原生 Windows Service，处理 SCM 的 Stop 和 Shutdown 控制。安�
 - 停止本次开机中的 `host-m-agent` 服务并彻底退出托盘。
 
 连接检测采用 2 秒连接超时、4 秒总超时，拒绝重定向并限制响应为 16 KiB。它只说明当前
-桌面会话能否到达 UnionC 管理端；管理台中的主机 online/offline 仍以最近一次通过凭据验证的
+桌面会话能否到达 Host Monitoring 管理端；管理台中的主机 online/offline 仍以最近一次通过凭据验证的
 遥测上报为准。
 
 配对和服务启停属于机器级操作，只有在用户明确选择后才由 Windows UAC 启动
@@ -129,7 +129,7 @@ msiexec.exe /x host-m-agent-0.7.0-x64.msi /qn /norestart /l*v "%TEMP%\host-m-age
 普通卸载会递归移除可由管理员重建的 service SID ACE，只留下 SYSTEM、Administrators 和
 OWNER RIGHTS 安全边界。同一 0.7.0 包重装时通过版本绑定 marker 复用身份；其他版本不能接管。
 
-永久退役必须先在 UnionC Web 管理台永久删除实例，再显式传入唯一允许的 `PURGE=1`：
+永久退役必须先在 Host Monitoring Web 管理台永久删除实例，再显式传入唯一允许的 `PURGE=1`：
 
 ```cmd
 msiexec.exe /x host-m-agent-0.7.0-x64.msi PURGE=1 /qn /norestart /l*v "%TEMP%\host-m-agent-purge.log"

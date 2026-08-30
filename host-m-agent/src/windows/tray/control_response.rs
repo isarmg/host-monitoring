@@ -59,7 +59,7 @@ fn require_control_marker(request: &LocalHttpRequest) -> anyhow::Result<()> {
     ensure!(
         request
             .headers
-            .get("x-unionc-tray")
+            .get("x-host-monitoring-tray")
             .is_some_and(|value| value == "1"),
         "missing local-control request marker"
     );

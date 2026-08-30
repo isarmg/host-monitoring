@@ -1,4 +1,4 @@
-//! UnionC 的跨平台只读遥测 Agent。
+//! Host Monitoring 的跨平台只读遥测 Agent。
 //!
 //! Agent 不监听端口、不执行服务端命令，也不包含自更新器。所有平台差异都通过
 //! capability 明确表达；缺失数据使用 `None`，不会用 0 冒充。

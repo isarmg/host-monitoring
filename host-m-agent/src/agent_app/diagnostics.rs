@@ -353,7 +353,9 @@ pub(super) fn print_local_status(config: &AgentConfig) -> anyhow::Result<()> {
     };
     let next_action = match overall_state {
         "degraded" => "repair the failed local check, then run `host-m-agent doctor`",
-        "reauth_required" => "create a new pairing invitation in UnionC and pair this host again",
+        "reauth_required" => {
+            "create a new pairing invitation in Host Monitoring and pair this host again"
+        }
         "pairing" => "complete or resume the saved browser pairing request",
         "unconfigured" => "run `host-m-agent pair --server https://your-console`",
         _ => "run `host-m-agent doctor --delivery` for an explicit end-to-end delivery test",
@@ -581,8 +583,10 @@ mod tests {
 
     #[test]
     fn host_inspection_rejects_noncanonical_uuid_text() {
-        let directory =
-            std::env::temp_dir().join(format!("unionc-diagnostic-host-{}", Uuid::new_v4()));
+        let directory = std::env::temp_dir().join(format!(
+            "host-monitoring-diagnostic-host-{}",
+            Uuid::new_v4()
+        ));
         fs::create_dir_all(&directory).unwrap();
         fs::write(
             directory.join("host-id"),

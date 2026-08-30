@@ -378,7 +378,7 @@ fn request_stop_service_and_exit(window: HWND) -> anyhow::Result<()> {
         );
         let window_raw = window.0 as isize;
         thread::Builder::new()
-            .name("unionc-stop-and-exit".into())
+            .name("host-monitoring-stop-and-exit".into())
             .spawn(move || {
                 let result = wait_for_elevated_service_stop(process);
                 match result {

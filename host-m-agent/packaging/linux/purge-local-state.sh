@@ -44,7 +44,7 @@ Usage: sudo host-m-agent-purge --yes
 
 Permanently removes this machine's local host-m-agent config, credential,
 pairing state, spool, systemd drop-ins, and package-managed service account.
-It does NOT contact the UnionC Server or revoke the server-side instance.
+It does NOT contact the Host Monitoring Server or revoke the server-side instance.
 EOF
 }
 
@@ -425,6 +425,6 @@ fi
 
 cat <<'EOF'
 host-m-agent local state was permanently removed.
-No request was sent to the UnionC Server. Revoke the instance in the Web console
+No request was sent to the Host Monitoring Server. Revoke the instance in the Web console
 before decommissioning this host.
 EOF

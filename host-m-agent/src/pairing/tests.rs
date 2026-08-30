@@ -89,7 +89,7 @@ mod tests {
     #[tokio::test]
     async fn transient_plaintext_override_cannot_resume_durable_pairing_stages() {
         let directory = std::env::temp_dir().join(format!(
-            "unionc-pairing-durable-http-policy-{}",
+            "host-monitoring-pairing-durable-http-policy-{}",
             Uuid::new_v4()
         ));
         fs::create_dir_all(&directory).unwrap();
@@ -245,7 +245,7 @@ mod tests {
     #[tokio::test]
     async fn create_rejects_cross_origin_activation_url_before_showing_or_persisting_it() {
         let directory = std::env::temp_dir().join(format!(
-            "unionc-pairing-untrusted-activation-{}",
+            "host-monitoring-pairing-untrusted-activation-{}",
             Uuid::new_v4()
         ));
         fs::create_dir_all(&directory).unwrap();
@@ -543,7 +543,7 @@ mod tests {
         assert!(
             parse_pairing_json::<CreatePairingResponse>(
                 &valid_json,
-                "application/vnd.unionc+json",
+                "application/vnd.host-monitoring+json",
                 endpoint,
                 "pairing response"
             )
@@ -685,7 +685,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn service_activation_commit_wins_the_post_response_race_idempotently() {
         let directory =
-            std::env::temp_dir().join(format!("unionc-activation-race-{}", Uuid::new_v4()));
+            std::env::temp_dir().join(format!("host-monitoring-activation-race-{}", Uuid::new_v4()));
         fs::create_dir_all(&directory).unwrap();
         let instance_id = Uuid::new_v4();
         let (server, request_seen, release_response, server_thread) =
@@ -752,7 +752,7 @@ mod tests {
 
     #[test]
     fn pending_state_round_trips_privately() {
-        let directory = std::env::temp_dir().join(format!("unionc-pairing-{}", Uuid::new_v4()));
+        let directory = std::env::temp_dir().join(format!("host-monitoring-pairing-{}", Uuid::new_v4()));
         let config = test_config(directory.clone());
         let state = StoredPairingState::Pending {
             version: PAIRING_STATE_VERSION,
@@ -788,7 +788,7 @@ mod tests {
 
     #[test]
     fn creating_state_round_trips_the_same_secrets_for_idempotent_retry() {
-        let directory = std::env::temp_dir().join(format!("unionc-creating-{}", Uuid::new_v4()));
+        let directory = std::env::temp_dir().join(format!("host-monitoring-creating-{}", Uuid::new_v4()));
         let config = test_config(directory.clone());
         let bearer_secret = random_secret();
         let polling_secret = random_secret();
@@ -827,7 +827,7 @@ mod tests {
     #[tokio::test]
     async fn live_pending_request_cannot_be_silently_moved_to_another_server() {
         let directory =
-            std::env::temp_dir().join(format!("unionc-pending-origin-{}", Uuid::new_v4()));
+            std::env::temp_dir().join(format!("host-monitoring-pending-origin-{}", Uuid::new_v4()));
         let mut config = test_config(directory.clone());
         fs::create_dir_all(&directory).unwrap();
         let config_path = directory.join("config.json");
@@ -854,7 +854,7 @@ mod tests {
         let error = start_or_resume(&config, &test_host())
             .await
             .expect_err("a live request must stay bound to its original server");
-        assert!(error.to_string().contains("different UnionC server"));
+        assert!(error.to_string().contains("different Host Monitoring server"));
         assert!(matches!(
             load_state(&config).unwrap(),
             Some(StoredPairingState::Pending { pairing_endpoint, .. })
@@ -871,7 +871,7 @@ mod tests {
     #[tokio::test]
     async fn interrupted_create_cannot_be_silently_moved_to_another_server() {
         let directory =
-            std::env::temp_dir().join(format!("unionc-creating-origin-{}", Uuid::new_v4()));
+            std::env::temp_dir().join(format!("host-monitoring-creating-origin-{}", Uuid::new_v4()));
         let mut config = test_config(directory.clone());
         let state = StoredPairingState::Creating {
             version: PAIRING_STATE_VERSION,
@@ -889,7 +889,7 @@ mod tests {
         let error = start_or_resume(&config, &test_host())
             .await
             .expect_err("an interrupted create must stay bound to its original server");
-        assert!(error.to_string().contains("different UnionC server"));
+        assert!(error.to_string().contains("different Host Monitoring server"));
         assert!(matches!(
             load_state(&config).unwrap(),
             Some(StoredPairingState::Creating { pairing_endpoint, .. })
@@ -902,7 +902,7 @@ mod tests {
     fn explicit_replacement_rotates_same_origin_incomplete_state() {
         for phase in ["creating", "expired_pending"] {
             let directory = std::env::temp_dir().join(format!(
-                "unionc-same-origin-replace-{phase}-{}",
+                "host-monitoring-same-origin-replace-{phase}-{}",
                 Uuid::new_v4()
             ));
             let mut config = test_config(directory.clone());
@@ -992,7 +992,7 @@ mod tests {
     async fn confirmed_tray_replacement_can_replace_mismatched_incomplete_states() {
         for old_state in ["creating", "pending"] {
             let directory = std::env::temp_dir().join(format!(
-                "unionc-confirmed-replace-{old_state}-{}",
+                "host-monitoring-confirmed-replace-{old_state}-{}",
                 Uuid::new_v4()
             ));
             let (server, server_thread) = one_shot_pairing_server();
@@ -1053,7 +1053,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn delayed_old_activation_cannot_overwrite_a_replacement_generation() {
         let directory =
-            std::env::temp_dir().join(format!("unionc-delayed-active-{}", Uuid::new_v4()));
+            std::env::temp_dir().join(format!("host-monitoring-delayed-active-{}", Uuid::new_v4()));
         fs::create_dir_all(&directory).unwrap();
         let old_instance_id = Uuid::new_v4();
         let (old_server, request_seen, release_response, old_thread) =
@@ -1142,7 +1142,7 @@ mod tests {
     async fn activating_journal_recovers_all_endpoint_bound_files() {
         for preexisting in [false, true] {
             let directory = std::env::temp_dir().join(format!(
-                "unionc-activating-recovery-{preexisting}-{}",
+                "host-monitoring-activating-recovery-{preexisting}-{}",
                 Uuid::new_v4()
             ));
             fs::create_dir_all(&directory).unwrap();
@@ -1262,7 +1262,7 @@ mod tests {
     #[test]
     fn active_state_without_binding_is_rejected() {
         let directory =
-            std::env::temp_dir().join(format!("unionc-binding-migration-{}", Uuid::new_v4()));
+            std::env::temp_dir().join(format!("host-monitoring-binding-migration-{}", Uuid::new_v4()));
         let config = test_config(directory.clone());
         fs::create_dir_all(&directory).unwrap();
         let generation = Uuid::new_v4();
@@ -1307,7 +1307,7 @@ mod tests {
     #[test]
     fn mismatched_active_binding_is_never_silently_replaced() {
         let directory =
-            std::env::temp_dir().join(format!("unionc-binding-mismatch-{}", Uuid::new_v4()));
+            std::env::temp_dir().join(format!("host-monitoring-binding-mismatch-{}", Uuid::new_v4()));
         let mut config = test_config(directory.clone());
         fs::create_dir_all(&directory).unwrap();
         let generation = Uuid::new_v4();
@@ -1371,7 +1371,7 @@ mod tests {
     #[test]
     fn replacing_current_active_state_preserves_its_endpoint_binding() {
         let directory =
-            std::env::temp_dir().join(format!("unionc-binding-before-create-{}", Uuid::new_v4()));
+            std::env::temp_dir().join(format!("host-monitoring-binding-before-create-{}", Uuid::new_v4()));
         let mut config = test_config(directory.clone());
         let old_generation = Uuid::new_v4();
         let old_request_id = Uuid::new_v4();
@@ -1430,7 +1430,7 @@ mod tests {
     #[test]
     fn run_keeps_the_current_credential_during_an_incomplete_pairing_attempt() {
         let directory =
-            std::env::temp_dir().join(format!("unionc-current-reporter-{}", Uuid::new_v4()));
+            std::env::temp_dir().join(format!("host-monitoring-current-reporter-{}", Uuid::new_v4()));
         let config = test_config(directory.clone());
         fs::create_dir_all(&directory).unwrap();
         fs::write(directory.join("agent-token"), "current-long-lived-token").unwrap();
@@ -1561,7 +1561,7 @@ mod tests {
 
     #[test]
     fn stale_delivery_cannot_block_a_new_active_generation() {
-        let directory = std::env::temp_dir().join(format!("unionc-reauth-cas-{}", Uuid::new_v4()));
+        let directory = std::env::temp_dir().join(format!("host-monitoring-reauth-cas-{}", Uuid::new_v4()));
         let config = test_config(directory.clone());
         let old_generation = Uuid::new_v4();
         let old_request = Uuid::new_v4();
@@ -1648,7 +1648,7 @@ mod tests {
 
     #[test]
     fn rejected_authorization_state_is_explicit() {
-        let directory = std::env::temp_dir().join(format!("unionc-rejected-{}", Uuid::new_v4()));
+        let directory = std::env::temp_dir().join(format!("host-monitoring-rejected-{}", Uuid::new_v4()));
         let config = test_config(directory.clone());
         mark_reauth_required(&config, "HTTP 401 unauthorized").unwrap();
         let state = local_auth_state(&config).unwrap().unwrap();
@@ -1660,7 +1660,7 @@ mod tests {
     #[test]
     fn local_inspection_does_not_create_a_lock_or_state_directory() {
         let directory =
-            std::env::temp_dir().join(format!("unionc-read-only-status-{}", Uuid::new_v4()));
+            std::env::temp_dir().join(format!("host-monitoring-read-only-status-{}", Uuid::new_v4()));
         let config = test_config(directory.clone());
 
         assert!(local_progress(&config).unwrap().is_none());
@@ -1674,7 +1674,7 @@ mod tests {
     #[test]
     fn local_inspection_does_not_publish_an_activating_credential() {
         let directory =
-            std::env::temp_dir().join(format!("unionc-read-only-activating-{}", Uuid::new_v4()));
+            std::env::temp_dir().join(format!("host-monitoring-read-only-activating-{}", Uuid::new_v4()));
         let config = test_config(directory.clone());
         let state = StoredPairingState::Activating {
             version: PAIRING_STATE_VERSION,
@@ -1707,7 +1707,7 @@ mod tests {
 
     #[test]
     fn activation_atomically_commits_server_identity_and_token() {
-        let directory = std::env::temp_dir().join(format!("unionc-activation-{}", Uuid::new_v4()));
+        let directory = std::env::temp_dir().join(format!("host-monitoring-activation-{}", Uuid::new_v4()));
         let config = test_config(directory.clone());
         fs::create_dir_all(&directory).unwrap();
         fs::write(directory.join("host-id"), Uuid::new_v4().to_string()).unwrap();

@@ -1,9 +1,9 @@
 use super::*;
 
 #[cfg(unix)]
-const SIGTERM_READY_MARKER: &str = "unionc-sigterm-listener-ready";
+const SIGTERM_READY_MARKER: &str = "host-monitoring-sigterm-listener-ready";
 #[cfg(unix)]
-const SIGTERM_HELPER_ENV: &str = "UNIONC_SIGTERM_TEST_HELPER";
+const SIGTERM_HELPER_ENV: &str = "HOST_MONITORING_SIGTERM_TEST_HELPER";
 
 #[tokio::test]
 async fn tray_pairing_cancel_wakes_without_terminating_the_process() {
@@ -139,7 +139,8 @@ fn process_sigterm_survives_an_unobserved_window() {
 
 #[test]
 fn pairing_activation_loads_the_server_assigned_identity() {
-    let directory = std::env::temp_dir().join(format!("unionc-active-host-{}", Uuid::new_v4()));
+    let directory =
+        std::env::temp_dir().join(format!("host-monitoring-active-host-{}", Uuid::new_v4()));
     fs::create_dir_all(&directory).unwrap();
     let instance_id = Uuid::new_v4();
     fs::write(directory.join("host-id"), instance_id.to_string()).unwrap();

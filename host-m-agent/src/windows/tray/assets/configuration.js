@@ -5,8 +5,8 @@ const connection=document.getElementById('connection');
 const service=document.getElementById('service');
 const serverInput=document.getElementById('server');
 const actionButtons=[...document.querySelectorAll('button[data-service],#pair-submit')];
-const headers=token=>({Authorization:'Bearer '+token,'Content-Type':'application/json','X-UnionC-Tray':'1'});
-let bearer=sessionStorage.getItem('unioncTrayBearer')||'';
+const headers=token=>({Authorization:'Bearer '+token,'Content-Type':'application/json','X-Host-Monitoring-Tray':'1'});
+let bearer=sessionStorage.getItem('hostMonitoringTrayBearer')||'';
 let operationPending=false;
 let serviceCode='unknown';
 let initialized=false;
@@ -37,7 +37,7 @@ async function api(path,body){
   const response=await fetch(path,{method:'POST',headers:headers(bearer),body:JSON.stringify(body)});
   const result=await response.json().catch(()=>({code:'invalid_response',message:'本地控制服务返回了无法解析的响应'}));
   if(!response.ok){
-if(response.status===401){sessionStorage.removeItem('unioncTrayBearer')}
+if(response.status===401){sessionStorage.removeItem('hostMonitoringTrayBearer')}
 const error=new Error(result.message||('HTTP '+response.status));
 error.code=result.code||'request_failed';
 throw error;
@@ -59,13 +59,13 @@ const response=await fetch('/session',{method:'POST',headers:headers(bootstrap),
 const result=await response.json().catch(()=>({message:'本地会话交换失败'}));
 if(!response.ok)throw new Error(result.message||('HTTP '+response.status));
 bearer=result.bearer;
-sessionStorage.setItem('unioncTrayBearer',bearer);
+sessionStorage.setItem('hostMonitoringTrayBearer',bearer);
   }
   if(!/^[0-9a-f]{64}$/.test(bearer))throw new Error('请从托盘菜单重新打开配置');
   await refreshState(true);
   app.setAttribute('aria-busy','false');
 }catch(error){
-  sessionStorage.removeItem('unioncTrayBearer');
+  sessionStorage.removeItem('hostMonitoringTrayBearer');
   setResult('无法建立本地安全会话：'+error.message,'error');
   app.setAttribute('aria-busy','false');
   actionButtons.forEach(button=>{button.disabled=true});
