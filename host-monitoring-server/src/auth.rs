@@ -11,6 +11,7 @@ pub const CSRF_HEADER: &str = "x-csrf-token";
 const PRODUCTION_SESSION_COOKIE: &str = "__Host-host_session";
 const DEVELOPMENT_SESSION_COOKIE: &str = "host_session";
 const MAX_CSRF_TOKENS_PER_SESSION: i64 = 8;
+const SESSION_TOUCH_INTERVAL: chrono::Duration = chrono::Duration::seconds(60);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CookieMode {
@@ -197,6 +198,8 @@ struct SessionRow {
     session_id: Uuid,
     user_id: String,
     email: String,
+    last_seen_at: DateTime<Utc>,
+    idle_expires_at: DateTime<Utc>,
     absolute_expires_at: DateTime<Utc>,
 }
 
@@ -212,7 +215,8 @@ pub async fn require_console(
         .ok_or(Error::Unauthorized)?;
     let now = Utc::now();
     let row = sqlx::query_as::<_, SessionRow>(
-        r#"SELECT s.session_id,s.user_id,u.email,s.absolute_expires_at
+        r#"SELECT s.session_id,s.user_id,u.email,s.last_seen_at,s.idle_expires_at,
+                  s.absolute_expires_at
            FROM auth_sessions s
            JOIN auth_users u ON u.user_id=s.user_id
            WHERE s.token_hash=? AND s.revoked_at IS NULL
@@ -257,6 +261,15 @@ pub async fn require_console(
     } else {
         None
     };
+
+    let touch_interval = std::cmp::min(SESSION_TOUCH_INTERVAL, state.auth.idle_ttl / 2);
+    if now - row.last_seen_at < touch_interval && row.idle_expires_at - now > touch_interval {
+        return Ok(Principal {
+            subject: row.user_id,
+            email: row.email,
+            session_id: row.session_id,
+        });
+    }
 
     let idle_expires_at = std::cmp::min(now + state.auth.idle_ttl, row.absolute_expires_at);
     let updated = sqlx::query(

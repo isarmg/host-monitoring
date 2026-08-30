@@ -175,12 +175,14 @@ pub async fn create_invite(
 }
 
 pub async fn list_invites(pool: &SqlitePool) -> anyhow::Result<Vec<AgentInstanceSummary>> {
+    let now = Utc::now();
     let rows = sqlx::query(
         r#"SELECT invite_id,instance_id,display_name,expires_at,created_at,
-                  CASE WHEN status='pending' AND expires_at <= datetime('now') THEN 'expired' ELSE status END AS status
+                  CASE WHEN status='pending' AND expires_at <= ? THEN 'expired' ELSE status END AS status
            FROM agent_instance_invites
            ORDER BY created_at DESC LIMIT 200"#,
     )
+    .bind(now)
     .fetch_all(pool)
     .await?;
     rows.iter().map(agent_instance).collect()
@@ -212,8 +214,13 @@ pub async fn cancel_invite(
         return Ok(CancelInviteResult::NotPending);
     }
     let instance_id: Uuid = row.try_get("instance_id")?;
-    sqlx::query("UPDATE agent_instance_invites SET status='cancelled',cancelled_at=datetime('now') WHERE invite_id=?")
-        .bind(invite_id).execute(&mut *tx).await?;
+    sqlx::query(
+        "UPDATE agent_instance_invites SET status='cancelled',cancelled_at=? WHERE invite_id=?",
+    )
+    .bind(Utc::now())
+    .bind(invite_id)
+    .execute(&mut *tx)
+    .await?;
     audit(
         &mut tx,
         "monitoring.agent_instance.invite.cancel",
@@ -285,15 +292,24 @@ pub async fn create_pairing(
             created: false,
         });
     }
+    let now = Utc::now();
+    let denied_cutoff = now - chrono::Duration::days(30);
     sqlx::query(
         "DELETE FROM agent_pairing_requests WHERE request_id IN (\
            SELECT request_id FROM agent_pairing_requests \
-           WHERE (status='pending' AND expires_at <= datetime('now')) OR (status='denied' AND created_at < datetime('now','-30 days')) \
+           WHERE (status='pending' AND expires_at <= ?) OR (status='denied' AND created_at < ?) \
            ORDER BY created_at LIMIT 512)",
-    ).execute(&mut *tx).await?;
+    )
+    .bind(now)
+    .bind(denied_cutoff)
+    .execute(&mut *tx)
+    .await?;
     let pending: i64 = sqlx::query_scalar(
-        "SELECT count(*) FROM agent_pairing_requests WHERE status='pending' AND expires_at>datetime('now')",
-    ).fetch_one(&mut *tx).await?;
+        "SELECT count(*) FROM agent_pairing_requests WHERE status='pending' AND expires_at>?",
+    )
+    .bind(now)
+    .fetch_one(&mut *tx)
+    .await?;
     if pending >= MAX_PENDING {
         tx.commit().await?;
         return Ok(CreatePairingResult::AtCapacity);
@@ -301,9 +317,10 @@ pub async fn create_pairing(
     let requested_host_id = Uuid::parse_str(&request.host.id)?;
     let pending_for_device: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM agent_pairing_requests \
-         WHERE requested_host_id=? AND status='pending' AND expires_at>datetime('now')",
+         WHERE requested_host_id=? AND status='pending' AND expires_at>?",
     )
     .bind(requested_host_id)
+    .bind(now)
     .fetch_one(&mut *tx)
     .await?;
     if pending_for_device >= 4 {
@@ -349,9 +366,9 @@ pub async fn pairing_public(
     request_id: Uuid,
 ) -> anyhow::Result<Option<AgentPairingPublicSummary>> {
     let row = sqlx::query(
-        "SELECT request_id,os,arch,agent_version,expires_at,CASE WHEN status='pending' AND expires_at<=datetime('now') THEN 'expired' ELSE CASE WHEN status='pending' THEN 'waiting' ELSE status END END AS status \
+        "SELECT request_id,os,arch,agent_version,expires_at,CASE WHEN status='pending' AND expires_at<=? THEN 'expired' ELSE CASE WHEN status='pending' THEN 'waiting' ELSE status END END AS status \
          FROM agent_pairing_requests WHERE request_id=?",
-    ).bind(request_id).fetch_optional(pool).await?;
+    ).bind(Utc::now()).bind(request_id).fetch_optional(pool).await?;
     row.map(|row| {
         Ok(AgentPairingPublicSummary {
             request_id: row.try_get::<Uuid, _>("request_id")?.to_string(),
@@ -371,9 +388,9 @@ pub async fn pairing_status(
     secret_hash: &str,
 ) -> anyhow::Result<Option<(PairingStatus, Option<String>)>> {
     let row = sqlx::query(
-        "SELECT instance_id,CASE WHEN status='pending' AND expires_at<=datetime('now') THEN 'expired' WHEN status='pending' THEN 'waiting' ELSE status END AS status \
+        "SELECT instance_id,CASE WHEN status='pending' AND expires_at<=? THEN 'expired' WHEN status='pending' THEN 'waiting' ELSE status END AS status \
          FROM agent_pairing_requests WHERE request_id=? AND polling_secret_hash=?",
-    ).bind(request_id).bind(secret_hash).fetch_optional(pool).await?;
+    ).bind(Utc::now()).bind(request_id).bind(secret_hash).fetch_optional(pool).await?;
     row.map(|row| {
         let raw: String = row.try_get("status")?;
         let status = PairingStatus::try_from(raw.as_str())
