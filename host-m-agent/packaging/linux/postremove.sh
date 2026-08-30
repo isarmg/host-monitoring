@@ -7,12 +7,8 @@ export PATH
 service_name=host-m-agent.service
 package_version=0.7.0
 account_state_dir=/var/lib/host-m-agent-package
-config_dir=/etc/host-m-agent
-config_path="$config_dir/config.json"
-rpm_config_backup="$account_state_dir/config.json.remove-backup"
 managed_user_marker="$account_state_dir/managed-user"
 managed_group_marker="$account_state_dir/managed-group"
-restore_temporary=
 purge_incomplete=0
 recorded_user_uid=
 recorded_user_primary_gid=
@@ -39,38 +35,6 @@ marker_is_trusted() {
   [ -f "$marker_path" ] &&
     [ ! -L "$marker_path" ] &&
     trusted_path_has_metadata "$marker_path" 0:0:600
-}
-
-require_current_config() {
-  current_config_path=$1
-  config_version_marker=$(
-    awk -v expected="$package_version" '
-      {
-        remaining = $0
-        while (match(remaining, /"application_version"[[:space:]]*:/)) {
-          seen += 1
-          remaining = substr(remaining, RSTART + RLENGTH)
-          if (match(remaining, /^[[:space:]]*"[^"]*"/)) {
-            value = substr(remaining, RSTART, RLENGTH)
-            sub(/^[[:space:]]*"/, "", value)
-            sub(/"$/, "", value)
-            if (value == expected) valid += 1
-          }
-        }
-      }
-      END { printf "%d:%d", seen, valid }
-    ' "$current_config_path"
-  ) || return 1
-  [ "$config_version_marker" = 1:1 ]
-}
-
-cleanup_restore_temporary() {
-  cleanup_status=$?
-  trap - EXIT
-  if [ -n "$restore_temporary" ]; then
-    rm -f -- "$restore_temporary" || true
-  fi
-  exit "$cleanup_status"
 }
 
 systemd_daemon_reload() {
@@ -301,8 +265,6 @@ purge_local_data() {
   rm -rf -- /etc/systemd/system/host-m-agent.service.d
 
   if [ "$account_bookkeeping_trusted" -eq 1 ]; then
-    rm -f -- "$rpm_config_backup"
-
     if [ -e "$managed_user_marker" ] || [ -L "$managed_user_marker" ]; then
       if ! load_user_marker; then
         echo "host-m-agent postremove: invalid managed-user marker; preserving the account" >&2
@@ -405,89 +367,11 @@ purge_local_data() {
   fi
 }
 
-restore_rpm_config() {
-  if [ ! -e "$account_state_dir" ] && [ ! -L "$account_state_dir" ]; then
-    return 0
-  fi
-  account_state_is_trusted || {
-    echo "host-m-agent postremove: refusing RPM config restore from an unsafe bookkeeping directory" >&2
-    return 1
-  }
-  if [ ! -e "$rpm_config_backup" ] && [ ! -L "$rpm_config_backup" ]; then
-    return 0
-  fi
-
-  marker_is_trusted "$managed_user_marker" && load_user_marker || {
-    echo "host-m-agent postremove: refusing RPM config restore without a trusted managed-user marker" >&2
-    return 1
-  }
-  marker_is_trusted "$managed_group_marker" && load_group_marker || {
-    echo "host-m-agent postremove: refusing RPM config restore without a trusted managed-group marker" >&2
-    return 1
-  }
-  lookup_user_entry && lookup_group_entry && managed_user_is_still_expected || {
-    echo "host-m-agent postremove: refusing RPM config restore for a changed service account identity" >&2
-    return 1
-  }
-  [ -f "$rpm_config_backup" ] && [ ! -L "$rpm_config_backup" ] &&
-    trusted_path_has_metadata "$rpm_config_backup" 0:0:600 &&
-    require_current_config "$rpm_config_backup" || {
-      echo "host-m-agent postremove: refusing an unsafe or invalid RPM config backup" >&2
-      return 1
-    }
-
-  if [ -e "$config_dir" ] || [ -L "$config_dir" ]; then
-    [ -d "$config_dir" ] && [ ! -L "$config_dir" ] &&
-      trusted_path_has_metadata "$config_dir" "0:$recorded_group_gid:750" || {
-        echo "host-m-agent postremove: refusing to restore into an unsafe config directory" >&2
-        return 1
-      }
-  else
-    install -d -m 0750 -o root -g "$recorded_group_gid" "$config_dir"
-  fi
-  [ -d "$config_dir" ] && [ ! -L "$config_dir" ] &&
-    trusted_path_has_metadata "$config_dir" "0:$recorded_group_gid:750" || {
-      echo "host-m-agent postremove: config directory did not become safe" >&2
-      return 1
-    }
-
-  if [ -e "$config_path" ] || [ -L "$config_path" ]; then
-    [ -f "$config_path" ] && [ ! -L "$config_path" ] &&
-      trusted_path_has_metadata "$config_path" "0:$recorded_group_gid:640" &&
-      require_current_config "$config_path" || {
-        echo "host-m-agent postremove: refusing to replace an unsafe or invalid config file" >&2
-        return 1
-      }
-  fi
-
-  restore_temporary="$config_dir/.config.json.restore.$$"
-  trap cleanup_restore_temporary EXIT
-  rm -f -- "$restore_temporary"
-  umask 077
-  cp -p -- "$rpm_config_backup" "$restore_temporary"
-  chown "root:$recorded_group_gid" "$restore_temporary"
-  chmod 0640 "$restore_temporary"
-  [ -f "$restore_temporary" ] && [ ! -L "$restore_temporary" ] &&
-    trusted_path_has_metadata "$restore_temporary" "0:$recorded_group_gid:640" &&
-    require_current_config "$restore_temporary" || {
-      echo "host-m-agent postremove: restored config temporary failed validation" >&2
-      return 1
-    }
-  mv -f -- "$restore_temporary" "$config_path"
-  restore_temporary=
-  rm -f -- "$rpm_config_backup"
-}
-
 case "${1:-}" in
   purge)
     # Debian's explicit purge is the only package-manager transaction that
     # removes local identity. It never contacts the Host Monitoring Server.
     purge_local_data
-    ;;
-  0)
-    # RPM final erase may remove an unchanged noreplace config. Restore only
-    # for that numeric ABI; Debian conffiles and RPM replacement do not use it.
-    restore_rpm_config
     ;;
   *) : ;;
 esac
@@ -507,8 +391,8 @@ EOF
     ;;
   *)
     cat <<EOF
-host-m-agent 程序和系统服务已移除；本地配置、实例凭据、spool 与专用账户均已保留。
-重新安装同一 $package_version 包后可继续使用原实例。跨版本安装前必须先永久删除旧实例、purge，再创建新实例并配对。
+host-m-agent 程序和系统服务已移除；实例凭据、spool 与专用账户仍在本地。
+配置文件只遵循包管理器的 config/noreplace 语义；产品不会备份或恢复它。完整备份、恢复和跨版本升级请使用独立升级仓库。
 EOF
     ;;
 esac

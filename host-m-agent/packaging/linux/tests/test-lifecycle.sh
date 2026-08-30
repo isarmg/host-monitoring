@@ -74,6 +74,14 @@ do
   rewrite_for_test_root "$source_script" "$test_root/$(basename "$source_script")"
 done
 
+if grep -E -i 'backup|restore|migrat|legacy|compat' \
+  "$packaging_dir/postinstall.sh" \
+  "$packaging_dir/preremove.sh" \
+  "$packaging_dir/postremove.sh" \
+  "$packaging_dir/purge-local-state.sh"; then
+  fail 'product lifecycle scripts contain an upgrade or recovery mechanism'
+fi
+
 grep -Fx 'Type=notify' "$packaging_dir/host-m-agent.service" >/dev/null ||
   fail 'systemd unit does not wait for Agent readiness'
 grep -Fx 'NotifyAccess=main' "$packaging_dir/host-m-agent.service" >/dev/null ||
@@ -212,36 +220,6 @@ EOF
 
 cat >"$test_root/bin/chown" <<'EOF'
 #!/bin/sh
-owner=${1:-}
-destination=
-for argument in "$@"; do
-  destination=$argument
-done
-case "$owner:$destination" in
-  "root:root:$test_root/var/lib/host-m-agent-package/config.json.remove-backup")
-    : >"$test_root/backup.root-owned"
-    ;;
-  "root:root:$test_root/var/lib/host-m-agent-package/.config.json.remove-backup."*)
-    : >"$test_root/backup.root-owned"
-    : >"$test_root/backup-temporary.root-owned"
-    ;;
-esac
-case "$destination" in
-  "$test_root/etc/host-m-agent/.config.json.restore."*)
-    case "$owner" in
-      root:*)
-        restore_group=${owner#root:}
-        case "$restore_group" in
-          ''|*[!0-9]*) ;;
-          *)
-            restore_metadata_key=${destination##*/}
-            printf '%s\n' "$restore_group" >"$test_root/$restore_metadata_key.gid"
-            ;;
-        esac
-        ;;
-    esac
-    ;;
-esac
 exit 0
 EOF
 
@@ -270,35 +248,8 @@ case "$destination" in
       exit 74
     fi
     ;;
-  "$test_root/var/lib/host-m-agent-package/config.json.remove-backup")
-    [ "${FAIL_BACKUP_MOVE:-0}" -ne 1 ] || exit 75
-    ;;
-  "$test_root/etc/host-m-agent/config.json")
-    case "$source_path" in
-      "$test_root/etc/host-m-agent/.config.json.restore."*)
-        [ "${FAIL_RESTORE_MOVE:-0}" -ne 1 ] || exit 76
-        ;;
-    esac
-    ;;
 esac
 exec /usr/bin/mv "$@"
-EOF
-
-cat >"$test_root/bin/cp" <<'EOF'
-#!/bin/sh
-destination=
-for argument in "$@"; do
-  destination=$argument
-done
-case "$destination" in
-  "$test_root/var/lib/host-m-agent-package/.config.json.remove-backup."*)
-    [ "${FAIL_BACKUP_COPY:-0}" -ne 1 ] || exit 77
-    ;;
-  "$test_root/etc/host-m-agent/.config.json.restore."*)
-    [ "${FAIL_RESTORE_COPY:-0}" -ne 1 ] || exit 78
-    ;;
-esac
-exec /usr/bin/cp "$@"
 EOF
 
 cat >"$test_root/bin/stat" <<'EOF'
@@ -337,37 +288,11 @@ case "$path" in
       metadata=${STAT_CONFIG_DIR:-0:0:755}
     fi
     ;;
-  "$test_root/var/lib/host-m-agent-package/.config.json.remove-backup."*)
-    if [ -f "$test_root/backup-temporary.root-owned" ]; then
-      backup_mode=$(/usr/bin/stat -c %a -- "$path")
-      metadata=${STAT_CONFIG_BACKUP_TEMPORARY:-0:0:$backup_mode}
-    else
-      metadata=${STAT_CONFIG_BACKUP_TEMPORARY:-1000:1000:640}
-    fi
-    ;;
   "$test_root/etc/host-m-agent/config.json")
     if [ -f "$test_root/var/lib/host-m-agent-package/managed-group" ]; then
       metadata=${STAT_CONFIG_FILE:-0:${AGENT_GID:-998}:640}
     else
       metadata=${STAT_CONFIG_FILE:-0:0:600}
-    fi
-    ;;
-  "$test_root/etc/host-m-agent/.config.json.restore."*)
-    restore_mode=$(/usr/bin/stat -c %a -- "$path")
-    restore_metadata_key=${path##*/}
-    if [ -f "$test_root/$restore_metadata_key.gid" ]; then
-      IFS= read -r restore_group <"$test_root/$restore_metadata_key.gid"
-      metadata=${STAT_CONFIG_RESTORE:-0:$restore_group:$restore_mode}
-    else
-      metadata=${STAT_CONFIG_RESTORE:-1000:1000:$restore_mode}
-    fi
-    ;;
-  "$test_root/var/lib/host-m-agent-package/config.json.remove-backup")
-    if [ -f "$test_root/backup.root-owned" ]; then
-      backup_mode=$(/usr/bin/stat -c %a -- "$path")
-      metadata=${STAT_CONFIG_BACKUP:-0:0:$backup_mode}
-    else
-      metadata=${STAT_CONFIG_BACKUP:-1000:1000:640}
     fi
     ;;
   *)
@@ -436,7 +361,6 @@ reset_safe_reinstall_state() {
   rm -f -- \
     "$test_root/user.created" "$test_root/group.created" \
     "$test_root/user.deleted" "$test_root/group.deleted" \
-    "$test_root/backup.root-owned" "$test_root/backup-temporary.root-owned" \
     "$test_root/current-user-uid" \
     "$test_root/current-group-gid"
   write_account_markers
@@ -452,35 +376,9 @@ reset_fresh_install_state() {
   rm -f -- \
     "$test_root/user.created" "$test_root/group.created" \
     "$test_root/user.deleted" "$test_root/group.deleted" \
-    "$test_root/backup.root-owned" "$test_root/backup-temporary.root-owned" \
     "$test_root/current-user-uid" \
     "$test_root/current-group-gid"
   write_package_config
-}
-
-write_trusted_rpm_backup() {
-  /usr/bin/cp "$test_root/etc/host-m-agent/config.json" \
-    "$test_root/var/lib/host-m-agent-package/config.json.remove-backup"
-  chmod 0600 "$test_root/var/lib/host-m-agent-package/config.json.remove-backup"
-  : >"$test_root/backup.root-owned"
-}
-
-assert_no_backup_temporary() {
-  for temporary_path in \
-    "$test_root/var/lib/host-m-agent-package"/.config.json.remove-backup.*
-  do
-    if [ -e "$temporary_path" ] || [ -L "$temporary_path" ]; then
-      fail "unexpected RPM backup temporary remains: $temporary_path"
-    fi
-  done
-}
-
-assert_no_restore_temporary() {
-  for temporary_path in "$test_root/etc/host-m-agent"/.config.json.restore.*; do
-    if [ -e "$temporary_path" ] || [ -L "$temporary_path" ]; then
-      fail "unexpected RPM restore temporary remains: $temporary_path"
-    fi
-  done
 }
 
 # Package managers invoke these scripts as root, but their inherited PATH is
@@ -516,309 +414,38 @@ fi
 "$test_root/preremove.sh" 1
 [ ! -s "$TEST_LOG" ] || fail 'RPM same-version reinstall stopped the current service'
 
-# Current remove/reinstall protects the config before payload removal and
-# restores it afterwards.
-mkdir -p "$test_root/etc/host-m-agent" \
-  "$test_root/var/lib/host-m-agent" \
-  "$test_root/etc/systemd/system/host-m-agent.service.d"
-write_package_config
-sed -i 's/"server_url": null/"server_url": "retained-config"/' \
+# A final RPM erase disables the service but creates no product-owned recovery
+# artifact. If RPM removes the current config, the product does not recreate it.
+reset_safe_reinstall_state
+mkdir -p "$test_root/etc/systemd/system/host-m-agent.service.d"
+sed -i 's/"server_url": null/"server_url": "package-manager-owned"/' \
   "$test_root/etc/host-m-agent/config.json"
-echo retained-state >"$test_root/var/lib/host-m-agent/agent-token"
-echo retained-dropin >"$test_root/etc/systemd/system/host-m-agent.service.d/gpu.conf"
+: >"$test_root/var/lib/host-m-agent/agent-token"
+: >"$test_root/etc/systemd/system/host-m-agent.service.d/gpu.conf"
 : >"$TEST_LOG"
 "$test_root/preremove.sh" 0
-assert_exists "$test_root/var/lib/host-m-agent-package/config.json.remove-backup"
-[ ! -L "$test_root/var/lib/host-m-agent-package/config.json.remove-backup" ] ||
-  fail 'RPM config backup was published as a symlink'
-[ "$(stat -c '%u:%g:%a' -- "$test_root/var/lib/host-m-agent-package/config.json.remove-backup")" = 0:0:600 ] ||
-  fail 'RPM config backup was not published as root:root 0600'
 assert_log_contains 'disable --now host-m-agent.service'
+assert_absent "$test_root/var/lib/host-m-agent-package/foreign-bookkeeping-sentinel"
 rm -f "$test_root/etc/host-m-agent/config.json"
 "$test_root/postremove.sh" 0
-assert_exists "$test_root/etc/host-m-agent/config.json"
-grep -F retained-config "$test_root/etc/host-m-agent/config.json" >/dev/null ||
-  fail 'RPM config content was not preserved'
+assert_absent "$test_root/etc/host-m-agent/config.json"
+assert_absent "$test_root/var/lib/host-m-agent-package/foreign-bookkeeping-sentinel"
 assert_exists "$test_root/var/lib/host-m-agent/agent-token"
 assert_exists "$test_root/etc/systemd/system/host-m-agent.service.d/gpu.conf"
 assert_log_contains 'daemon-reload'
 
-# The RPM erase backup is a privileged transaction. Neither its source,
-# private bookkeeping root, final backup, nor restore destination may be
-# redirected or made writable by another identity.
-reset_safe_reinstall_state
-rm -rf -- "$test_root/foreign-rpm-bookkeeping-pre"
-mv "$test_root/var/lib/host-m-agent-package" "$test_root/foreign-rpm-bookkeeping-pre"
-: >"$test_root/foreign-rpm-bookkeeping-pre/sentinel"
-ln -s "$test_root/foreign-rpm-bookkeeping-pre" \
-  "$test_root/var/lib/host-m-agent-package"
-if "$test_root/preremove.sh" 0 >"$test_root/rpm-backup-parent-symlink.log" 2>&1; then
-  fail 'RPM preremove followed a symlinked bookkeeping directory'
-fi
-assert_exists "$test_root/foreign-rpm-bookkeeping-pre/sentinel"
-assert_absent "$test_root/foreign-rpm-bookkeeping-pre/config.json.remove-backup"
-
-reset_safe_reinstall_state
-if STAT_ACCOUNT_STATE=0:0:777 "$test_root/preremove.sh" 0 \
-  >"$test_root/rpm-backup-open-parent.log" 2>&1; then
-  fail 'RPM preremove trusted a world-writable bookkeeping directory'
-fi
-assert_absent "$test_root/var/lib/host-m-agent-package/config.json.remove-backup"
-
-reset_safe_reinstall_state
-if STAT_MANAGED_USER=0:0:666 "$test_root/preremove.sh" 0 \
-  >"$test_root/rpm-backup-open-marker.log" 2>&1; then
-  fail 'RPM preremove trusted a writable ownership marker'
-fi
-assert_absent "$test_root/var/lib/host-m-agent-package/config.json.remove-backup"
-
-reset_safe_reinstall_state
-if FAIL_BACKUP_COPY=1 "$test_root/preremove.sh" 0 \
-  >"$test_root/rpm-backup-copy-failure.log" 2>&1; then
-  fail 'RPM preremove accepted a failed backup copy'
-fi
-assert_absent "$test_root/var/lib/host-m-agent-package/config.json.remove-backup"
-assert_no_backup_temporary
-
-reset_safe_reinstall_state
-if STAT_CONFIG_BACKUP_TEMPORARY=0:0:640 "$test_root/preremove.sh" 0 \
-  >"$test_root/rpm-backup-temporary-mode.log" 2>&1; then
-  fail 'RPM preremove published a backup temporary with unsafe metadata'
-fi
-assert_absent "$test_root/var/lib/host-m-agent-package/config.json.remove-backup"
-assert_no_backup_temporary
-
-reset_safe_reinstall_state
-rm -f -- "$test_root/foreign-rpm-config-file"
-mv "$test_root/etc/host-m-agent/config.json" "$test_root/foreign-rpm-config-file"
-ln -s "$test_root/foreign-rpm-config-file" "$test_root/etc/host-m-agent/config.json"
-if "$test_root/preremove.sh" 0 >"$test_root/rpm-backup-config-symlink.log" 2>&1; then
-  fail 'RPM preremove followed a symlinked config file'
-fi
-assert_exists "$test_root/foreign-rpm-config-file"
-assert_absent "$test_root/var/lib/host-m-agent-package/config.json.remove-backup"
-
-reset_safe_reinstall_state
-rm -rf -- "$test_root/foreign-rpm-config-dir"
-mv "$test_root/etc/host-m-agent" "$test_root/foreign-rpm-config-dir"
-ln -s "$test_root/foreign-rpm-config-dir" "$test_root/etc/host-m-agent"
-if "$test_root/preremove.sh" 0 >"$test_root/rpm-backup-config-dir-symlink.log" 2>&1; then
-  fail 'RPM preremove followed a symlinked config directory'
-fi
-assert_exists "$test_root/foreign-rpm-config-dir/config.json"
-assert_absent "$test_root/var/lib/host-m-agent-package/config.json.remove-backup"
-
-reset_safe_reinstall_state
-rm -f -- "$test_root/foreign-rpm-backup-target"
-/usr/bin/cp "$test_root/etc/host-m-agent/config.json" "$test_root/foreign-rpm-backup-target"
-ln -s "$test_root/foreign-rpm-backup-target" \
-  "$test_root/var/lib/host-m-agent-package/config.json.remove-backup"
-if "$test_root/preremove.sh" 0 >"$test_root/rpm-backup-final-symlink.log" 2>&1; then
-  fail 'RPM preremove followed a pre-existing backup symlink'
-fi
-assert_exists "$test_root/foreign-rpm-backup-target"
-[ ! -L "$test_root/foreign-rpm-backup-target" ] ||
-  fail 'foreign RPM backup target changed type'
-
-# Atomic publication keeps the previous valid backup byte-for-byte when the
-# final rename fails, and its EXIT cleanup removes only the private temporary.
-reset_safe_reinstall_state
-sed -i 's/"server_url": null/"server_url": "old-backup"/' \
-  "$test_root/etc/host-m-agent/config.json"
-write_trusted_rpm_backup
-sed -i 's/"server_url": "old-backup"/"server_url": "new-backup"/' \
-  "$test_root/etc/host-m-agent/config.json"
-if FAIL_BACKUP_MOVE=1 "$test_root/preremove.sh" 0 \
-  >"$test_root/rpm-backup-atomic-move.log" 2>&1; then
-  fail 'RPM preremove accepted a failed atomic backup publication'
-fi
-grep -F '"server_url": "old-backup"' \
-  "$test_root/var/lib/host-m-agent-package/config.json.remove-backup" >/dev/null ||
-  fail 'failed RPM backup publication replaced the previous backup'
-assert_no_backup_temporary
-
-# Restore validates the source before even probing children through an unsafe
-# parent, so a foreign backup remains untouched and cannot become root config.
-reset_safe_reinstall_state
-sed -i 's/"server_url": null/"server_url": "foreign-parent-backup"/' \
-  "$test_root/etc/host-m-agent/config.json"
-write_trusted_rpm_backup
-rm -f "$test_root/etc/host-m-agent/config.json"
-rm -rf -- "$test_root/foreign-rpm-bookkeeping-restore"
-mv "$test_root/var/lib/host-m-agent-package" \
-  "$test_root/foreign-rpm-bookkeeping-restore"
-: >"$test_root/foreign-rpm-bookkeeping-restore/sentinel"
-ln -s "$test_root/foreign-rpm-bookkeeping-restore" \
-  "$test_root/var/lib/host-m-agent-package"
-if "$test_root/postremove.sh" 0 >"$test_root/rpm-restore-parent-symlink.log" 2>&1; then
-  fail 'RPM postremove restored through a symlinked bookkeeping directory'
-fi
-assert_exists "$test_root/foreign-rpm-bookkeeping-restore/sentinel"
-assert_exists "$test_root/foreign-rpm-bookkeeping-restore/config.json.remove-backup"
-assert_absent "$test_root/etc/host-m-agent/config.json"
-
-reset_safe_reinstall_state
-rm -f -- "$test_root/foreign-rpm-restore-source"
-/usr/bin/cp "$test_root/etc/host-m-agent/config.json" "$test_root/foreign-rpm-restore-source"
-chmod 0600 "$test_root/foreign-rpm-restore-source"
-ln -s "$test_root/foreign-rpm-restore-source" \
-  "$test_root/var/lib/host-m-agent-package/config.json.remove-backup"
-rm -f "$test_root/etc/host-m-agent/config.json"
-if "$test_root/postremove.sh" 0 >"$test_root/rpm-restore-backup-symlink.log" 2>&1; then
-  fail 'RPM postremove followed a backup symlink'
-fi
-assert_exists "$test_root/foreign-rpm-restore-source"
-assert_absent "$test_root/etc/host-m-agent/config.json"
-
-reset_safe_reinstall_state
-write_trusted_rpm_backup
-rm -f "$test_root/etc/host-m-agent/config.json"
-if STAT_CONFIG_BACKUP=1000:1000:600 "$test_root/postremove.sh" 0 \
-  >"$test_root/rpm-restore-backup-owner.log" 2>&1; then
-  fail 'RPM postremove trusted a foreign-owned config backup'
-fi
-assert_exists "$test_root/var/lib/host-m-agent-package/config.json.remove-backup"
-assert_absent "$test_root/etc/host-m-agent/config.json"
-
-reset_safe_reinstall_state
-sed -i 's/"server_url": null/"server_url": "copy-failure-backup"/' \
-  "$test_root/etc/host-m-agent/config.json"
-write_trusted_rpm_backup
-sed -i 's/"server_url": "copy-failure-backup"/"server_url": "copy-failure-original"/' \
-  "$test_root/etc/host-m-agent/config.json"
-if FAIL_RESTORE_COPY=1 "$test_root/postremove.sh" 0 \
-  >"$test_root/rpm-restore-copy-failure.log" 2>&1; then
-  fail 'RPM postremove accepted a failed restore copy'
-fi
-grep -F '"server_url": "copy-failure-original"' \
-  "$test_root/etc/host-m-agent/config.json" >/dev/null ||
-  fail 'failed restore copy changed the original config'
-assert_exists "$test_root/var/lib/host-m-agent-package/config.json.remove-backup"
-assert_no_restore_temporary
-
-reset_safe_reinstall_state
-sed -i 's/"server_url": null/"server_url": "metadata-failure-backup"/' \
-  "$test_root/etc/host-m-agent/config.json"
-write_trusted_rpm_backup
-sed -i 's/"server_url": "metadata-failure-backup"/"server_url": "metadata-failure-original"/' \
-  "$test_root/etc/host-m-agent/config.json"
-if STAT_CONFIG_RESTORE=0:998:600 "$test_root/postremove.sh" 0 \
-  >"$test_root/rpm-restore-temporary-mode.log" 2>&1; then
-  fail 'RPM postremove committed a restore temporary with unsafe metadata'
-fi
-grep -F '"server_url": "metadata-failure-original"' \
-  "$test_root/etc/host-m-agent/config.json" >/dev/null ||
-  fail 'invalid restore temporary changed the original config'
-assert_exists "$test_root/var/lib/host-m-agent-package/config.json.remove-backup"
-assert_no_restore_temporary
-
-reset_safe_reinstall_state
-write_trusted_rpm_backup
-rm -f "$test_root/etc/host-m-agent/config.json"
-if STAT_MANAGED_GROUP=0:0:666 "$test_root/postremove.sh" 0 \
-  >"$test_root/rpm-restore-open-marker.log" 2>&1; then
-  fail 'RPM postremove trusted a writable ownership marker'
-fi
-assert_exists "$test_root/var/lib/host-m-agent-package/config.json.remove-backup"
-assert_absent "$test_root/etc/host-m-agent/config.json"
-
-reset_safe_reinstall_state
-write_trusted_rpm_backup
-sed -i "s/$package_version/0.3.1/" \
-  "$test_root/var/lib/host-m-agent-package/config.json.remove-backup"
-rm -f "$test_root/etc/host-m-agent/config.json"
-if "$test_root/postremove.sh" 0 >"$test_root/rpm-restore-stale-backup.log" 2>&1; then
-  fail 'RPM postremove restored a backup from another Agent version'
-fi
-assert_exists "$test_root/var/lib/host-m-agent-package/config.json.remove-backup"
-assert_absent "$test_root/etc/host-m-agent/config.json"
-
-reset_safe_reinstall_state
-sed -i 's/"server_url": null/"server_url": "restore-payload"/' \
-  "$test_root/etc/host-m-agent/config.json"
-write_trusted_rpm_backup
-sed -i 's/"server_url": "restore-payload"/"server_url": "foreign-destination"/' \
-  "$test_root/etc/host-m-agent/config.json"
-rm -rf -- "$test_root/foreign-rpm-restore-dir"
-mv "$test_root/etc/host-m-agent" "$test_root/foreign-rpm-restore-dir"
-ln -s "$test_root/foreign-rpm-restore-dir" "$test_root/etc/host-m-agent"
-if "$test_root/postremove.sh" 0 >"$test_root/rpm-restore-config-dir-symlink.log" 2>&1; then
-  fail 'RPM postremove restored through a symlinked config directory'
-fi
-grep -F '"server_url": "foreign-destination"' \
-  "$test_root/foreign-rpm-restore-dir/config.json" >/dev/null ||
-  fail 'RPM restore changed a foreign config directory'
-assert_exists "$test_root/var/lib/host-m-agent-package/config.json.remove-backup"
-
-reset_safe_reinstall_state
-sed -i 's/"server_url": null/"server_url": "restore-payload"/' \
-  "$test_root/etc/host-m-agent/config.json"
-write_trusted_rpm_backup
-rm -f -- "$test_root/foreign-rpm-restore-file"
-mv "$test_root/etc/host-m-agent/config.json" "$test_root/foreign-rpm-restore-file"
-sed -i 's/"server_url": "restore-payload"/"server_url": "foreign-file"/' \
-  "$test_root/foreign-rpm-restore-file"
-ln -s "$test_root/foreign-rpm-restore-file" "$test_root/etc/host-m-agent/config.json"
-if "$test_root/postremove.sh" 0 >"$test_root/rpm-restore-config-symlink.log" 2>&1; then
-  fail 'RPM postremove restored through a symlinked config file'
-fi
-grep -F '"server_url": "foreign-file"' "$test_root/foreign-rpm-restore-file" >/dev/null ||
-  fail 'RPM restore changed a foreign config file'
-assert_exists "$test_root/var/lib/host-m-agent-package/config.json.remove-backup"
-
-reset_safe_reinstall_state
-write_trusted_rpm_backup
-rm -f "$test_root/etc/host-m-agent/config.json"
-if AGENT_GID=997 "$test_root/postremove.sh" 0 \
-  >"$test_root/rpm-restore-replaced-group.log" 2>&1; then
-  fail 'RPM postremove restored config for a replaced service group'
-fi
-assert_exists "$test_root/var/lib/host-m-agent-package/config.json.remove-backup"
-assert_absent "$test_root/etc/host-m-agent/config.json"
-
-reset_safe_reinstall_state
-write_trusted_rpm_backup
-write_account_markers 998 998 997
-rm -rf "$test_root/etc/host-m-agent"
-if "$test_root/postremove.sh" 0 >"$test_root/rpm-restore-replaced-group-marker.log" 2>&1; then
-  fail 'RPM postremove restored config for a group not bound by its marker'
-fi
-assert_exists "$test_root/var/lib/host-m-agent-package/config.json.remove-backup"
-assert_absent "$test_root/etc/host-m-agent"
-
-# A failed restore rename leaves both the original config and trusted backup;
-# clearing the injected failure makes the exact same transaction retryable.
-reset_safe_reinstall_state
-sed -i 's/"server_url": null/"server_url": "retry-payload"/' \
-  "$test_root/etc/host-m-agent/config.json"
-write_trusted_rpm_backup
-sed -i 's/"server_url": "retry-payload"/"server_url": "original-config"/' \
-  "$test_root/etc/host-m-agent/config.json"
-if FAIL_RESTORE_MOVE=1 "$test_root/postremove.sh" 0 \
-  >"$test_root/rpm-restore-atomic-move.log" 2>&1; then
-  fail 'RPM postremove accepted a failed atomic config restore'
-fi
-grep -F '"server_url": "original-config"' "$test_root/etc/host-m-agent/config.json" >/dev/null ||
-  fail 'failed RPM restore replaced the original config'
-assert_exists "$test_root/var/lib/host-m-agent-package/config.json.remove-backup"
-assert_no_restore_temporary
-"$test_root/postremove.sh" 0 >"$test_root/rpm-restore-retry.log"
-grep -F '"server_url": "retry-payload"' "$test_root/etc/host-m-agent/config.json" >/dev/null ||
-  fail 'RPM restore retry did not recover the trusted backup'
-assert_absent "$test_root/var/lib/host-m-agent-package/config.json.remove-backup"
-
-# Debian remove preserves all local state and does not touch the account.
+# Debian remove touches no local data or dedicated account. Config retention is
+# solely the package manager's conffile behavior.
 reset_safe_reinstall_state
 : >"$test_root/var/lib/host-m-agent/agent-token"
-write_trusted_rpm_backup
 sed -i 's/"server_url": null/"server_url": "debian-current"/' \
   "$test_root/etc/host-m-agent/config.json"
 : >"$TEST_LOG"
 "$test_root/postremove.sh" remove
 assert_exists "$test_root/etc/host-m-agent/config.json"
 grep -F '"server_url": "debian-current"' "$test_root/etc/host-m-agent/config.json" >/dev/null ||
-  fail 'Debian postremove entered the RPM-only config restore path'
-assert_exists "$test_root/var/lib/host-m-agent-package/config.json.remove-backup"
+  fail 'Debian postremove changed package-manager-owned config'
+assert_absent "$test_root/var/lib/host-m-agent-package/foreign-bookkeeping-sentinel"
 assert_exists "$test_root/var/lib/host-m-agent/agent-token"
 [ ! -f "$test_root/user.deleted" ] || fail 'remove deleted the service user'
 
@@ -908,9 +535,10 @@ assert_exists "$test_root/group.deleted"
 
 # A missing ownership marker proves nothing by itself. If the matching global
 # account still exists (or NSS cannot prove absence), both purge entry points
-# must fail before deleting the backup, the other marker, or either account.
+# must fail before deleting an unrelated bookkeeping file, the other marker,
+# or either account.
 reset_safe_reinstall_state
-write_trusted_rpm_backup
+: >"$test_root/var/lib/host-m-agent-package/foreign-bookkeeping-sentinel"
 rm -f "$test_root/var/lib/host-m-agent-package/managed-user" \
   "$test_root/var/lib/host-m-agent-package/managed-group"
 if "$test_root/postremove.sh" purge >"$test_root/purge-missing-markers-postremove.log" 2>&1; then
@@ -918,7 +546,7 @@ if "$test_root/postremove.sh" purge >"$test_root/purge-missing-markers-postremov
 fi
 assert_absent "$test_root/var/lib/host-m-agent"
 assert_absent "$test_root/etc/host-m-agent"
-assert_exists "$test_root/var/lib/host-m-agent-package/config.json.remove-backup"
+assert_exists "$test_root/var/lib/host-m-agent-package/foreign-bookkeeping-sentinel"
 assert_absent "$test_root/user.deleted"
 assert_absent "$test_root/group.deleted"
 
@@ -932,14 +560,14 @@ assert_absent "$test_root/user.deleted"
 assert_absent "$test_root/group.deleted"
 
 reset_safe_reinstall_state
-write_trusted_rpm_backup
+: >"$test_root/var/lib/host-m-agent-package/foreign-bookkeeping-sentinel"
 rm -f "$test_root/var/lib/host-m-agent-package/managed-user" \
   "$test_root/var/lib/host-m-agent-package/managed-group"
 if "$test_root/purge-local-state.sh" --yes \
   >"$test_root/purge-missing-markers-helper.log" 2>&1; then
   fail 'purge helper accepted live accounts without ownership markers'
 fi
-assert_exists "$test_root/var/lib/host-m-agent-package/config.json.remove-backup"
+assert_exists "$test_root/var/lib/host-m-agent-package/foreign-bookkeeping-sentinel"
 assert_absent "$test_root/user.deleted"
 assert_absent "$test_root/group.deleted"
 
@@ -986,27 +614,27 @@ assert_absent "$test_root/group.deleted"
 # proof for one identity cannot authorize its deletion before a malformed proof
 # for the other identity is discovered.
 reset_safe_reinstall_state
-write_trusted_rpm_backup
+: >"$test_root/var/lib/host-m-agent-package/foreign-bookkeeping-sentinel"
 printf 'format=0.3.1\ngid=998\n' \
   >"$test_root/var/lib/host-m-agent-package/managed-group"
 if "$test_root/postremove.sh" purge >"$test_root/purge-valid-user-bad-group.log" 2>&1; then
   fail 'postremove purge deleted a user before parsing the invalid group marker'
 fi
-assert_exists "$test_root/var/lib/host-m-agent-package/config.json.remove-backup"
+assert_exists "$test_root/var/lib/host-m-agent-package/foreign-bookkeeping-sentinel"
 assert_exists "$test_root/var/lib/host-m-agent-package/managed-user"
 assert_exists "$test_root/var/lib/host-m-agent-package/managed-group"
 assert_absent "$test_root/user.deleted"
 assert_absent "$test_root/group.deleted"
 
 reset_safe_reinstall_state
-write_trusted_rpm_backup
+: >"$test_root/var/lib/host-m-agent-package/foreign-bookkeeping-sentinel"
 printf 'format=0.3.1\nuid=998\nprimary_gid=998\n' \
   >"$test_root/var/lib/host-m-agent-package/managed-user"
 if "$test_root/purge-local-state.sh" --yes \
   >"$test_root/purge-bad-user-valid-group.log" 2>&1; then
   fail 'purge helper accepted an invalid user marker before processing the group'
 fi
-assert_exists "$test_root/var/lib/host-m-agent-package/config.json.remove-backup"
+assert_exists "$test_root/var/lib/host-m-agent-package/foreign-bookkeeping-sentinel"
 assert_exists "$test_root/var/lib/host-m-agent-package/managed-user"
 assert_exists "$test_root/var/lib/host-m-agent-package/managed-group"
 assert_absent "$test_root/user.deleted"
@@ -1068,26 +696,26 @@ START_ACCOUNTS_ABSENT=1 "$test_root/purge-local-state.sh" --yes \
 # by postinstall. Fixed Agent state is still removed, while every file under an
 # untrusted bookkeeping root and both accounts are preserved for inspection.
 reset_safe_reinstall_state
-: >"$test_root/var/lib/host-m-agent-package/config.json.remove-backup"
+: >"$test_root/var/lib/host-m-agent-package/foreign-bookkeeping-sentinel"
 if STAT_ACCOUNT_STATE=1000:1000:700 "$test_root/postremove.sh" purge \
   >"$test_root/purge-foreign-bookkeeping-owner.log" 2>&1; then
   fail 'postremove purge trusted a non-root account bookkeeping directory'
 fi
 assert_absent "$test_root/var/lib/host-m-agent"
 assert_absent "$test_root/etc/host-m-agent"
-assert_exists "$test_root/var/lib/host-m-agent-package/config.json.remove-backup"
+assert_exists "$test_root/var/lib/host-m-agent-package/foreign-bookkeeping-sentinel"
 assert_exists "$test_root/var/lib/host-m-agent-package/managed-user"
 assert_exists "$test_root/var/lib/host-m-agent-package/managed-group"
 assert_absent "$test_root/user.deleted"
 assert_absent "$test_root/group.deleted"
 
 reset_safe_reinstall_state
-: >"$test_root/var/lib/host-m-agent-package/config.json.remove-backup"
+: >"$test_root/var/lib/host-m-agent-package/foreign-bookkeeping-sentinel"
 if STAT_ACCOUNT_STATE=0:0:777 "$test_root/purge-local-state.sh" --yes \
   >"$test_root/purge-open-bookkeeping-mode.log" 2>&1; then
   fail 'purge helper trusted an account bookkeeping directory with an unsafe mode'
 fi
-assert_exists "$test_root/var/lib/host-m-agent-package/config.json.remove-backup"
+assert_exists "$test_root/var/lib/host-m-agent-package/foreign-bookkeeping-sentinel"
 assert_exists "$test_root/var/lib/host-m-agent-package/managed-user"
 assert_exists "$test_root/var/lib/host-m-agent-package/managed-group"
 assert_absent "$test_root/user.deleted"
@@ -1095,26 +723,26 @@ assert_absent "$test_root/group.deleted"
 
 # A trusted parent is insufficient when either authorization marker itself is
 # writable by another identity. Validate every present marker before deleting
-# the backup, either account, or either marker.
+# an unrelated bookkeeping file, either account, or either marker.
 reset_safe_reinstall_state
-: >"$test_root/var/lib/host-m-agent-package/config.json.remove-backup"
+: >"$test_root/var/lib/host-m-agent-package/foreign-bookkeeping-sentinel"
 if STAT_MANAGED_USER=1000:1000:600 "$test_root/postremove.sh" purge \
   >"$test_root/purge-foreign-user-marker.log" 2>&1; then
   fail 'postremove purge trusted a non-root managed-user marker'
 fi
-assert_exists "$test_root/var/lib/host-m-agent-package/config.json.remove-backup"
+assert_exists "$test_root/var/lib/host-m-agent-package/foreign-bookkeeping-sentinel"
 assert_exists "$test_root/var/lib/host-m-agent-package/managed-user"
 assert_exists "$test_root/var/lib/host-m-agent-package/managed-group"
 assert_absent "$test_root/user.deleted"
 assert_absent "$test_root/group.deleted"
 
 reset_safe_reinstall_state
-: >"$test_root/var/lib/host-m-agent-package/config.json.remove-backup"
+: >"$test_root/var/lib/host-m-agent-package/foreign-bookkeeping-sentinel"
 if STAT_MANAGED_GROUP=0:0:666 "$test_root/purge-local-state.sh" --yes \
   >"$test_root/purge-open-group-marker.log" 2>&1; then
   fail 'purge helper trusted a group marker with an unsafe mode'
 fi
-assert_exists "$test_root/var/lib/host-m-agent-package/config.json.remove-backup"
+assert_exists "$test_root/var/lib/host-m-agent-package/foreign-bookkeeping-sentinel"
 assert_exists "$test_root/var/lib/host-m-agent-package/managed-user"
 assert_exists "$test_root/var/lib/host-m-agent-package/managed-group"
 assert_absent "$test_root/user.deleted"
@@ -1124,7 +752,7 @@ prepare_symlinked_purge_bookkeeping() {
   reset_safe_reinstall_state
   foreign_bookkeeping="$test_root/foreign-purge-bookkeeping"
   rm -rf -- "$foreign_bookkeeping"
-  : >"$test_root/var/lib/host-m-agent-package/config.json.remove-backup"
+  : >"$test_root/var/lib/host-m-agent-package/foreign-bookkeeping-sentinel"
   mv "$test_root/var/lib/host-m-agent-package" "$foreign_bookkeeping"
   : >"$foreign_bookkeeping/sentinel"
   ln -s "$foreign_bookkeeping" "$test_root/var/lib/host-m-agent-package"
@@ -1132,7 +760,7 @@ prepare_symlinked_purge_bookkeeping() {
 
 assert_foreign_purge_bookkeeping_preserved() {
   assert_exists "$test_root/foreign-purge-bookkeeping/sentinel"
-  assert_exists "$test_root/foreign-purge-bookkeeping/config.json.remove-backup"
+  assert_exists "$test_root/foreign-purge-bookkeeping/foreign-bookkeeping-sentinel"
   assert_exists "$test_root/foreign-purge-bookkeeping/managed-user"
   assert_exists "$test_root/foreign-purge-bookkeeping/managed-group"
   assert_absent "$test_root/user.deleted"
@@ -1215,8 +843,8 @@ assert_absent "$test_root/user.deleted"
 assert_absent "$test_root/group.deleted"
 assert_exists "$test_root/var/lib/host-m-agent-package/managed-group"
 
-# Current packages require versioned numeric ownership markers. Malformed or
-# previous-version markers fail closed without deleting accounts or rewriting bookkeeping.
+# Current packages require exact-version numeric ownership markers. Malformed or
+# non-current markers fail closed without deleting accounts or rewriting bookkeeping.
 rm -f "$test_root/user.deleted" "$test_root/group.deleted"
 {
   printf 'format=1\nuid=998\nprimary_gid=998\n'
@@ -1225,7 +853,7 @@ rm -f "$test_root/user.deleted" "$test_root/group.deleted"
   printf 'format=1\ngid=998\n'
 } >"$test_root/var/lib/host-m-agent-package/managed-group"
 if "$test_root/postremove.sh" purge >"$test_root/invalid-marker.log" 2>&1; then
-  fail 'purge accepted a previous-version ownership marker'
+  fail 'purge accepted a non-current ownership marker'
 fi
 assert_absent "$test_root/user.deleted"
 assert_absent "$test_root/group.deleted"
@@ -1252,88 +880,6 @@ grep -Fx 'gid=998' "$test_root/var/lib/host-m-agent-package/managed-group" >/dev
 START_ACCOUNTS_ABSENT=1 "$test_root/postinstall.sh" >"$test_root/current-reinstall.log"
 assert_absent "$test_root/user.deleted"
 assert_absent "$test_root/group.deleted"
-
-# RPM can be interrupted after preremove has saved the noreplace config but
-# before postremove restores it. The private root:root 0600 backup is itself a
-# valid recovery input for the next same-version postinstall.
-reset_safe_reinstall_state
-sed -i 's/"server_url": null/"server_url": "https:\/\/retained.example"/' \
-  "$test_root/etc/host-m-agent/config.json"
-: >"$TEST_LOG"
-"$test_root/preremove.sh" 0
-assert_exists "$test_root/var/lib/host-m-agent-package/config.json.remove-backup"
-"$test_root/postinstall.sh" >"$test_root/interrupted-rpm-reinstall.log"
-assert_absent "$test_root/var/lib/host-m-agent-package/config.json.remove-backup"
-grep -F '"server_url": "https://retained.example"' \
-  "$test_root/etc/host-m-agent/config.json" >/dev/null ||
-  fail 'postinstall did not consume the interrupted RPM config backup'
-
-# Reinstall applies the same marker metadata contract before consuming a
-# backup. A writable marker blocks restore and leaves the recovery input intact.
-reset_safe_reinstall_state
-sed -i 's/"server_url": null/"server_url": "marker-guarded"/' \
-  "$test_root/etc/host-m-agent/config.json"
-"$test_root/preremove.sh" 0 >/dev/null
-: >"$TEST_LOG"
-if STAT_MANAGED_USER=0:0:666 "$test_root/postinstall.sh" \
-  >"$test_root/reinstall-open-marker.log" 2>&1; then
-  fail 'postinstall consumed an RPM backup authorized by a writable marker'
-fi
-assert_exists "$test_root/var/lib/host-m-agent-package/config.json.remove-backup"
-if grep -F 'restart host-m-agent.service' "$TEST_LOG" >/dev/null; then
-  fail 'postinstall started service after rejecting RPM backup ownership metadata'
-fi
-
-# Postinstall uses its account-creation rollback trap as the restore temporary
-# cleanup boundary too. Copy and metadata failures must preserve both inputs.
-reset_safe_reinstall_state
-sed -i 's/"server_url": null/"server_url": "reinstall-copy-retained"/' \
-  "$test_root/etc/host-m-agent/config.json"
-"$test_root/preremove.sh" 0 >/dev/null
-write_package_config
-if FAIL_RESTORE_COPY=1 "$test_root/postinstall.sh" \
-  >"$test_root/reinstall-restore-copy.log" 2>&1; then
-  fail 'postinstall accepted a failed RPM restore copy'
-fi
-grep -F '"server_url": null' "$test_root/etc/host-m-agent/config.json" >/dev/null ||
-  fail 'failed postinstall restore copy replaced the extracted config'
-assert_exists "$test_root/var/lib/host-m-agent-package/config.json.remove-backup"
-assert_no_restore_temporary
-
-reset_safe_reinstall_state
-sed -i 's/"server_url": null/"server_url": "reinstall-metadata-retained"/' \
-  "$test_root/etc/host-m-agent/config.json"
-"$test_root/preremove.sh" 0 >/dev/null
-write_package_config
-if STAT_CONFIG_RESTORE=0:998:600 "$test_root/postinstall.sh" \
-  >"$test_root/reinstall-restore-temporary-mode.log" 2>&1; then
-  fail 'postinstall committed an RPM restore temporary with unsafe metadata'
-fi
-grep -F '"server_url": null' "$test_root/etc/host-m-agent/config.json" >/dev/null ||
-  fail 'invalid postinstall restore temporary replaced the extracted config'
-assert_exists "$test_root/var/lib/host-m-agent-package/config.json.remove-backup"
-assert_no_restore_temporary
-
-# An interrupted reinstall restore is atomic too: a failed rename preserves
-# both the newly extracted config and the trusted backup, then a retry succeeds.
-reset_safe_reinstall_state
-sed -i 's/"server_url": null/"server_url": "reinstall-retained"/' \
-  "$test_root/etc/host-m-agent/config.json"
-"$test_root/preremove.sh" 0 >/dev/null
-write_package_config
-if FAIL_RESTORE_MOVE=1 "$test_root/postinstall.sh" \
-  >"$test_root/reinstall-restore-move.log" 2>&1; then
-  fail 'postinstall accepted a failed atomic RPM config restore'
-fi
-grep -F '"server_url": null' "$test_root/etc/host-m-agent/config.json" >/dev/null ||
-  fail 'failed reinstall restore replaced the extracted package config'
-assert_exists "$test_root/var/lib/host-m-agent-package/config.json.remove-backup"
-assert_no_restore_temporary
-"$test_root/postinstall.sh" >"$test_root/reinstall-restore-retry.log"
-grep -F '"server_url": "reinstall-retained"' \
-  "$test_root/etc/host-m-agent/config.json" >/dev/null ||
-  fail 'postinstall retry did not restore the retained RPM config'
-assert_absent "$test_root/var/lib/host-m-agent-package/config.json.remove-backup"
 
 # Marker publication is the account-creation commit point. A failed group
 # marker must remove only the exact group created by this invocation and leave

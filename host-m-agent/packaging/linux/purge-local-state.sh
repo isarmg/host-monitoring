@@ -7,7 +7,6 @@ export PATH
 service_name=host-m-agent.service
 package_version=0.7.0
 account_state_dir=/var/lib/host-m-agent-package
-rpm_config_backup="$account_state_dir/config.json.remove-backup"
 managed_user_marker="$account_state_dir/managed-user"
 managed_group_marker="$account_state_dir/managed-group"
 purge_incomplete=0
@@ -310,8 +309,6 @@ rm -rf -- /etc/host-m-agent
 rm -rf -- /etc/systemd/system/host-m-agent.service.d
 
 if [ "$account_bookkeeping_trusted" -eq 1 ]; then
-  rm -f -- "$rpm_config_backup"
-
   if [ -e "$managed_user_marker" ] || [ -L "$managed_user_marker" ]; then
     if ! load_user_marker; then
       echo "invalid managed-user marker; preserving the account" >&2

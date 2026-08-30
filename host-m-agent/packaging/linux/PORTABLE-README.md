@@ -11,10 +11,13 @@ For a managed installation, use the DEB or RPM built from
 
 - a dedicated non-login account and private state directory;
 - a hardened, enabled systemd service;
-- same-version reinstall-safe configuration and credentials;
-- ordinary uninstall that retains identity for a 0.7.0 reinstall;
+- exact-current configuration validation and package-manager `config|noreplace` handling;
+- ordinary uninstall that leaves identity and spool in place without backing up or restoring them;
 - explicit local purge through `apt purge host-m-agent` (DEB) or
   `sudo host-m-agent-purge --yes` before `dnf remove host-m-agent` (RPM).
+
+The product package does not perform backup, restore, or cross-version migration. Use the
+independent upgrade repository before removal when the installation must be recovered or upgraded.
 
 If you deliberately use the portable binary, you own its service definition,
 configuration and state paths, permissions, replacement, and removal. Never clone

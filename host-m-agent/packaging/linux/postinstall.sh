@@ -11,10 +11,8 @@ account_state_dir=/var/lib/host-m-agent-package
 state_dir=/var/lib/host-m-agent
 config_dir=/etc/host-m-agent
 config_path="$config_dir/config.json"
-rpm_config_backup="$account_state_dir/config.json.remove-backup"
 managed_user_marker="$account_state_dir/managed-user"
 managed_group_marker="$account_state_dir/managed-group"
-config_restore_temporary=
 group_marker_state=absent
 user_marker_state=absent
 recorded_group_gid=
@@ -288,9 +286,6 @@ rollback_account_creation() {
   rollback_status=$?
   trap - EXIT
   set +e
-  if [ -n "$config_restore_temporary" ]; then
-    rm -f -- "$config_restore_temporary"
-  fi
   if [ "$rollback_status" -eq 0 ]; then
     exit 0
   fi
@@ -369,10 +364,9 @@ read_path_metadata "$config_path"
 initial_config_metadata="$path_uid:$path_gid:$path_mode"
 
 # This bookkeeping directory is deliberately separate from the Agent-writable
-# state directory. It records that the package owns the dedicated account and
-# holds an RPM config backup across an erase transaction. Never normalize a
-# pre-existing foreign directory: doing so would adopt attacker-controlled
-# marker or backup paths while running as root.
+# state directory and records only that the current package owns the dedicated
+# account. Never normalize a pre-existing foreign directory: doing so would
+# adopt attacker-controlled marker paths while running as root.
 if [ -e "$account_state_dir" ] || [ -L "$account_state_dir" ]; then
   [ -d "$account_state_dir" ] && [ ! -L "$account_state_dir" ] ||
     die "package account state path is not a safe directory"
@@ -419,17 +413,6 @@ case "$initial_config_metadata" in
     ;;
   *) die "$config_path has foreign ownership or permissions" ;;
 esac
-
-if [ -e "$rpm_config_backup" ] || [ -L "$rpm_config_backup" ]; then
-  [ -f "$rpm_config_backup" ] && [ ! -L "$rpm_config_backup" ] ||
-    die "RPM config backup is not a safe regular file"
-  [ "$group_marker_state" = valid ] && [ "$user_marker_state" = valid ] ||
-    die "RPM config backup has no current package ownership markers"
-  require_current_config "$rpm_config_backup"
-  read_path_metadata "$rpm_config_backup"
-  [ "$path_uid:$path_gid:$path_mode" = "0:0:600" ] ||
-    die "RPM config backup has foreign ownership or permissions"
-fi
 
 # Account creation mutates global NSS state outside the package payload. If a
 # later validation or atomic marker publication fails, roll back only the exact
@@ -545,28 +528,6 @@ read_path_metadata "$config_dir"
 read_path_metadata "$config_path"
 [ "$path_uid:$path_gid:$path_mode" = "0:$user_gid:640" ] ||
   die "$config_path could not be secured for the host-m-agent group"
-
-# The current package's pre-remove hook protects config across remove and
-# same-version reinstall. Validate and secure every input before the atomic
-# rename commit point; a committed restore is not rolled back by later service
-# startup failures.
-if [ -f "$rpm_config_backup" ]; then
-  config_restore_temporary="$config_dir/.config.json.restore.$$"
-  rm -f -- "$config_restore_temporary"
-  umask 077
-  cp -p -- "$rpm_config_backup" "$config_restore_temporary"
-  chown "root:$user_gid" "$config_restore_temporary"
-  chmod 0640 "$config_restore_temporary"
-  [ -f "$config_restore_temporary" ] && [ ! -L "$config_restore_temporary" ] ||
-    die "restored config temporary is not a safe regular file"
-  require_current_config "$config_restore_temporary"
-  read_path_metadata "$config_restore_temporary"
-  [ "$path_uid:$path_gid:$path_mode" = "0:$user_gid:640" ] ||
-    die "restored config temporary has foreign ownership or permissions"
-  mv -f -- "$config_restore_temporary" "$config_path"
-  config_restore_temporary=
-  rm -f -- "$rpm_config_backup"
-fi
 
 service_started=0
 if [ -d /run/systemd/system ]; then
