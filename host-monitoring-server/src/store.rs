@@ -1,6 +1,10 @@
 use chrono::{DateTime, Utc};
 use host_protocol::{AgentPairingRequest, AgentReport, Capability, PairingStatus};
-use sqlx::{FromRow, Row, SqlitePool, sqlite::SqlitePoolOptions, types::Json};
+use sqlx::{
+    FromRow, Row, SqlitePool,
+    sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous},
+    types::Json,
+};
 use uuid::Uuid;
 
 use crate::model::{
@@ -9,11 +13,18 @@ use crate::model::{
 };
 
 pub async fn connect(database_url: &str) -> anyhow::Result<SqlitePool> {
+    let options = database_url
+        .parse::<SqliteConnectOptions>()?
+        .create_if_missing(true)
+        .journal_mode(SqliteJournalMode::Wal)
+        .foreign_keys(true)
+        .busy_timeout(std::time::Duration::from_secs(5))
+        .synchronous(SqliteSynchronous::Full);
     Ok(SqlitePoolOptions::new()
         .max_connections(16)
         .min_connections(1)
         .acquire_timeout(std::time::Duration::from_secs(5))
-        .connect(database_url)
+        .connect_with(options)
         .await?)
 }
 
