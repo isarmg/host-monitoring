@@ -11,6 +11,7 @@ mod login;
 pub mod model;
 pub mod operations;
 mod pairing_admission;
+pub mod retention;
 pub mod store;
 pub mod telemetry;
 

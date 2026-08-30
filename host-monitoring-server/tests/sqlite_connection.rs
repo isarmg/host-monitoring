@@ -144,3 +144,22 @@ async fn production_connection_config_survives_close_and_reopen() {
 
     std::fs::remove_file(path).expect("remove temporary SQLite database");
 }
+
+#[tokio::test]
+async fn readiness_requires_the_retention_migration_shape() {
+    let path = database_path();
+    let url = database_url(&path);
+    let pool = store::connect(&url).await.expect("open database");
+    store::migrate(&pool).await.expect("migrate database");
+    assert!(store::ready(&pool).await);
+    assert!(store::retention_ready(&pool).await);
+
+    sqlx::query("DROP TABLE agent_metric_hourly_aggregates")
+        .execute(&pool)
+        .await
+        .expect("remove retention table for readiness regression");
+    assert!(!store::retention_ready(&pool).await);
+    assert!(!store::ready(&pool).await);
+    pool.close().await;
+    std::fs::remove_file(path).expect("remove temporary SQLite database");
+}

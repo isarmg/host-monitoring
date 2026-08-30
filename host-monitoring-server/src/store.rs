@@ -34,17 +34,33 @@ pub async fn migrate(pool: &SqlitePool) -> anyhow::Result<()> {
 }
 
 pub async fn ready(pool: &SqlitePool) -> bool {
-    sqlx::query_scalar::<_, i64>(
+    let tables = sqlx::query_scalar::<_, i64>(
         "SELECT COUNT(*) FROM sqlite_master \
          WHERE type='table' AND name IN (\
            'monitored_hosts','agent_metric_reports','agent_credentials',\
            'agent_instance_invites','agent_pairing_requests','audit_events',\
-           'auth_users','auth_sessions','auth_session_csrf_tokens'\
+           'auth_users','auth_sessions','auth_session_csrf_tokens',\
+           'agent_metric_hourly_aggregates'\
          )",
     )
     .fetch_one(pool)
     .await
-    .is_ok_and(|count| count == 9)
+    .is_ok_and(|count| count == 10);
+    tables && retention_ready(pool).await
+}
+
+pub async fn retention_ready(pool: &SqlitePool) -> bool {
+    sqlx::query_scalar::<_, i64>(
+        "SELECT \
+           EXISTS(SELECT 1 FROM pragma_table_info('agent_metric_reports') \
+                   WHERE name='aggregated_at') \
+           AND EXISTS(SELECT 1 FROM sqlite_master \
+                      WHERE type='table' AND name='agent_metric_hourly_aggregates') \
+           AND (SELECT COUNT(*) FROM pragma_table_info('agent_metric_hourly_aggregates'))=42",
+    )
+    .fetch_one(pool)
+    .await
+    .is_ok_and(|ready| ready == 1)
 }
 
 #[derive(Debug, Clone, sqlx::FromRow)]

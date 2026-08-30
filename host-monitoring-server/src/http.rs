@@ -407,8 +407,9 @@ async fn live(State(state): State<AppState>) -> Response {
 
 async fn ready(State(state): State<AppState>) -> Response {
     let database = store::ready(&state.pool).await;
+    let retention_schema = store::retention_ready(&state.pool).await;
     let telemetry_writer = !state.telemetry.is_closed();
-    let ready = database && telemetry_writer;
+    let ready = database && retention_schema && telemetry_writer;
     (
         if ready {
             StatusCode::OK
@@ -418,6 +419,7 @@ async fn ready(State(state): State<AppState>) -> Response {
         Json(serde_json::json!({
             "status": if ready { "ready" } else { "not-ready" },
             "database": database,
+            "retention_schema": retention_schema,
             "telemetry_writer": telemetry_writer
         })),
     )

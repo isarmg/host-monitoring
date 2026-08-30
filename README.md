@@ -11,6 +11,9 @@ The server and agent communicate over the project's own pairing and report endpo
 not depend on a central runtime or a shared session service.
 Validated reports enter a bounded queue and one batched SQLite writer, so concurrent agents do
 not each compete independently for the database write lock.
+Older scalar reports are compacted into idempotent per-Host UTC-hour aggregates before bounded
+raw deletion. The latest report for every Host is retained, and aggregate rows have an independent
+retention window so neither history table grows without limit.
 
 ## Build
 

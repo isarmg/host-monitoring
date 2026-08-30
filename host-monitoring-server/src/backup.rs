@@ -11,7 +11,8 @@ use uuid::Uuid;
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
 
-const REQUIRED_TABLE_COUNT: i64 = 9;
+const REQUIRED_TABLE_COUNT: i64 = 10;
+const REQUIRED_HOURLY_COLUMN_COUNT: i64 = 42;
 
 pub fn create(database_url: &str, output: &Path) -> anyhow::Result<()> {
     let source = database_path(database_url)?;
@@ -52,7 +53,8 @@ pub fn verify(path: &Path) -> anyhow::Result<()> {
          WHERE type='table' AND name IN (\
            'monitored_hosts','agent_metric_reports','agent_credentials',\
            'agent_instance_invites','agent_pairing_requests','audit_events',\
-           'auth_users','auth_sessions','auth_session_csrf_tokens'\
+           'auth_users','auth_sessions','auth_session_csrf_tokens',\
+           'agent_metric_hourly_aggregates'\
          )",
         [],
         |row| row.get(0),
@@ -60,6 +62,20 @@ pub fn verify(path: &Path) -> anyhow::Result<()> {
     ensure!(
         table_count == REQUIRED_TABLE_COUNT,
         "backup is not a complete Host Monitoring database"
+    );
+    let raw_marker_count: i64 = connection.query_row(
+        "SELECT COUNT(*) FROM pragma_table_info('agent_metric_reports') WHERE name='aggregated_at'",
+        [],
+        |row| row.get(0),
+    )?;
+    let hourly_column_count: i64 = connection.query_row(
+        "SELECT COUNT(*) FROM pragma_table_info('agent_metric_hourly_aggregates')",
+        [],
+        |row| row.get(0),
+    )?;
+    ensure!(
+        raw_marker_count == 1 && hourly_column_count == REQUIRED_HOURLY_COLUMN_COUNT,
+        "backup telemetry retention schema is incomplete"
     );
     Ok(())
 }
@@ -280,6 +296,12 @@ mod tests {
             .execute_batch(include_str!("../migrations/0003_browser_sessions.sql"))
             .unwrap();
         connection
+            .execute_batch(include_str!("../migrations/0004_pairing_admission.sql"))
+            .unwrap();
+        connection
+            .execute_batch(include_str!("../migrations/0005_telemetry_retention.sql"))
+            .unwrap();
+        connection
             .execute_batch(
                 "CREATE TABLE parents(id INTEGER PRIMARY KEY);\
                  CREATE TABLE children(\
@@ -348,6 +370,26 @@ mod tests {
             .execute("CREATE TABLE unrelated(id INTEGER)", [])
             .unwrap();
         assert!(verify(&wrong).is_err());
+
+        let legacy = directory.path().join("legacy.sqlite3");
+        let connection = Connection::open(&legacy).unwrap();
+        connection
+            .execute_batch(include_str!("../migrations/0001_host_monitoring.sql"))
+            .unwrap();
+        connection
+            .execute_batch(include_str!("../migrations/0002_auth_users.sql"))
+            .unwrap();
+        connection
+            .execute_batch(include_str!("../migrations/0003_browser_sessions.sql"))
+            .unwrap();
+        connection
+            .execute_batch(include_str!("../migrations/0004_pairing_admission.sql"))
+            .unwrap();
+        drop(connection);
+        assert!(
+            verify(&legacy).is_err(),
+            "a pre-retention schema must not pass backup verification"
+        );
     }
 
     #[test]

@@ -28,6 +28,13 @@ HOST_MONITORING_TELEMETRY_FLUSH_MILLISECONDS=25
 HOST_MONITORING_TELEMETRY_ENQUEUE_WAIT_MILLISECONDS=10
 HOST_MONITORING_TELEMETRY_REQUEST_TIMEOUT_MILLISECONDS=10000
 HOST_MONITORING_TELEMETRY_SHUTDOWN_DRAIN_MILLISECONDS=15000
+HOST_MONITORING_RAW_RETENTION_DAYS=7
+HOST_MONITORING_AGGREGATE_RETENTION_DAYS=365
+HOST_MONITORING_RETENTION_INTERVAL_SECONDS=300
+HOST_MONITORING_RETENTION_BATCH_SIZE=256
+HOST_MONITORING_RETENTION_MAX_TRANSACTIONS_PER_RUN=12
+HOST_MONITORING_RETENTION_MAX_RUN_MILLISECONDS=2000
+HOST_MONITORING_RETENTION_YIELD_MILLISECONDS=10
 ```
 
 Then:
@@ -63,3 +70,19 @@ even if SQLite itself is still reachable.
 Configuration is bounded even when overridden: queue capacity is at most 1,024 reports, batch
 size at most 512 and no larger than the queue, flush latency at most 1 second, enqueue wait at most
 250 ms, total request time at most 30 seconds, and shutdown drain at most 60 seconds.
+
+Raw scalar telemetry is retained for 7 days by default. Older non-latest reports are folded into
+per-Host UTC-hour rows containing the report count, observed interval and the non-NULL count,
+minimum, maximum and average of every scalar metric. The aggregate transaction marks exactly the
+raw rows it includes; only after that transaction commits does a separate bounded transaction
+delete marked rows. A crash between those phases therefore cannot lose or double-count data, and
+the report referenced by `monitored_hosts.latest_report_id` is never aggregated or deleted.
+Hourly aggregates have their own 365-day retention window.
+
+One serial maintenance task runs immediately after startup and then every five minutes. A run uses
+at most twelve short `BEGIN IMMEDIATE` transactions, processes at most 256 rows per transaction, yields
+between productive transactions and stops after 2 seconds. Individual failures are logged and
+retried on a later tick without stopping the service. Shutdown cancels any in-progress run and
+waits for the task. Runtime overrides remain bounded: raw retention is 1-365 days, aggregate
+retention must be longer and is at most 3,650 days, batch size is at most 512, a run uses at most
+30 transactions and 10 seconds, and the periodic interval is at most 24 hours.

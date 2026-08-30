@@ -3,6 +3,7 @@ use std::{env, net::SocketAddr, time::Duration};
 use clap::{Parser, Subcommand};
 
 use crate::auth::{Auth, CookieMode};
+use crate::retention::RetentionConfig;
 use crate::telemetry::TelemetryWriterConfig;
 
 #[derive(Debug, Parser)]
@@ -72,6 +73,7 @@ pub struct ValidatedConfig {
     pub bootstrap_admin_email: String,
     pub bootstrap_admin_password: Option<String>,
     pub telemetry: TelemetryWriterConfig,
+    pub retention: RetentionConfig,
 }
 
 impl ValidatedConfig {
@@ -113,6 +115,24 @@ impl ValidatedConfig {
                 15_000,
             )?),
         )?;
+        let retention = RetentionConfig::new(
+            parse_days("HOST_MONITORING_RAW_RETENTION_DAYS", 7)?,
+            parse_days("HOST_MONITORING_AGGREGATE_RETENTION_DAYS", 365)?,
+            Duration::from_secs(parse_u64(
+                "HOST_MONITORING_RETENTION_INTERVAL_SECONDS",
+                300,
+            )?),
+            parse_usize("HOST_MONITORING_RETENTION_BATCH_SIZE", 256)?,
+            parse_usize("HOST_MONITORING_RETENTION_MAX_TRANSACTIONS_PER_RUN", 12)?,
+            Duration::from_millis(parse_u64(
+                "HOST_MONITORING_RETENTION_MAX_RUN_MILLISECONDS",
+                2_000,
+            )?),
+            Duration::from_millis(parse_u64(
+                "HOST_MONITORING_RETENTION_YIELD_MILLISECONDS",
+                10,
+            )?),
+        )?;
         Ok(Self {
             bind,
             database_url,
@@ -123,6 +143,7 @@ impl ValidatedConfig {
             ),
             bootstrap_admin_password: env::var("HOST_MONITORING_BOOTSTRAP_ADMIN_PASSWORD").ok(),
             telemetry,
+            retention,
         })
     }
 }
@@ -144,6 +165,14 @@ fn parse_u64(name: &str, default: u64) -> anyhow::Result<u64> {
 fn parse_usize(name: &str, default: usize) -> anyhow::Result<usize> {
     usize::try_from(parse_u64(name, default as u64)?)
         .map_err(|_| anyhow::anyhow!("{name} is too large for this platform"))
+}
+
+fn parse_days(name: &str, default: u64) -> anyhow::Result<Duration> {
+    let days = parse_u64(name, default)?;
+    let seconds = days
+        .checked_mul(24 * 60 * 60)
+        .ok_or_else(|| anyhow::anyhow!("{name} is too large"))?;
+    Ok(Duration::from_secs(seconds))
 }
 
 fn parse_bool(name: &str, default: bool) -> anyhow::Result<bool> {

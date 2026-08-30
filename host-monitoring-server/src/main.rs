@@ -3,6 +3,7 @@ use host_monitoring_server::{
     backup,
     config::{Cli, Command},
     http::{AppState, router},
+    retention::RetentionMaintenance,
     store,
 };
 
@@ -31,6 +32,8 @@ async fn main() -> anyhow::Result<()> {
             )
             .await?;
             let listener = tokio::net::TcpListener::bind(config.bind).await?;
+            let (_, retention_maintenance) =
+                RetentionMaintenance::start(pool.clone(), config.retention);
             let (state, telemetry_writer) =
                 AppState::with_telemetry_config(pool, config.auth, config.telemetry);
             tracing::info!(bind=%config.bind, "host-monitoring server ready");
@@ -40,8 +43,10 @@ async fn main() -> anyhow::Result<()> {
             )
             .with_graceful_shutdown(shutdown())
             .await;
+            let retention_result = retention_maintenance.shutdown().await;
             let drain_result = telemetry_writer.shutdown().await;
             server_result?;
+            retention_result?;
             drain_result?;
         }
         Command::Migrate(database) => {
@@ -88,12 +93,17 @@ async fn main() -> anyhow::Result<()> {
             let config = host_monitoring_server::config::ValidatedConfig::from_runtime()?;
             let pool = store::connect(&config.database_url).await?;
             let database_ready = store::ready(&pool).await;
+            let retention_ready = store::retention_ready(&pool).await;
             println!(
-                "{{\"status\":\"{}\",\"bind\":\"{}\",\"database_ready\":{database_ready}}}",
-                if database_ready { "ok" } else { "degraded" },
+                "{{\"status\":\"{}\",\"bind\":\"{}\",\"database_ready\":{database_ready},\"retention_ready\":{retention_ready}}}",
+                if database_ready && retention_ready {
+                    "ok"
+                } else {
+                    "degraded"
+                },
                 config.bind
             );
-            if !database_ready {
+            if !database_ready || !retention_ready {
                 anyhow::bail!("database is not ready");
             }
         }

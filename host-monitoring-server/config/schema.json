@@ -12,6 +12,13 @@
     "telemetry_flush_milliseconds": { "type": "integer", "minimum": 1, "maximum": 1000, "default": 25 },
     "telemetry_enqueue_wait_milliseconds": { "type": "integer", "minimum": 1, "maximum": 250, "default": 10 },
     "telemetry_request_timeout_milliseconds": { "type": "integer", "minimum": 100, "maximum": 30000, "default": 10000 },
-    "telemetry_shutdown_drain_milliseconds": { "type": "integer", "minimum": 100, "maximum": 60000, "default": 15000 }
+    "telemetry_shutdown_drain_milliseconds": { "type": "integer", "minimum": 100, "maximum": 60000, "default": 15000 },
+    "raw_retention_days": { "type": "integer", "minimum": 1, "maximum": 365, "default": 7 },
+    "aggregate_retention_days": { "type": "integer", "minimum": 2, "maximum": 3650, "default": 365 },
+    "retention_interval_seconds": { "type": "integer", "minimum": 1, "maximum": 86400, "default": 300 },
+    "retention_batch_size": { "type": "integer", "minimum": 1, "maximum": 512, "default": 256 },
+    "retention_max_transactions_per_run": { "type": "integer", "minimum": 3, "maximum": 30, "default": 12 },
+    "retention_max_run_milliseconds": { "type": "integer", "minimum": 100, "maximum": 10000, "default": 2000 },
+    "retention_yield_milliseconds": { "type": "integer", "minimum": 1, "maximum": 100, "default": 10 }
   }
 }
