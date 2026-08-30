@@ -19,12 +19,9 @@ impl Fixture {
         let state_dir = root.join("state");
         let config_path = root.join("config.json");
         let mut config = AgentConfig::default();
-        config.endpoint =
-            "http://192.0.2.10:1/api/modules/host-monitoring/host-m-agent/v1/report".into();
-        config.pairing_endpoint = Some(
-            "https://192.0.2.10:1/api/modules/host-monitoring/host-m-agent/v1/pairing-requests"
-                .into(),
-        );
+        config.endpoint = "http://192.0.2.10:1/api/host-m-agent/v1/report".into();
+        config.pairing_endpoint =
+            Some("https://192.0.2.10:1/api/host-m-agent/v1/pairing-requests".into());
         config.request_timeout_seconds = 1;
         config.state_dir = state_dir.clone();
         config.allow_insecure_http = false;

@@ -242,27 +242,33 @@ pub fn router(state: AppState, static_dir: PathBuf) -> Router {
             "/api/monitoring/managed-instances/{host_id}",
             axum::routing::patch(update_remark).delete(delete_host),
         )
-        .route("/api/host-m-agent/v1/activate-admin", post(activate_admin))
+        .route(
+            host_protocol::AGENT_ADMIN_ACTIVATE_PATH,
+            post(activate_admin),
+        )
         .layer(DefaultBodyLimit::max(16 * 1024))
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
             console_admission,
         ));
     let agent = Router::new()
-        .route("/api/host-m-agent/v1/report", post(report))
+        .route(host_protocol::AGENT_REPORT_PATH, post(report))
         .route(
-            "/api/host-m-agent/v1/pairing-requests",
+            host_protocol::AGENT_PAIRING_REQUESTS_PATH,
             post(create_pairing),
         )
         .route(
-            "/api/host-m-agent/v1/pairing-requests/{request_id}",
+            host_protocol::AGENT_PAIRING_REQUEST_PATH,
             get(pairing_public),
         )
         .route(
-            "/api/host-m-agent/v1/pairing-requests/{request_id}/status",
+            host_protocol::AGENT_PAIRING_STATUS_PATH,
             post(pairing_status),
         )
-        .route("/api/host-m-agent/v1/activate", post(activate_capability))
+        .route(
+            host_protocol::AGENT_ACTIVATE_PATH,
+            post(activate_capability),
+        )
         .layer(DefaultBodyLimit::max(AGENT_REPORT_MAX_BODY_BYTES));
     Router::new()
         .route("/health", get(live))
@@ -651,7 +657,10 @@ async fn activate(
 }
 
 fn activation_url(request_id: uuid::Uuid) -> String {
-    format!("/activate/{request_id}")
+    format!(
+        "{}{request_id}",
+        host_protocol::BROWSER_ACTIVATION_PATH_PREFIX
+    )
 }
 
 async fn report(
@@ -941,7 +950,7 @@ mod tests {
             "token_hash": nonce.to_string().repeat(64),
             "polling_secret_hash": if nonce == 'a' { "b".repeat(64) } else { "c".repeat(64) }
         });
-        let mut request = Request::post("/api/host-m-agent/v1/pairing-requests")
+        let mut request = Request::post(host_protocol::AGENT_PAIRING_REQUESTS_PATH)
             .header(header::CONTENT_TYPE, "application/json")
             .body(Body::from(body.to_string()))
             .unwrap();
@@ -962,7 +971,7 @@ mod tests {
     }
 
     #[test]
-    fn pairing_activation_url_targets_the_dynamic_host_module() {
+    fn pairing_activation_url_targets_the_current_application() {
         let request_id = uuid::Uuid::parse_str("00000000-0000-4000-8000-000000000001").unwrap();
         assert_eq!(
             activation_url(request_id),

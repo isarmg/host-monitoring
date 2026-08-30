@@ -36,7 +36,11 @@ pub(super) fn validate_activation_url_request(
         || url.host_str().map(str::to_ascii_lowercase)
             != pairing.host_str().map(str::to_ascii_lowercase)
         || url.port_or_known_default() != pairing.port_or_known_default()
-        || url.path() != format!("/modules/host-monitoring/activate/{request_id}")
+        || url.path()
+            != format!(
+                "{}{request_id}",
+                host_protocol::BROWSER_ACTIVATION_PATH_PREFIX
+            )
     {
         bail!("stored activation URL does not match the pending pairing request");
     }
@@ -52,16 +56,16 @@ pub(super) fn resolve_activation_url(
         Ok(url) => url,
         Err(_) => base
             .join(activation_url)
-            .context("invalid activation URL returned by UnionC")?,
+            .context("invalid activation URL returned by Host Monitoring")?,
     };
     if !url.username().is_empty() || url.password().is_some() {
-        bail!("UnionC returned an activation URL containing credentials");
+        bail!("Host Monitoring returned an activation URL containing credentials");
     }
     match url.scheme() {
         "https" => {}
         "http" if crate::tray_support::is_loopback_host(url.host_str()) => {}
-        "http" => bail!("UnionC returned an insecure non-loopback activation URL"),
-        scheme => bail!("UnionC returned an unsupported activation URL scheme: {scheme}"),
+        "http" => bail!("Host Monitoring returned an insecure non-loopback activation URL"),
+        scheme => bail!("Host Monitoring returned an unsupported activation URL scheme: {scheme}"),
     }
     Ok(url.to_string())
 }

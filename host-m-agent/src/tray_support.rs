@@ -550,23 +550,17 @@ mod tests {
     #[test]
     fn browser_url_allows_activation_paths_but_not_unsafe_schemes() {
         assert!(
-            validate_browser_url(
-                "https://host-monitoring.example/modules/host-monitoring/activate/id?view=1#pair"
-            )
-            .is_ok()
+            validate_browser_url("https://host-monitoring.example/activate/id?view=1#pair").is_ok()
         );
-        assert!(
-            validate_browser_url("http://localhost:3001/modules/host-monitoring/activate/id")
-                .is_ok()
-        );
+        assert!(validate_browser_url("http://localhost:3001/activate/id").is_ok());
         assert!(validate_browser_url("javascript:alert(1)").is_err());
         assert!(validate_browser_url("http://example.test/activate").is_err());
         assert!(browser_url_matches_server_origin(
-            "https://host-monitoring.example/modules/host-monitoring/activate/id",
+            "https://host-monitoring.example/activate/id",
             "https://host-monitoring.example"
         ));
         assert!(browser_url_matches_server_origin(
-            "https://host-monitoring.example:443/modules/host-monitoring/activate/id",
+            "https://host-monitoring.example:443/activate/id",
             "https://host-monitoring.example/console"
         ));
         assert!(!browser_url_matches_server_origin(
