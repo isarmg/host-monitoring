@@ -1,4 +1,9 @@
-use std::{collections::HashMap, net::SocketAddr, sync::Arc, time::Instant};
+use std::{
+    collections::HashMap,
+    net::SocketAddr,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use axum::{
     Json, Router,
@@ -34,7 +39,7 @@ pub struct AppState {
     pub auth: crate::auth::Auth,
     login_admission: crate::login::LoginAdmission,
     pairing_admission: crate::pairing_admission::PairingAdmission,
-    report_buckets: Arc<Mutex<HashMap<String, TokenBucket>>>,
+    report_buckets: Arc<Mutex<ReportBuckets>>,
 }
 
 impl AppState {
@@ -44,7 +49,7 @@ impl AppState {
             auth,
             login_admission: crate::login::LoginAdmission::production(),
             pairing_admission: crate::pairing_admission::PairingAdmission::production(),
-            report_buckets: Arc::new(Mutex::new(HashMap::new())),
+            report_buckets: Arc::new(Mutex::new(ReportBuckets::production())),
         }
     }
 
@@ -59,7 +64,7 @@ impl AppState {
             auth,
             login_admission,
             pairing_admission: crate::pairing_admission::PairingAdmission::production(),
-            report_buckets: Arc::new(Mutex::new(HashMap::new())),
+            report_buckets: Arc::new(Mutex::new(ReportBuckets::production())),
         }
     }
 
@@ -74,27 +79,117 @@ impl AppState {
             auth,
             login_admission: crate::login::LoginAdmission::production(),
             pairing_admission,
-            report_buckets: Arc::new(Mutex::new(HashMap::new())),
+            report_buckets: Arc::new(Mutex::new(ReportBuckets::production())),
         }
     }
 }
 
+const REPORT_BUCKET_BURST: f64 = 64.0;
+const REPORT_BUCKET_REFILL_PER_SECOND: f64 = 16.0;
+const REPORT_BUCKET_CAPACITY: usize = 16_384;
+const REPORT_BUCKET_TTL: Duration = Duration::from_secs(15 * 60);
+
 struct TokenBucket {
     tokens: f64,
     updated: Instant,
+    last_seen: Instant,
 }
 
 impl TokenBucket {
-    fn allow(&mut self) -> bool {
-        let now = Instant::now();
-        self.tokens =
-            (self.tokens + now.duration_since(self.updated).as_secs_f64() * 16.0).min(64.0);
+    fn full(now: Instant) -> Self {
+        Self {
+            tokens: REPORT_BUCKET_BURST,
+            updated: now,
+            last_seen: now,
+        }
+    }
+
+    fn tokens_at(&self, now: Instant) -> f64 {
+        (self.tokens
+            + now.saturating_duration_since(self.updated).as_secs_f64()
+                * REPORT_BUCKET_REFILL_PER_SECOND)
+            .min(REPORT_BUCKET_BURST)
+    }
+
+    fn allow_at(&mut self, now: Instant) -> std::result::Result<(), Duration> {
+        self.tokens = self.tokens_at(now);
         self.updated = now;
+        self.last_seen = now;
         if self.tokens < 1.0 {
-            return false;
+            return Err(Duration::from_secs_f64(
+                (1.0 - self.tokens) / REPORT_BUCKET_REFILL_PER_SECOND,
+            ));
         }
         self.tokens -= 1.0;
-        true
+        Ok(())
+    }
+}
+
+struct ReportBuckets {
+    entries: HashMap<String, TokenBucket>,
+    capacity: usize,
+    entry_ttl: Duration,
+}
+
+impl ReportBuckets {
+    fn production() -> Self {
+        Self::new(REPORT_BUCKET_CAPACITY, REPORT_BUCKET_TTL)
+    }
+
+    fn new(capacity: usize, entry_ttl: Duration) -> Self {
+        assert!(capacity > 0);
+        assert!(!entry_ttl.is_zero());
+        Self {
+            entries: HashMap::new(),
+            capacity,
+            entry_ttl,
+        }
+    }
+
+    fn allow(&mut self, host_id: &str) -> std::result::Result<(), Duration> {
+        self.allow_at(host_id, Instant::now())
+    }
+
+    fn allow_at(&mut self, host_id: &str, now: Instant) -> std::result::Result<(), Duration> {
+        self.entries
+            .retain(|_, entry| now.saturating_duration_since(entry.last_seen) < self.entry_ttl);
+        if !self.entries.contains_key(host_id) {
+            self.make_room(now)?;
+            self.entries
+                .insert(host_id.to_owned(), TokenBucket::full(now));
+        }
+        self.entries
+            .get_mut(host_id)
+            .expect("the report bucket exists")
+            .allow_at(now)
+    }
+
+    fn make_room(&mut self, now: Instant) -> std::result::Result<(), Duration> {
+        if self.entries.len() < self.capacity {
+            return Ok(());
+        }
+        let evictable = self
+            .entries
+            .iter()
+            .filter(|(_, entry)| entry.tokens_at(now) >= REPORT_BUCKET_BURST)
+            .min_by_key(|(_, entry)| entry.last_seen)
+            .map(|(host_id, _)| host_id.clone());
+        if let Some(host_id) = evictable {
+            self.entries.remove(&host_id);
+            return Ok(());
+        }
+        let retry = self
+            .entries
+            .values()
+            .map(|entry| {
+                Duration::from_secs_f64(
+                    (REPORT_BUCKET_BURST - entry.tokens_at(now)).max(0.0)
+                        / REPORT_BUCKET_REFILL_PER_SECOND,
+                )
+            })
+            .min()
+            .unwrap_or(self.entry_ttl);
+        Err(retry.max(Duration::from_nanos(1)))
     }
 }
 
@@ -558,18 +653,15 @@ async fn report(
     }
     let metrics = validate_report(&report)?;
     let mut buckets = state.report_buckets.lock().await;
-    let allowed = buckets
-        .entry(report.host.id.clone())
-        .or_insert(TokenBucket {
-            tokens: 64.0,
-            updated: Instant::now(),
-        })
-        .allow();
+    let admission = buckets.allow(&report.host.id);
     drop(buckets);
-    if !allowed {
+    if let Err(delay) = admission {
         return Err(Error::RateLimited {
             message: "agent report rate exceeded",
-            retry_after: 1,
+            retry_after: delay
+                .as_secs()
+                .saturating_add(u64::from(delay.subsec_nanos() != 0))
+                .max(1),
         });
     }
     let result = store::store_report(&state.pool, &report, &credential_hash, &metrics).await;
@@ -831,6 +923,34 @@ mod tests {
             activation_url(request_id),
             "/activate/00000000-0000-4000-8000-000000000001"
         );
+    }
+
+    #[test]
+    fn report_rate_state_is_bounded_expires_and_does_not_reset_depleted_hosts() {
+        let now = Instant::now();
+        let mut buckets = ReportBuckets::new(1, Duration::from_secs(10));
+        for _ in 0..REPORT_BUCKET_BURST as usize {
+            buckets.allow_at("host-a", now).unwrap();
+        }
+        assert!(buckets.allow_at("host-a", now).is_err());
+        assert!(
+            buckets.allow_at("host-b", now).is_err(),
+            "identifier rotation must not evict a depleted active bucket"
+        );
+        assert_eq!(buckets.entries.len(), 1);
+        assert!(buckets.entries.contains_key("host-a"));
+
+        buckets
+            .allow_at("host-b", now + Duration::from_secs(4))
+            .unwrap();
+        assert_eq!(buckets.entries.len(), 1);
+        assert!(buckets.entries.contains_key("host-b"));
+
+        buckets
+            .allow_at("host-c", now + Duration::from_secs(15))
+            .unwrap();
+        assert_eq!(buckets.entries.len(), 1);
+        assert!(buckets.entries.contains_key("host-c"));
     }
 
     #[tokio::test]

@@ -39,3 +39,6 @@ Source, device, request/invite and administrator-account buckets are independent
 expire after inactivity. A single device may hold at most four live pending pairing requests.
 Admission failures return HTTP 429 with `Retry-After`; replaying an identical pairing request is
 idempotent and does not allocate another pending row.
+
+Authenticated telemetry is limited per Host with a bounded 16,384-entry table. Inactive entries
+expire after 15 minutes, and capacity pressure never evicts a depleted bucket to reset its rate.
