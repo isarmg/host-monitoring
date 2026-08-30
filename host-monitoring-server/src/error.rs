@@ -21,10 +21,13 @@ pub enum Error {
     Conflict(String),
     #[error("{0}")]
     UnsupportedMediaType(String),
-    #[error("{0}")]
-    TooManyRequests(String),
     #[error("login rate limit exceeded")]
     LoginRateLimited { retry_after: u64 },
+    #[error("{message}")]
+    RateLimited {
+        message: &'static str,
+        retry_after: u64,
+    },
     #[error("{0}")]
     Unavailable(String),
     #[error("database is unavailable")]
@@ -45,14 +48,16 @@ impl IntoResponse for Error {
             Self::NotFound(_) => StatusCode::NOT_FOUND,
             Self::Conflict(_) => StatusCode::CONFLICT,
             Self::UnsupportedMediaType(_) => StatusCode::UNSUPPORTED_MEDIA_TYPE,
-            Self::TooManyRequests(_) | Self::LoginRateLimited { .. } => {
+            Self::LoginRateLimited { .. } | Self::RateLimited { .. } => {
                 StatusCode::TOO_MANY_REQUESTS
             }
             Self::Unavailable(_) => StatusCode::SERVICE_UNAVAILABLE,
             Self::Database(_) => StatusCode::SERVICE_UNAVAILABLE,
         };
         let retry_after = match &self {
-            Self::LoginRateLimited { retry_after } => Some(*retry_after),
+            Self::LoginRateLimited { retry_after } | Self::RateLimited { retry_after, .. } => {
+                Some(*retry_after)
+            }
             _ => None,
         };
         let message = self.to_string();
@@ -70,6 +75,6 @@ impl IntoResponse for Error {
 
 pub fn database(error: impl Into<anyhow::Error>) -> Error {
     let error = error.into();
-    tracing::warn!(%error, "host-monitoring PostgreSQL operation failed");
+    tracing::warn!(%error, "host-monitoring SQLite operation failed");
     Error::Database(error)
 }

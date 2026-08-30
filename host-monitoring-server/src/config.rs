@@ -1,9 +1,4 @@
-use std::{
-    env,
-    net::{IpAddr, SocketAddr},
-    str::FromStr,
-    time::Duration,
-};
+use std::{env, net::SocketAddr, time::Duration};
 
 use clap::{Parser, Subcommand};
 
@@ -107,10 +102,6 @@ impl ValidatedConfig {
             bootstrap_admin_password: env::var("HOST_MONITORING_BOOTSTRAP_ADMIN_PASSWORD").ok(),
         })
     }
-}
-
-pub fn forwarded_ip(value: &str) -> Option<IpAddr> {
-    IpAddr::from_str(value.split(',').next()?.trim()).ok()
 }
 
 fn required(name: &str) -> anyhow::Result<String> {

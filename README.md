@@ -20,7 +20,6 @@ cargo build --workspace --release
 
 ```text
 HOST_MONITORING_DATABASE_URL=sqlite:///var/lib/isarmg/host-monitoring/db/app.db
-HOST_MONITORING_SESSION_SECRET=<base64 at least 32 bytes>
 HOST_MONITORING_BOOTSTRAP_ADMIN_EMAIL=admin@example.com
 HOST_MONITORING_BOOTSTRAP_ADMIN_PASSWORD=<initial admin password>
 ```
@@ -28,6 +27,10 @@ HOST_MONITORING_BOOTSTRAP_ADMIN_PASSWORD=<initial admin password>
 ```bash
 host-monitoring-server serve
 ```
+
+Browser sessions and CSRF tokens are random, revocable SQLite records. Pairing admission applies
+separate bounded budgets to the real TCP source, device, pairing request/invite and administrator
+account; the service does not trust forwarded-address headers by default.
 
 ## Backup and restore
 

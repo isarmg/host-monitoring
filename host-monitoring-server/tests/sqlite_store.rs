@@ -96,6 +96,51 @@ fn report(host_id: Uuid, collected_at: DateTime<Utc>) -> AgentReport {
 }
 
 #[tokio::test]
+async fn pending_pairings_are_capped_per_device_without_breaking_idempotent_retries() {
+    let path = database_path();
+    let pool = open_database(&path).await;
+    store::migrate(&pool).await.expect("run real migrations");
+    let host_id = Uuid::new_v4();
+    let mut first = None;
+
+    for index in 0..4 {
+        let request = AgentPairingRequest {
+            host: host(host_id, "linux"),
+            token_hash: token_hash(&format!("agent-token-{index}")),
+            polling_secret_hash: token_hash(&format!("polling-secret-{index}")),
+        };
+        let result = store::create_pairing(&pool, &request)
+            .await
+            .expect("create pairing request within device budget");
+        assert!(matches!(
+            result,
+            store::CreatePairingResult::Ready { created: true, .. }
+        ));
+        if index == 0 {
+            first = Some(request);
+        }
+    }
+
+    let rejected = AgentPairingRequest {
+        host: host(host_id, "linux"),
+        token_hash: token_hash("agent-token-over-budget"),
+        polling_secret_hash: token_hash("polling-secret-over-budget"),
+    };
+    assert!(matches!(
+        store::create_pairing(&pool, &rejected).await.unwrap(),
+        store::CreatePairingResult::DeviceAtCapacity
+    ));
+
+    let replay = store::create_pairing(&pool, &first.unwrap())
+        .await
+        .expect("replay existing pairing request");
+    assert!(matches!(
+        replay,
+        store::CreatePairingResult::Ready { created: false, .. }
+    ));
+}
+
+#[tokio::test]
 async fn migrated_sqlite_supports_pair_activate_report_remark_and_delete() {
     let path = database_path();
     let pool = open_database(&path).await;

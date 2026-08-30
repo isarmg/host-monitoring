@@ -33,6 +33,7 @@ pub struct AppState {
     pub pool: sqlx::SqlitePool,
     pub auth: crate::auth::Auth,
     login_admission: crate::login::LoginAdmission,
+    pairing_admission: crate::pairing_admission::PairingAdmission,
     report_buckets: Arc<Mutex<HashMap<String, TokenBucket>>>,
 }
 
@@ -42,6 +43,7 @@ impl AppState {
             pool,
             auth,
             login_admission: crate::login::LoginAdmission::production(),
+            pairing_admission: crate::pairing_admission::PairingAdmission::production(),
             report_buckets: Arc::new(Mutex::new(HashMap::new())),
         }
     }
@@ -56,6 +58,22 @@ impl AppState {
             pool,
             auth,
             login_admission,
+            pairing_admission: crate::pairing_admission::PairingAdmission::production(),
+            report_buckets: Arc::new(Mutex::new(HashMap::new())),
+        }
+    }
+
+    #[cfg(test)]
+    fn with_pairing_admission(
+        pool: sqlx::SqlitePool,
+        auth: crate::auth::Auth,
+        pairing_admission: crate::pairing_admission::PairingAdmission,
+    ) -> Self {
+        Self {
+            pool,
+            auth,
+            login_admission: crate::login::LoginAdmission::production(),
+            pairing_admission,
             report_buckets: Arc::new(Mutex::new(HashMap::new())),
         }
     }
@@ -300,6 +318,9 @@ async fn create_instance(
     Extension(principal): Extension<Principal>,
     Json(request): Json<CreateAgentInstanceRequest>,
 ) -> Result<Response> {
+    state
+        .pairing_admission
+        .check_invite_account(&principal.subject)?;
     let (name, expires) = request.validated()?;
     let (result, activation_code) =
         store::create_invite(&state.pool, &name, expires, &principal.subject)
@@ -356,9 +377,13 @@ async fn cancel_instance(
 
 async fn create_pairing(
     State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
     Json(request): Json<AgentPairingRequest>,
 ) -> Result<Response> {
     validate_pairing(&request)?;
+    state
+        .pairing_admission
+        .check_create(peer.ip(), &request.host.id)?;
     match store::create_pairing(&state.pool, &request)
         .await
         .map_err(database)?
@@ -393,14 +418,24 @@ async fn create_pairing(
         store::CreatePairingResult::Conflict => Err(Error::Conflict(
             "polling secret or agent token is already in use".into(),
         )),
-        store::CreatePairingResult::AtCapacity => Err(Error::TooManyRequests(
-            "too many pending pairing requests".into(),
-        )),
+        store::CreatePairingResult::AtCapacity => Err(Error::RateLimited {
+            message: "too many pending pairing requests",
+            retry_after: 60,
+        }),
+        store::CreatePairingResult::DeviceAtCapacity => Err(Error::RateLimited {
+            message: "too many pending pairing requests for this device",
+            retry_after: 60,
+        }),
     }
 }
 
-async fn pairing_public(State(state): State<AppState>, Path(id): Path<String>) -> Result<Response> {
+async fn pairing_public(
+    State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    Path(id): Path<String>,
+) -> Result<Response> {
     let id = canonical_uuid(&id, "pairing request id")?;
+    state.pairing_admission.check_poll(peer.ip(), id)?;
     let value = store::pairing_public(&state.pool, id)
         .await
         .map_err(database)?
@@ -414,10 +449,12 @@ async fn pairing_public(State(state): State<AppState>, Path(id): Path<String>) -
 
 async fn pairing_status(
     State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
     Path(id): Path<String>,
 ) -> Result<Response> {
     let id = canonical_uuid(&id, "pairing request id")?;
+    state.pairing_admission.check_poll(peer.ip(), id)?;
     let secret = authorization(&headers, "pairing").ok_or(Error::Unauthorized)?;
     if !(32..=256).contains(&secret.len()) || secret.chars().any(char::is_whitespace) {
         return Err(Error::Unauthorized);
@@ -439,25 +476,32 @@ async fn pairing_status(
 
 async fn activate_admin(
     State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
     Extension(principal): Extension<Principal>,
     Json(request): Json<ActivateAgentRequest>,
 ) -> Result<Response> {
-    activate(&state, request, &principal.subject).await
+    state
+        .pairing_admission
+        .check_invite_account(&principal.subject)?;
+    activate(&state, peer.ip(), request, &principal.subject).await
 }
 
 async fn activate_capability(
     State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
     Json(request): Json<ActivateAgentRequest>,
 ) -> Result<Response> {
-    activate(&state, request, "agent-capability").await
+    activate(&state, peer.ip(), request, "agent-capability").await
 }
 
 async fn activate(
     state: &AppState,
+    source: std::net::IpAddr,
     request: ActivateAgentRequest,
     actor: &str,
 ) -> Result<Response> {
     let id = canonical_uuid(&request.request_id, "pairing request id")?;
+    state.pairing_admission.check_activation(source, id)?;
     if request.activation_code.len() > 256
         || request.activation_code.chars().any(char::is_whitespace)
     {
@@ -523,7 +567,10 @@ async fn report(
         .allow();
     drop(buckets);
     if !allowed {
-        return Err(Error::TooManyRequests("agent report rate exceeded".into()));
+        return Err(Error::RateLimited {
+            message: "agent report rate exceeded",
+            retry_after: 1,
+        });
     }
     let result = store::store_report(&state.pool, &report, &credential_hash, &metrics).await;
     let (accepted, received_at) = match result {
@@ -681,6 +728,28 @@ mod tests {
             .0
     }
 
+    async fn app_with_pairing_admission(
+        pairing_admission: crate::pairing_admission::PairingAdmission,
+    ) -> Router {
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        store::migrate(&pool).await.unwrap();
+        let auth = crate::auth::Auth::new(
+            std::time::Duration::from_secs(60),
+            std::time::Duration::from_secs(600),
+            crate::auth::CookieMode::LoopbackDevelopment,
+        )
+        .unwrap();
+        router(AppState::with_pairing_admission(
+            pool,
+            auth,
+            pairing_admission,
+        ))
+    }
+
     async fn app_with_admin_and_admission(
         email: &str,
         password: &str,
@@ -715,6 +784,29 @@ mod tests {
         let mut request = Request::post("/api/v1/auth/login")
             .header(header::CONTENT_TYPE, "application/json")
             .body(body.into())
+            .unwrap();
+        request.extensions_mut().insert(ConnectInfo(
+            peer.parse::<SocketAddr>().expect("test peer address"),
+        ));
+        request
+    }
+
+    fn pairing_request(host_id: uuid::Uuid, peer: &str, nonce: char) -> Request<Body> {
+        let body = serde_json::json!({
+            "host": {
+                "id": host_id,
+                "os": "linux",
+                "os_version": "test",
+                "kernel_version": "test",
+                "arch": "x86_64",
+                "agent_version": env!("CARGO_PKG_VERSION")
+            },
+            "token_hash": nonce.to_string().repeat(64),
+            "polling_secret_hash": if nonce == 'a' { "b".repeat(64) } else { "c".repeat(64) }
+        });
+        let mut request = Request::post("/api/host-m-agent/v1/pairing-requests")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(body.to_string()))
             .unwrap();
         request.extensions_mut().insert(ConnectInfo(
             peer.parse::<SocketAddr>().expect("test peer address"),
@@ -854,6 +946,48 @@ mod tests {
             .parse::<u64>()
             .unwrap();
         assert!((1..=60).contains(&retry_after));
+    }
+
+    #[tokio::test]
+    async fn pairing_source_limit_precedes_sqlite_and_returns_retry_after() {
+        let admission = crate::pairing_admission::PairingAdmission::for_test(
+            1,
+            8,
+            std::time::Duration::from_secs(300),
+        );
+        let app = app_with_pairing_admission(admission).await;
+        let first = app
+            .clone()
+            .oneshot(pairing_request(
+                uuid::Uuid::new_v4(),
+                "192.0.2.50:41000",
+                'a',
+            ))
+            .await
+            .unwrap();
+        assert_eq!(first.status(), StatusCode::CREATED);
+
+        let limited = app
+            .oneshot(pairing_request(
+                uuid::Uuid::new_v4(),
+                "192.0.2.50:41001",
+                'd',
+            ))
+            .await
+            .unwrap();
+        assert_eq!(limited.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert!(
+            limited.headers()[header::RETRY_AFTER]
+                .to_str()
+                .unwrap()
+                .parse::<u64>()
+                .unwrap()
+                >= 1
+        );
+        assert_eq!(
+            body_bytes(limited).await,
+            br#"{"message":"pairing source rate exceeded"}"#
+        );
     }
 
     #[tokio::test]

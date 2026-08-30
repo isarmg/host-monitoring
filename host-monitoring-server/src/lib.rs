@@ -10,6 +10,7 @@ pub mod infrastructure;
 mod login;
 pub mod model;
 pub mod operations;
+mod pairing_admission;
 pub mod store;
 
 use sha2::{Digest, Sha256};

@@ -266,6 +266,7 @@ pub enum CreatePairingResult {
     Expired,
     Conflict,
     AtCapacity,
+    DeviceAtCapacity,
 }
 
 pub async fn create_pairing(
@@ -317,6 +318,18 @@ pub async fn create_pairing(
         tx.commit().await?;
         return Ok(CreatePairingResult::AtCapacity);
     }
+    let requested_host_id = Uuid::parse_str(&request.host.id)?;
+    let pending_for_device: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM agent_pairing_requests \
+         WHERE requested_host_id=? AND status='pending' AND expires_at>datetime('now')",
+    )
+    .bind(requested_host_id)
+    .fetch_one(&mut *tx)
+    .await?;
+    if pending_for_device >= 4 {
+        tx.commit().await?;
+        return Ok(CreatePairingResult::DeviceAtCapacity);
+    }
     let request_id = Uuid::new_v4();
     let created_at = Utc::now();
     let expires_at = created_at + chrono::Duration::minutes(15);
@@ -327,7 +340,7 @@ pub async fn create_pairing(
            VALUES(?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING"#,
     )
     .bind(request_id)
-    .bind(Uuid::parse_str(&request.host.id)?)
+    .bind(requested_host_id)
     .bind(request.host.os.trim())
     .bind(&request.host.os_version)
     .bind(&request.host.kernel_version)
