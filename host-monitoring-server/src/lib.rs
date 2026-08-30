@@ -1,5 +1,6 @@
 pub mod application;
 pub mod auth;
+pub mod backup;
 pub mod cli;
 pub mod config;
 pub mod domain;

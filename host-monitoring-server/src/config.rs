@@ -18,9 +18,9 @@ pub struct Cli {
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
-    /// Apply this project's PostgreSQL migrations, then serve its HTTP API.
+    /// Apply this product's SQLite migrations, then serve its HTTP API.
     Serve,
-    /// Apply only this project's PostgreSQL migrations.
+    /// Apply only this product's SQLite migrations.
     Migrate(Database),
     /// Run a deployment health check against the configured instance.
     Doctor,
@@ -28,11 +28,11 @@ pub enum Command {
     AdminCreate(Database),
     /// Reset an existing local administrator password.
     AdminResetPassword(AdminResetPassword),
-    /// Create a PostgreSQL dump backup.
+    /// Create a verified online SQLite backup without overwriting a file.
     BackupCreate(Backup),
-    /// Verify a PostgreSQL dump backup file.
+    /// Verify SQLite integrity, foreign keys and the product schema.
     BackupVerify(Backup),
-    /// Restore a PostgreSQL dump backup.
+    /// Atomically restore a verified SQLite backup while the service is stopped.
     Restore(Restore),
 }
 

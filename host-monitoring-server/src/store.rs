@@ -34,10 +34,17 @@ pub async fn migrate(pool: &SqlitePool) -> anyhow::Result<()> {
 }
 
 pub async fn ready(pool: &SqlitePool) -> bool {
-    sqlx::query_scalar::<_, i32>("SELECT 1")
-        .fetch_one(pool)
-        .await
-        .is_ok()
+    sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*) FROM sqlite_master \
+         WHERE type='table' AND name IN (\
+           'monitored_hosts','agent_metric_reports','agent_credentials',\
+           'agent_instance_invites','agent_pairing_requests','audit_events',\
+           'auth_users','auth_sessions','auth_session_csrf_tokens'\
+         )",
+    )
+    .fetch_one(pool)
+    .await
+    .is_ok_and(|count| count == 9)
 }
 
 #[derive(Debug, Clone, sqlx::FromRow)]

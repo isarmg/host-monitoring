@@ -66,7 +66,12 @@ async fn production_connection_config_survives_close_and_reopen() {
         .await
         .expect("production connection creates the database");
     assert!(path.is_file());
+    assert!(
+        !store::ready(&pool).await,
+        "an unmigrated database must not report ready"
+    );
     store::migrate(&pool).await.expect("migrate database");
+    assert!(store::ready(&pool).await);
 
     let mut first = pool.acquire().await.expect("acquire first connection");
     let mut second = pool.acquire().await.expect("acquire second connection");

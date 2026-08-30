@@ -28,3 +28,10 @@ HOST_MONITORING_BOOTSTRAP_ADMIN_PASSWORD=<initial admin password>
 ```bash
 host-monitoring-server serve
 ```
+
+## Backup and restore
+
+`backup-create` uses SQLite's online backup API, refuses to overwrite an existing output and
+verifies integrity, foreign keys and the Host Monitoring schema. `backup-verify` performs the same
+checks read-only. Stop the server before `restore`; it reconstructs and verifies the backup beside
+the destination before atomically replacing the database.
