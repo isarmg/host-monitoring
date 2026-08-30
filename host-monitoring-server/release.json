@@ -1,6 +1,8 @@
 {
+  "manifest_format": "host-monitoring-release-v1",
   "application": "host-monitoring",
   "version": "0.7.0",
+  "api_prefix": "/api/v2",
   "schema_revision": 1,
   "schema_sha256": "2f63778e94b345d100c10f8b45b98f06e39590547f6b1d65f9b5b0e7f6989328",
   "target": "x86_64-unknown-linux-gnu"

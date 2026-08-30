@@ -72,6 +72,11 @@ The only current console API uses `POST /api/v2/auth/login`, `POST /api/v2/auth/
 pairing and reporting endpoints are under `/api/v2/agent` and are authenticated with
 their own agent tokens or one-time pairing secrets.
 
+`host-monitoring-server identity` prints the strict binary identity used by release tooling. A
+release must match the exact application version, API prefix, schema revision/fingerprint,
+compilation target and full source revision. Ordinary development builds report `unbound` and are
+not accepted as official release artifacts.
+
 Pairing admission uses the TCP peer address directly; forwarded-address headers are not trusted.
 Source, device, request/invite and administrator-account buckets are independently bounded and
 expire after inactivity. A single device may hold at most four live pending pairing requests.

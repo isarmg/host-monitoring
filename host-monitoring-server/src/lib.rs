@@ -7,6 +7,7 @@ pub mod http;
 mod login;
 pub mod model;
 mod pairing_admission;
+pub mod release_contract;
 pub mod retention;
 pub mod store;
 pub mod telemetry;

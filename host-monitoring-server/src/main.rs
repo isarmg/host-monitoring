@@ -87,6 +87,12 @@ async fn main() -> anyhow::Result<()> {
                 anyhow::bail!("database is not ready");
             }
         }
+        Command::Identity => {
+            println!(
+                "{}",
+                host_monitoring_server::release_contract::current_json()?
+            );
+        }
     }
     Ok(())
 }

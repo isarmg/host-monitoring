@@ -24,6 +24,8 @@ pub enum Command {
     Serve,
     /// Run a deployment health check against the configured instance.
     Doctor,
+    /// Print the exact machine-readable binary release identity.
+    Identity,
     /// Create the initial local administrator in the configured database.
     AdminCreate(Database),
     /// Reset an existing local administrator password.

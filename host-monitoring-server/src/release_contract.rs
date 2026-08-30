@@ -1,0 +1,118 @@
+use anyhow::Context;
+use serde::{Deserialize, Serialize};
+
+use crate::database_schema::{APPLICATION, APPLICATION_VERSION, SCHEMA_REVISION, SCHEMA_SHA256};
+
+pub const RELEASE_MANIFEST_FORMAT: &str = "host-monitoring-release-v1";
+pub const BUILD_TARGET: &str = env!("HOST_MONITORING_BUILD_TARGET");
+pub const SOURCE_REVISION: &str = env!("HOST_MONITORING_SOURCE_REVISION");
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReleaseContract {
+    pub manifest_format: String,
+    pub application: String,
+    pub version: String,
+    pub api_prefix: String,
+    pub schema_revision: i64,
+    pub schema_sha256: String,
+    pub target: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BinaryIdentity {
+    pub manifest_format: String,
+    pub application: String,
+    pub version: String,
+    pub api_prefix: String,
+    pub schema_revision: i64,
+    pub schema_sha256: String,
+    pub target: String,
+    pub source_revision: String,
+}
+
+impl ReleaseContract {
+    pub fn current() -> Self {
+        Self {
+            manifest_format: RELEASE_MANIFEST_FORMAT.to_owned(),
+            application: APPLICATION.to_owned(),
+            version: APPLICATION_VERSION.to_owned(),
+            api_prefix: host_protocol::API_PREFIX.to_owned(),
+            schema_revision: SCHEMA_REVISION,
+            schema_sha256: SCHEMA_SHA256.to_owned(),
+            target: BUILD_TARGET.to_owned(),
+        }
+    }
+}
+
+impl BinaryIdentity {
+    pub fn current() -> anyhow::Result<Self> {
+        let contract = embedded()?;
+        Ok(Self {
+            manifest_format: contract.manifest_format,
+            application: contract.application,
+            version: contract.version,
+            api_prefix: contract.api_prefix,
+            schema_revision: contract.schema_revision,
+            schema_sha256: contract.schema_sha256,
+            target: contract.target,
+            source_revision: SOURCE_REVISION.to_owned(),
+        })
+    }
+
+    pub fn is_release_bound(&self) -> bool {
+        self.source_revision.len() == 40
+            && self
+                .source_revision
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+    }
+}
+
+pub fn parse_exact(input: &str) -> anyhow::Result<ReleaseContract> {
+    let parsed: ReleaseContract =
+        serde_json::from_str(input).context("release contract must be strict JSON")?;
+    anyhow::ensure!(
+        parsed == ReleaseContract::current(),
+        "release contract is not the exact current Host Monitoring contract"
+    );
+    Ok(parsed)
+}
+
+pub fn embedded() -> anyhow::Result<ReleaseContract> {
+    parse_exact(include_str!("../release.json"))
+}
+
+pub fn current_json() -> anyhow::Result<String> {
+    let identity = BinaryIdentity::current()?;
+    serde_json::to_string(&identity).context("serialize current binary identity")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn embedded_contract_is_the_exact_compiled_identity() {
+        assert_eq!(embedded().unwrap(), ReleaseContract::current());
+    }
+
+    #[test]
+    fn other_versions_and_unknown_fields_are_rejected() {
+        let mut other = serde_json::to_value(ReleaseContract::current()).unwrap();
+        other["version"] = serde_json::json!("0.6.0");
+        assert!(parse_exact(&serde_json::to_string(&other).unwrap()).is_err());
+
+        let mut unknown = serde_json::to_value(ReleaseContract::current()).unwrap();
+        unknown["compatibility"] = serde_json::json!(true);
+        assert!(parse_exact(&serde_json::to_string(&unknown).unwrap()).is_err());
+    }
+
+    #[test]
+    fn development_builds_are_explicitly_unbound() {
+        let identity = BinaryIdentity::current().unwrap();
+        assert_eq!(identity.source_revision, SOURCE_REVISION);
+        assert_eq!(identity.is_release_bound(), SOURCE_REVISION != "unbound");
+    }
+}
