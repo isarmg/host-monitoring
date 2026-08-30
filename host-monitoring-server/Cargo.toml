@@ -13,10 +13,8 @@ publish = false
 anyhow = "1"
 argon2 = { version = "0.5", features = ["std"] }
 axum = "0.8"
-base64 = "0.22"
 chrono = { version = "0.4", features = ["clock", "serde"] }
 clap = { version = "4", features = ["derive", "env"] }
-hmac = "0.12"
 http-body-util = "0.1"
 isarmg-auth = "0.1.0"
 mime = "0.3"

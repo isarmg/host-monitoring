@@ -46,6 +46,7 @@ pub struct StoredUser {
     pub email: String,
     pub password_hash: String,
     pub active: bool,
+    pub session_version: i64,
 }
 
 pub async fn find_active_user_by_email(
@@ -54,7 +55,7 @@ pub async fn find_active_user_by_email(
 ) -> anyhow::Result<Option<StoredUser>> {
     let normalized = email.trim().to_lowercase();
     let row = sqlx::query_as::<_, StoredUser>(
-        "SELECT user_id,email,password_hash,active FROM auth_users \
+        "SELECT user_id,email,password_hash,active,session_version FROM auth_users \
          WHERE email=? AND active=true",
     )
     .bind(normalized)

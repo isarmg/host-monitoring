@@ -1,14 +1,32 @@
 import { FormEvent, useEffect, useState } from "react";
-import { login, logout, requestJson } from "./api";
+import { loadSession, login, logout, requestJson } from "./api";
 
 type Host = Record<string, unknown>;
 
 export default function App() {
   const [authenticated, setAuthenticated] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [hosts, setHosts] = useState<Host[]>([]);
   const [email, setEmail] = useState("admin@example.com");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
+
+  useEffect(() => {
+    let cancelled = false;
+    loadSession()
+      .then(() => {
+        if (!cancelled) setAuthenticated(true);
+      })
+      .catch(() => {
+        if (!cancelled) setAuthenticated(false);
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     if (authenticated) {
@@ -23,6 +41,7 @@ export default function App() {
     try {
       await login(email, password);
       setAuthenticated(true);
+      setPassword("");
       setError("");
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "login failed");
@@ -30,10 +49,18 @@ export default function App() {
   };
 
   const leave = async () => {
-    await logout();
-    setAuthenticated(false);
-    setHosts([]);
+    try {
+      await logout();
+      setError("");
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "logout failed");
+    } finally {
+      setAuthenticated(false);
+      setHosts([]);
+    }
   };
+
+  if (loading) return <main>正在加载会话…</main>;
 
   if (!authenticated) {
     return (

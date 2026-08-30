@@ -16,6 +16,11 @@ async fn main() -> anyhow::Result<()> {
     match Cli::parse().command {
         Command::Serve => {
             let config = host_monitoring_server::config::ValidatedConfig::from_runtime()?;
+            if config.auth.uses_insecure_development_cookie() {
+                tracing::warn!(
+                    "HOST_MONITORING_DEVELOPMENT is enabled; using an insecure loopback-only session cookie"
+                );
+            }
             let pool = store::connect(&config.database_url).await?;
             store::migrate(&pool).await?;
             store::ensure_admin_user(
@@ -45,6 +50,7 @@ async fn main() -> anyhow::Result<()> {
         }
         Command::AdminResetPassword(args) => {
             let pool = store::connect(&args.database_url).await?;
+            store::migrate(&pool).await?;
             store::reset_admin_password(&pool, &args.email, &args.password).await?;
             println!(
                 "{{\"status\":\"password-reset\",\"email\":{:?}}}",

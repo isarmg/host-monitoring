@@ -3,7 +3,7 @@ use std::{collections::HashMap, sync::Arc, time::Instant};
 use axum::{
     Json, Router,
     extract::{DefaultBodyLimit, Extension, Path, Query, Request, State},
-    http::{HeaderMap, HeaderValue, StatusCode, header},
+    http::{HeaderMap, HeaderValue, Method, StatusCode, header},
     middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::{get, post},
@@ -132,9 +132,17 @@ async fn console_admission(
     mut request: Request,
     next: Next,
 ) -> Result<Response> {
-    let principal = auth::require_console(request.headers(), &state)?;
+    let principal =
+        auth::require_console(request.headers(), &state, requires_csrf(request.method())).await?;
     request.extensions_mut().insert(principal);
     Ok(next.run(request).await)
+}
+
+fn requires_csrf(method: &Method) -> bool {
+    method == Method::POST
+        || method == Method::PUT
+        || method == Method::PATCH
+        || method == Method::DELETE
 }
 
 #[derive(serde::Deserialize)]
@@ -142,6 +150,14 @@ async fn console_admission(
 struct LoginRequest {
     email: String,
     password: String,
+}
+
+#[derive(serde::Serialize)]
+struct BrowserSessionResponse {
+    authenticated: bool,
+    user_id: String,
+    email: String,
+    csrf_token: String,
 }
 
 async fn login(
@@ -155,35 +171,64 @@ async fn login(
     if !crate::auth::verify_password(&request.password, &user.password_hash) {
         return Err(Error::Unauthorized);
     }
-    let token = state.auth.issue_session(&user.user_id.to_string())?;
-    let cookie = state.auth.session_cookie(&token);
+    let issued = state.auth.issue_session(&state.pool, &user).await?;
+    let cookie = state.auth.session_cookie(&issued.token);
     let value =
         HeaderValue::from_str(&cookie).map_err(|error| Error::BadRequest(error.to_string()))?;
-    Ok((StatusCode::NO_CONTENT, [(header::SET_COOKIE, value)]).into_response())
+    let mut response = (
+        StatusCode::OK,
+        [(header::SET_COOKIE, value)],
+        Json(BrowserSessionResponse {
+            authenticated: true,
+            user_id: user.user_id,
+            email: user.email,
+            csrf_token: issued.csrf_token,
+        }),
+    )
+        .into_response();
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    Ok(response)
 }
 
-async fn logout(State(state): State<AppState>) -> Response {
+async fn logout(
+    State(state): State<AppState>,
+    Extension(principal): Extension<Principal>,
+) -> Result<Response> {
+    state
+        .auth
+        .revoke_session(&state.pool, principal.session_id)
+        .await?;
     let cookie = state.auth.expired_session_cookie();
-    let value = HeaderValue::from_str(&cookie).unwrap_or_else(|_| HeaderValue::from_static(""));
-    (StatusCode::NO_CONTENT, [(header::SET_COOKIE, value)]).into_response()
+    let value =
+        HeaderValue::from_str(&cookie).map_err(|error| Error::BadRequest(error.to_string()))?;
+    let mut response = (StatusCode::NO_CONTENT, [(header::SET_COOKIE, value)]).into_response();
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    Ok(response)
 }
 
 async fn session(
     State(state): State<AppState>,
     Extension(principal): Extension<Principal>,
-) -> Result<Json<serde_json::Value>> {
-    let user = sqlx::query_scalar::<_, String>(
-        "SELECT email FROM auth_users WHERE user_id=? AND active=true",
-    )
-    .bind(&principal.subject)
-    .fetch_one(&state.pool)
-    .await
-    .map_err(|_| Error::Unauthorized)?;
-    Ok(Json(serde_json::json!({
-        "authenticated": true,
-        "user_id": principal.subject,
-        "email": user
-    })))
+) -> Result<Response> {
+    let csrf_token = state
+        .auth
+        .issue_csrf_token(&state.pool, principal.session_id)
+        .await?;
+    let mut response = Json(BrowserSessionResponse {
+        authenticated: true,
+        user_id: principal.subject,
+        email: principal.email,
+        csrf_token,
+    })
+    .into_response();
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    Ok(response)
 }
 
 async fn live(State(state): State<AppState>) -> Response {
@@ -579,8 +624,12 @@ mod tests {
             .await
             .unwrap();
         store::migrate(&pool).await.unwrap();
-        let auth =
-            crate::auth::Auth::new(vec![7; 32], std::time::Duration::from_secs(60), false).unwrap();
+        let auth = crate::auth::Auth::new(
+            std::time::Duration::from_secs(60),
+            std::time::Duration::from_secs(600),
+            crate::auth::CookieMode::LoopbackDevelopment,
+        )
+        .unwrap();
         router(AppState::new(pool, auth))
     }
 
@@ -594,8 +643,12 @@ mod tests {
         store::ensure_admin_user(&pool, email, Some(password))
             .await
             .unwrap();
-        let auth =
-            crate::auth::Auth::new(vec![7; 32], std::time::Duration::from_secs(60), false).unwrap();
+        let auth = crate::auth::Auth::new(
+            std::time::Duration::from_secs(60),
+            std::time::Duration::from_secs(600),
+            crate::auth::CookieMode::LoopbackDevelopment,
+        )
+        .unwrap();
         router(AppState::new(pool, auth))
     }
 
@@ -648,7 +701,17 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+        assert_eq!(response.status(), StatusCode::OK);
         assert!(response.headers().contains_key(header::SET_COOKIE));
+    }
+
+    #[test]
+    fn csrf_is_required_for_every_unsafe_console_method() {
+        for method in [Method::POST, Method::PUT, Method::PATCH, Method::DELETE] {
+            assert!(requires_csrf(&method));
+        }
+        for method in [Method::GET, Method::HEAD, Method::OPTIONS] {
+            assert!(!requires_csrf(&method));
+        }
     }
 }

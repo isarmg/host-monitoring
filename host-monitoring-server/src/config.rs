@@ -5,10 +5,9 @@ use std::{
     time::Duration,
 };
 
-use base64::{Engine as _, engine::general_purpose::STANDARD};
 use clap::{Parser, Subcommand};
 
-use crate::auth::Auth;
+use crate::auth::{Auth, CookieMode};
 
 #[derive(Debug, Parser)]
 #[command(name = "host-monitoring-server", version, about)]
@@ -84,18 +83,23 @@ impl ValidatedConfig {
         if !database_url.starts_with("sqlite:") && !database_url.starts_with("sqlite://") {
             anyhow::bail!("HOST_MONITORING_DATABASE_URL must be a SQLite URL");
         }
-        let session_secret = STANDARD
-            .decode(required("HOST_MONITORING_SESSION_SECRET")?)
-            .map_err(|_| anyhow::anyhow!("HOST_MONITORING_SESSION_SECRET must be base64"))?;
-        let session_ttl =
-            Duration::from_secs(parse_u64("HOST_MONITORING_SESSION_TTL_SECONDS", 43_200)?);
-        let cookie_secure = parse_bool("HOST_MONITORING_SESSION_COOKIE_SECURE", false)?;
+        let bind: SocketAddr = value("HOST_MONITORING_BIND", "127.0.0.1:18105")
+            .parse()
+            .map_err(|_| anyhow::anyhow!("HOST_MONITORING_BIND must be a socket address"))?;
+        let development = parse_bool("HOST_MONITORING_DEVELOPMENT", false)?;
+        let cookie_mode = cookie_mode(bind, development)?;
+        let idle_ttl = Duration::from_secs(parse_u64(
+            "HOST_MONITORING_SESSION_IDLE_TTL_SECONDS",
+            1_800,
+        )?);
+        let absolute_ttl = Duration::from_secs(parse_u64(
+            "HOST_MONITORING_SESSION_ABSOLUTE_TTL_SECONDS",
+            43_200,
+        )?);
         Ok(Self {
-            bind: value("HOST_MONITORING_BIND", "127.0.0.1:18105")
-                .parse()
-                .map_err(|_| anyhow::anyhow!("HOST_MONITORING_BIND must be a socket address"))?,
+            bind,
             database_url,
-            auth: Auth::new(session_secret, session_ttl, cookie_secure)?,
+            auth: Auth::new(idle_ttl, absolute_ttl, cookie_mode)?,
             bootstrap_admin_email: value(
                 "HOST_MONITORING_BOOTSTRAP_ADMIN_EMAIL",
                 "admin@example.com",
@@ -127,4 +131,33 @@ fn parse_bool(name: &str, default: bool) -> anyhow::Result<bool> {
     value(name, if default { "true" } else { "false" })
         .parse()
         .map_err(|_| anyhow::anyhow!("{name} must be true or false"))
+}
+
+fn cookie_mode(bind: SocketAddr, development: bool) -> anyhow::Result<CookieMode> {
+    if development && !bind.ip().is_loopback() {
+        anyhow::bail!("HOST_MONITORING_DEVELOPMENT requires a loopback HOST_MONITORING_BIND");
+    }
+    Ok(if development {
+        CookieMode::LoopbackDevelopment
+    } else {
+        CookieMode::Production
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn insecure_development_cookie_mode_is_explicit_and_loopback_only() {
+        assert_eq!(
+            cookie_mode("127.0.0.1:18105".parse().unwrap(), false).unwrap(),
+            CookieMode::Production
+        );
+        assert_eq!(
+            cookie_mode("127.0.0.1:18105".parse().unwrap(), true).unwrap(),
+            CookieMode::LoopbackDevelopment
+        );
+        assert!(cookie_mode("0.0.0.0:18105".parse().unwrap(), true).is_err());
+    }
 }
