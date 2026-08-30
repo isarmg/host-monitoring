@@ -5,6 +5,8 @@ export type BrowserSession = {
   csrf_token: string;
 };
 
+export const CURRENT_API_PREFIX = "/api/v2";
+
 let csrfToken: string | null = null;
 let reloadPromise: Promise<BrowserSession> | null = null;
 
@@ -42,7 +44,7 @@ export async function requestJson<T>(
 export async function login(email: string, password: string) {
   return rememberSession(
     await requestJson<BrowserSession>(
-      "/api/v1/auth/login",
+      `${CURRENT_API_PREFIX}/auth/login`,
       {
         method: "POST",
         body: JSON.stringify({ email, password }),
@@ -54,7 +56,7 @@ export async function login(email: string, password: string) {
 
 export function loadSession(): Promise<BrowserSession> {
   if (!reloadPromise) {
-    reloadPromise = requestJson<BrowserSession>("/api/v1/auth/session")
+    reloadPromise = requestJson<BrowserSession>(`${CURRENT_API_PREFIX}/auth/session`)
       .then(rememberSession)
       .finally(() => {
         reloadPromise = null;
@@ -65,7 +67,7 @@ export function loadSession(): Promise<BrowserSession> {
 
 export async function logout() {
   try {
-    await requestJson("/api/v1/auth/logout", { method: "POST" });
+    await requestJson(`${CURRENT_API_PREFIX}/auth/logout`, { method: "POST" });
   } finally {
     csrfToken = null;
     reloadPromise = null;

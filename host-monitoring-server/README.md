@@ -67,8 +67,9 @@ both match. Older, metadata-free or structurally changed databases are rejected 
 their bytes. Migration, version upgrade, backup and restore are responsibilities of the independent
 upgrade tool and are intentionally absent from this binary.
 
-The local console API uses `POST /api/v1/auth/login`, `POST /api/v1/auth/logout` and
-`GET /api/v1/auth/session`. Agent pairing and reporting endpoints are authenticated with
+The only current console API uses `POST /api/v2/auth/login`, `POST /api/v2/auth/logout` and
+`GET /api/v2/auth/session`; monitoring endpoints share the same `/api/v2` namespace. Agent
+pairing and reporting endpoints are under `/api/v2/agent` and are authenticated with
 their own agent tokens or one-time pairing secrets.
 
 Pairing admission uses the TCP peer address directly; forwarded-address headers are not trusted.

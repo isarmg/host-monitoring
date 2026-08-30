@@ -1011,12 +1011,12 @@ mod tests {
     #[test]
     fn derives_pairing_endpoint_from_the_current_report_endpoint() {
         let config = AgentConfig {
-            endpoint: "https://host-monitoring.example/prefix/api/host-m-agent/v1/report".into(),
+            endpoint: "https://host-monitoring.example/prefix/api/v2/agent/report".into(),
             ..AgentConfig::default()
         };
         assert_eq!(
             config.pairing_endpoint(),
-            "https://host-monitoring.example/prefix/api/host-m-agent/v1/pairing-requests"
+            "https://host-monitoring.example/prefix/api/v2/agent/pairing-requests"
         );
     }
 
@@ -1029,7 +1029,7 @@ mod tests {
         root.apply_pair_options().unwrap();
         assert_eq!(
             root.pairing_endpoint.as_deref(),
-            Some("https://host-monitoring.example/api/host-m-agent/v1/pairing-requests")
+            Some("https://host-monitoring.example/api/v2/agent/pairing-requests")
         );
 
         let mut path = AgentConfig {
@@ -1053,19 +1053,18 @@ mod tests {
     #[test]
     fn insecure_override_never_applies_to_browser_pairing() {
         assert!(
-            validate_endpoint("http://192.0.2.10/api/host-m-agent/v1/report", true).is_ok(),
+            validate_endpoint("http://192.0.2.10/api/v2/agent/report", true).is_ok(),
             "the explicit override still permits telemetry on a trusted isolated network"
         );
         assert!(
-            validate_pairing_endpoint("http://192.0.2.10/api/host-m-agent/v1/pairing-requests")
-                .is_err(),
+            validate_pairing_endpoint("http://192.0.2.10/api/v2/agent/pairing-requests").is_err(),
             "the same override must never expose browser pairing over remote plaintext HTTP"
         );
 
         let split_endpoints = AgentConfig {
-            endpoint: "http://192.0.2.10/api/host-m-agent/v1/report".into(),
+            endpoint: "http://192.0.2.10/api/v2/agent/report".into(),
             pairing_endpoint: Some(
-                "https://host-monitoring.example/api/host-m-agent/v1/pairing-requests".into(),
+                "https://host-monitoring.example/api/v2/agent/pairing-requests".into(),
             ),
             allow_insecure_http: true,
             ..AgentConfig::default()
@@ -1075,19 +1074,19 @@ mod tests {
 
     #[test]
     fn remote_plaintext_pairing_requires_a_persisted_transport_policy() {
-        let remote = "http://192.0.2.10/api/host-m-agent/v1/report";
+        let remote = "http://192.0.2.10/api/v2/agent/report";
         assert!(validate_persisted_pairing_transport(remote, false).is_err());
         assert!(validate_persisted_pairing_transport(remote, true).is_ok());
         assert!(
             validate_persisted_pairing_transport(
-                "http://127.0.0.1:8081/api/host-m-agent/v1/report",
+                "http://127.0.0.1:8081/api/v2/agent/report",
                 false
             )
             .is_ok()
         );
         assert!(
             validate_persisted_pairing_transport(
-                "https://host-monitoring.example/api/host-m-agent/v1/report",
+                "https://host-monitoring.example/api/v2/agent/report",
                 false
             )
             .is_ok()
@@ -1128,9 +1127,9 @@ mod tests {
     #[test]
     fn pairing_endpoint_rejects_query_and_fragment_without_restricting_telemetry() {
         for endpoint in [
-            "https://host-monitoring.example/api/host-m-agent/v1/pairing-requests?tenant=one",
-            "https://host-monitoring.example/api/host-m-agent/v1/pairing-requests#bootstrap",
-            "https://host-monitoring.example/api/host-m-agent/v1/pairing-requests?#",
+            "https://host-monitoring.example/api/v2/agent/pairing-requests?tenant=one",
+            "https://host-monitoring.example/api/v2/agent/pairing-requests#bootstrap",
+            "https://host-monitoring.example/api/v2/agent/pairing-requests?#",
         ] {
             let config = AgentConfig {
                 pairing_endpoint: Some(endpoint.into()),

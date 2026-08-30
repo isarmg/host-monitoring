@@ -1,5 +1,5 @@
 import { FormEvent, useEffect, useState } from "react";
-import { loadSession, login, logout, requestJson } from "./api";
+import { CURRENT_API_PREFIX, loadSession, login, logout, requestJson } from "./api";
 
 type Host = Record<string, unknown>;
 
@@ -30,7 +30,7 @@ export default function App() {
 
   useEffect(() => {
     if (authenticated) {
-      requestJson<Host[]>("/api/monitoring/hosts")
+      requestJson<Host[]>(`${CURRENT_API_PREFIX}/monitoring/hosts`)
         .then(setHosts)
         .catch(() => setAuthenticated(false));
     }

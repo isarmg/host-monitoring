@@ -12,7 +12,7 @@ use axum::{
     http::{HeaderMap, HeaderValue, Method, StatusCode, header},
     middleware::{self, Next},
     response::{IntoResponse, Response},
-    routing::{get, post},
+    routing::{any, get, post},
 };
 use chrono::Utc;
 use host_protocol::{
@@ -211,7 +211,7 @@ impl ReportBuckets {
 
 pub fn router(state: AppState, static_dir: PathBuf) -> Router {
     let public_auth = Router::new()
-        .route("/api/v1/auth/login", post(login))
+        .route("/api/v2/auth/login", post(login))
         .layer(DefaultBodyLimit::max(crate::login::LOGIN_BODY_LIMIT_BYTES))
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
@@ -219,27 +219,30 @@ pub fn router(state: AppState, static_dir: PathBuf) -> Router {
         ));
 
     let protected_auth = Router::new()
-        .route("/api/v1/auth/logout", post(logout))
-        .route("/api/v1/auth/session", get(session))
+        .route("/api/v2/auth/logout", post(logout))
+        .route("/api/v2/auth/session", get(session))
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
             console_admission,
         ));
 
     let console = Router::new()
-        .route("/api/monitoring/hosts", get(list_hosts))
-        .route("/api/monitoring/hosts/{host_id}", get(host_detail))
-        .route("/api/monitoring/hosts/{host_id}/history", get(host_history))
+        .route("/api/v2/monitoring/hosts", get(list_hosts))
+        .route("/api/v2/monitoring/hosts/{host_id}", get(host_detail))
         .route(
-            "/api/monitoring/agent-instances",
+            "/api/v2/monitoring/hosts/{host_id}/history",
+            get(host_history),
+        )
+        .route(
+            "/api/v2/monitoring/agent-instances",
             get(list_instances).post(create_instance),
         )
         .route(
-            "/api/monitoring/agent-instances/{request_id}",
+            "/api/v2/monitoring/agent-instances/{request_id}",
             axum::routing::delete(cancel_instance),
         )
         .route(
-            "/api/monitoring/managed-instances/{host_id}",
+            "/api/v2/monitoring/managed-instances/{host_id}",
             axum::routing::patch(update_remark).delete(delete_host),
         )
         .route(
@@ -271,15 +274,20 @@ pub fn router(state: AppState, static_dir: PathBuf) -> Router {
         )
         .layer(DefaultBodyLimit::max(AGENT_REPORT_MAX_BODY_BYTES));
     Router::new()
-        .route("/health", get(live))
         .route("/health/live", get(live))
         .route("/health/ready", get(ready))
         .merge(public_auth)
         .merge(protected_auth)
         .merge(console)
         .merge(agent)
+        .route("/api", any(api_not_found))
+        .route("/api/{*path}", any(api_not_found))
         .fallback_service(ServeDir::new(static_dir))
         .with_state(state)
+}
+
+async fn api_not_found() -> StatusCode {
+    StatusCode::NOT_FOUND
 }
 
 async fn login_source_admission(
@@ -927,7 +935,7 @@ mod tests {
     }
 
     fn login_request(body: impl Into<Body>, peer: &str) -> Request<Body> {
-        let mut request = Request::post("/api/v1/auth/login")
+        let mut request = Request::post("/api/v2/auth/login")
             .header(header::CONTENT_TYPE, "application/json")
             .body(body.into())
             .unwrap();
@@ -1022,7 +1030,7 @@ mod tests {
             app()
                 .await
                 .oneshot(
-                    Request::get("/api/monitoring/hosts")
+                    Request::get("/api/v2/monitoring/hosts")
                         .body(Body::empty())
                         .unwrap()
                 )

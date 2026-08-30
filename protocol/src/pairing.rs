@@ -11,13 +11,13 @@ use crate::{HostIdentity, report::deserialize_canonical_uuid};
 
 /// Exact HTTP surface shared by Host Monitoring 0.7 Server and Agent.
 /// There are deliberately no aliases for the former module-prefixed routes.
-pub const AGENT_REPORT_PATH: &str = "/api/host-m-agent/v1/report";
-pub const AGENT_PAIRING_REQUESTS_PATH: &str = "/api/host-m-agent/v1/pairing-requests";
-pub const AGENT_PAIRING_REQUEST_PATH: &str = "/api/host-m-agent/v1/pairing-requests/{request_id}";
-pub const AGENT_PAIRING_STATUS_PATH: &str =
-    "/api/host-m-agent/v1/pairing-requests/{request_id}/status";
-pub const AGENT_ACTIVATE_PATH: &str = "/api/host-m-agent/v1/activate";
-pub const AGENT_ADMIN_ACTIVATE_PATH: &str = "/api/host-m-agent/v1/activate-admin";
+pub const API_PREFIX: &str = "/api/v2";
+pub const AGENT_REPORT_PATH: &str = "/api/v2/agent/report";
+pub const AGENT_PAIRING_REQUESTS_PATH: &str = "/api/v2/agent/pairing-requests";
+pub const AGENT_PAIRING_REQUEST_PATH: &str = "/api/v2/agent/pairing-requests/{request_id}";
+pub const AGENT_PAIRING_STATUS_PATH: &str = "/api/v2/agent/pairing-requests/{request_id}/status";
+pub const AGENT_ACTIVATE_PATH: &str = "/api/v2/agent/activate";
+pub const AGENT_ADMIN_ACTIVATE_PATH: &str = "/api/v2/agent/activate-admin";
 pub const BROWSER_ACTIVATION_PATH_PREFIX: &str = "/activate/";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

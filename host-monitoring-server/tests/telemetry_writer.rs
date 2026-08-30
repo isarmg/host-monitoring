@@ -145,7 +145,7 @@ fn write(report: AgentReport, token: &str) -> ReportWrite {
 }
 
 fn report_request(token: &str, report: &AgentReport) -> Request<Body> {
-    Request::post("/api/host-m-agent/v1/report")
+    Request::post("/api/v2/agent/report")
         .header(header::AUTHORIZATION, format!("Bearer {token}"))
         .header(header::CONTENT_TYPE, "application/json")
         .body(Body::from(serde_json::to_vec(report).unwrap()))
@@ -230,7 +230,7 @@ async fn router_authentication_binding_body_and_validation_all_precede_enqueue()
     let oversized = app
         .clone()
         .oneshot(
-            Request::post("/api/host-m-agent/v1/report")
+            Request::post("/api/v2/agent/report")
                 .header(header::AUTHORIZATION, format!("Bearer {token}"))
                 .header(header::CONTENT_TYPE, "application/json")
                 .body(Body::from(vec![

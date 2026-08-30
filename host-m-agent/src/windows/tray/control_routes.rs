@@ -343,7 +343,7 @@ fn server_connection_response(
 
 /// Lightweight management-origin reachability check for the standard-user tray.
 ///
-/// This deliberately calls only the public `/api/health` endpoint and never reads
+/// This deliberately calls only the public `/health/live` endpoint and never reads
 /// ProgramData credentials. It answers "can this desktop session reach Host Monitoring?";
 /// the Server's host list remains authoritative for authenticated telemetry recency.
 fn probe_server_connection(server: &str) -> ServerConnectionStatus {
@@ -377,7 +377,7 @@ fn probe_server_connection(server: &str) -> ServerConnectionStatus {
             };
         }
     };
-    health_url.set_path("/api/health");
+    health_url.set_path("/health/live");
     health_url.set_query(None);
     health_url.set_fragment(None);
     let client = match reqwest::blocking::Client::builder()

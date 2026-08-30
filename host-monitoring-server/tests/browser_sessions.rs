@@ -123,7 +123,7 @@ async fn login(fixture: &Fixture, password: &str) -> BrowserCredentials {
         fixture,
         request(
             Method::POST,
-            "/api/v1/auth/login",
+            "/api/v2/auth/login",
             None,
             None,
             Some(json!({
@@ -163,7 +163,7 @@ async fn reload_session(fixture: &Fixture, cookie: &str) -> (StatusCode, Option<
         fixture,
         request(
             Method::GET,
-            "/api/v1/auth/session",
+            "/api/v2/auth/session",
             Some(cookie),
             None,
             None,
@@ -230,7 +230,7 @@ async fn login_reload_csrf_and_logout_use_revocable_database_sessions() {
     let invite = json!({"display_name": "CSRF Host", "expires_in_minutes": 15});
     let mut missing_origin = request(
         Method::POST,
-        "/api/monitoring/agent-instances",
+        "/api/v2/monitoring/agent-instances",
         Some(&credentials.cookie),
         Some(&reload_csrf),
         Some(invite.clone()),
@@ -241,7 +241,7 @@ async fn login_reload_csrf_and_logout_use_revocable_database_sessions() {
 
     let mut cross_origin = request(
         Method::POST,
-        "/api/monitoring/agent-instances",
+        "/api/v2/monitoring/agent-instances",
         Some(&credentials.cookie),
         Some(&reload_csrf),
         Some(invite.clone()),
@@ -257,7 +257,7 @@ async fn login_reload_csrf_and_logout_use_revocable_database_sessions() {
             &fixture,
             request(
                 Method::POST,
-                "/api/monitoring/agent-instances",
+                "/api/v2/monitoring/agent-instances",
                 Some(&credentials.cookie),
                 csrf,
                 Some(invite.clone()),
@@ -276,7 +276,7 @@ async fn login_reload_csrf_and_logout_use_revocable_database_sessions() {
         &fixture,
         request(
             Method::POST,
-            "/api/monitoring/agent-instances",
+            "/api/v2/monitoring/agent-instances",
             Some(&credentials.cookie),
             Some(&reload_csrf),
             Some(invite),
@@ -290,7 +290,7 @@ async fn login_reload_csrf_and_logout_use_revocable_database_sessions() {
         &fixture,
         request(
             Method::POST,
-            "/api/monitoring/agent-instances",
+            "/api/v2/monitoring/agent-instances",
             Some(&other.cookie),
             Some(&reload_csrf),
             Some(json!({"display_name": "Wrong Session", "expires_in_minutes": 15})),
@@ -302,7 +302,7 @@ async fn login_reload_csrf_and_logout_use_revocable_database_sessions() {
         &fixture,
         request(
             Method::POST,
-            "/api/v1/auth/logout",
+            "/api/v2/auth/logout",
             Some(&other.cookie),
             Some(&other.csrf_token),
             None,
@@ -315,7 +315,7 @@ async fn login_reload_csrf_and_logout_use_revocable_database_sessions() {
         &fixture,
         request(
             Method::POST,
-            "/api/v1/auth/logout",
+            "/api/v2/auth/logout",
             Some(&credentials.cookie),
             None,
             None,
@@ -332,7 +332,7 @@ async fn login_reload_csrf_and_logout_use_revocable_database_sessions() {
         &fixture,
         request(
             Method::POST,
-            "/api/v1/auth/logout",
+            "/api/v2/auth/logout",
             Some(&credentials.cookie),
             Some(&reload_csrf),
             None,
@@ -369,7 +369,7 @@ async fn login_reload_csrf_and_logout_use_revocable_database_sessions() {
         &fixture,
         request(
             Method::POST,
-            "/api/host-m-agent/v1/pairing-requests",
+            "/api/v2/agent/pairing-requests",
             None,
             None,
             Some(json!({})),
@@ -378,6 +378,53 @@ async fn login_reload_csrf_and_logout_use_revocable_database_sessions() {
     .await;
     assert_ne!(agent_response.status(), StatusCode::UNAUTHORIZED);
     assert_ne!(agent_response.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn old_unversioned_and_unknown_api_epochs_are_zero_write_rejections() {
+    let fixture = fixture().await;
+    let before: (i64, i64, i64) = sqlx::query_as(
+        "SELECT \
+           (SELECT count(*) FROM auth_sessions),\
+           (SELECT count(*) FROM agent_instance_invites),\
+           (SELECT count(*) FROM agent_pairing_requests)",
+    )
+    .fetch_one(&fixture.pool)
+    .await
+    .unwrap();
+
+    for (method, path, body) in [
+        (
+            Method::POST,
+            "/api/v1/auth/login",
+            Some(json!({
+                "email": "admin@example.com",
+                "password": "correct-password"
+            })),
+        ),
+        (Method::GET, "/api/monitoring/hosts", None),
+        (
+            Method::POST,
+            "/api/host-m-agent/v1/pairing-requests",
+            Some(json!({})),
+        ),
+        (Method::GET, "/api/v3/monitoring/hosts", None),
+        (Method::GET, "/health", None),
+    ] {
+        let response = send(&fixture, request(method, path, None, None, body)).await;
+        assert_eq!(response.status(), StatusCode::NOT_FOUND, "old route {path}");
+    }
+
+    let after: (i64, i64, i64) = sqlx::query_as(
+        "SELECT \
+           (SELECT count(*) FROM auth_sessions),\
+           (SELECT count(*) FROM agent_instance_invites),\
+           (SELECT count(*) FROM agent_pairing_requests)",
+    )
+    .fetch_one(&fixture.pool)
+    .await
+    .unwrap();
+    assert_eq!(after, before);
 }
 
 #[tokio::test]
@@ -442,7 +489,7 @@ async fn expiry_password_reset_and_disable_invalidate_existing_sessions() {
         &fixture,
         request(
             Method::POST,
-            "/api/v1/auth/login",
+            "/api/v2/auth/login",
             None,
             None,
             Some(json!({

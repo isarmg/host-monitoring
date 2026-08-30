@@ -44,7 +44,7 @@ Agent 是原生 Windows Service，处理 SCM 的 Stop 和 Shutdown 控制。安�
 
 - 打开只监听随机 `127.0.0.1` 端口的本地配置页；
 - 配对；
-- 自动或手动检测已填写 Server 的 `/api/health` 可达性；
+- 自动或手动检测已填写 Server 的 `/health/live` 可达性；
 - 查看、启动或停止 `host-m-agent` 服务；
 - 停止本次开机中的 `host-m-agent` 服务并彻底退出托盘。
 
