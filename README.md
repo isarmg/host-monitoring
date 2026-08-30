@@ -43,3 +43,10 @@ account; the service does not trust forwarded-address headers by default.
 verifies integrity, foreign keys and the Host Monitoring schema. `backup-verify` performs the same
 checks read-only. Stop the server before `restore`; it reconstructs and verifies the backup beside
 the destination before atomically replacing the database.
+
+The server owns an exclusive per-database instance lock and a shared maintenance lock from before
+SQLite is opened until shutdown completes. `doctor` shares the maintenance lock; offline database
+schema and administrator commands take it exclusively and fail immediately while the server is
+running. Database and adjacent lock paths are opened on Linux through a trusted directory
+descriptor with `openat2` symlink and traversal protection. Do not replace the database or its
+adjacent lock files with symbolic links, hard links or special files.

@@ -3,6 +3,7 @@ pub mod auth;
 pub mod backup;
 pub mod cli;
 pub mod config;
+pub mod database_lock;
 pub mod domain;
 pub mod error;
 pub mod http;

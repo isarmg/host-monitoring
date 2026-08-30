@@ -43,6 +43,15 @@ Then:
 host-monitoring-server serve
 ```
 
+`serve` acquires an exclusive instance lock plus a shared maintenance lock for the configured
+SQLite file before opening it, and holds both until HTTP and background workers have stopped.
+`doctor` takes the shared maintenance lock, while `migrate`, `admin-create` and
+`admin-reset-password` take it exclusively and fail closed while the server is running. Locks are
+per database, stored beside it, and opened on Linux through a trusted directory descriptor with
+`openat2`; symbolic links, parent traversal, hard-linked files and special database/lock files are
+rejected. Absolute and relative paths resolving to the same database share the same lock identity
+across process working directories.
+
 The local console API uses `POST /api/v1/auth/login`, `POST /api/v1/auth/logout` and
 `GET /api/v1/auth/session`. Agent pairing and reporting endpoints are authenticated with
 their own agent tokens or one-time pairing secrets.

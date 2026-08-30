@@ -959,6 +959,7 @@ dependencies = [
  "isarmg-auth",
  "mime",
  "rusqlite",
+ "rustix",
  "serde",
  "serde_json",
  "sha2",
