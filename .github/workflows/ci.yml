@@ -58,7 +58,7 @@ jobs:
           fi
           cargo pkgid --locked -p host-m-agent | grep -F '#0.7.0'
           cargo pkgid --locked -p host-monitoring-server \
-            | grep -F '#host-monitoring-server@0.7.0'
+            | grep -F '#0.7.0'
           cargo pkgid --locked -p host-protocol | grep -F '#host-protocol@0.7.0'
       - name: Check worker and protocol
         run: cargo check --locked -p host-monitoring-server -p host-protocol --all-targets
