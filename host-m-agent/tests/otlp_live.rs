@@ -10,6 +10,7 @@ fn otlp_test_config(endpoint: String) -> (AgentConfig, std::path::PathBuf) {
     std::fs::create_dir_all(&state_dir).expect("create OTLP test state directory");
     let instance_id = Uuid::new_v4();
     let request_id = Uuid::new_v4();
+    let generation = Uuid::new_v4();
     let report_endpoint = "https://host-monitoring.example/api/v2/agent/report";
     std::fs::write(state_dir.join("agent-token"), "test-only-host-token")
         .expect("seed paired test credential");
@@ -31,7 +32,7 @@ fn otlp_test_config(endpoint: String) -> (AgentConfig, std::path::PathBuf) {
         serde_json::to_vec(&serde_json::json!({
             "phase": "active",
             "version": env!("CARGO_PKG_VERSION"),
-            "generation": Uuid::new_v4(),
+            "generation": generation,
             "request_id": request_id,
             "activation_url": format!(
                 "https://host-monitoring.example/activate/{request_id}"
@@ -43,11 +44,30 @@ fn otlp_test_config(endpoint: String) -> (AgentConfig, std::path::PathBuf) {
         .unwrap(),
     )
     .expect("seed current Active pairing state");
+    std::fs::write(
+        state_dir.join("active-binding.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "version": env!("CARGO_PKG_VERSION"),
+            "generation": generation,
+            "request_id": request_id,
+            "instance_id": instance_id,
+            "report_endpoint": report_endpoint
+        }))
+        .unwrap(),
+    )
+    .expect("seed current active binding");
     let mut config = AgentConfig::default();
     config.state_dir = state_dir.clone();
     config.endpoint = report_endpoint.into();
     config.otlp_endpoint = Some(endpoint);
     (config, state_dir)
+}
+
+#[test]
+fn otlp_fixture_satisfies_the_current_active_binding_contract() {
+    let (config, state_dir) = otlp_test_config("http://127.0.0.1:4318/v1/metrics".into());
+    Reporter::new(&config).expect("current OTLP fixture must construct a reporter");
+    std::fs::remove_dir_all(state_dir).expect("remove OTLP test state directory");
 }
 
 /// CI sets HOST_M_AGENT_TEST_OTLP_ENDPOINT while a real Collector is running.
