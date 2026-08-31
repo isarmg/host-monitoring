@@ -369,7 +369,7 @@ async fn login_reload_csrf_and_logout_use_revocable_database_sessions() {
         &fixture,
         request(
             Method::POST,
-            "/api/v2/agent/pairing-requests",
+            "/api/v2/host-monitor/pairing-requests",
             None,
             None,
             Some(json!({})),
@@ -405,7 +405,7 @@ async fn old_unversioned_and_unknown_api_epochs_are_zero_write_rejections() {
         (Method::GET, "/api/monitoring/hosts", None),
         (
             Method::POST,
-            "/api/host-m-agent/v1/pairing-requests",
+            "/api/host-monitor/v1/pairing-requests",
             Some(json!({})),
         ),
         (Method::GET, "/api/v3/monitoring/hosts", None),

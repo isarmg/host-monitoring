@@ -918,7 +918,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "host-m-agent"
+name = "host-monitor"
 version = "0.7.0"
 dependencies = [
  "anyhow",

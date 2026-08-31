@@ -1,6 +1,6 @@
 [package]
 name = "host-protocol"
-description = "Stable wire types shared by the host-m-agent and host-monitoring worker"
+description = "Stable wire types shared by the host-monitor and host-monitoring worker"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

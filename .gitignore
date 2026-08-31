@@ -16,6 +16,6 @@ Thumbs.db
 *.swp
 __pycache__/
 *.pyc
-host-monitoring-server/web/node_modules/
-host-monitoring-server/web/dist/
-host-monitoring-server/web/*.tsbuildinfo
+clients/web/node_modules/
+clients/web/dist/
+clients/web/*.tsbuildinfo

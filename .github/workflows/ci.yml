@@ -49,14 +49,14 @@ jobs:
         run: |
           set -euo pipefail
           grep -Fx 'host-protocol = { path = "protocol" }' Cargo.toml
-          grep -Fx 'host-protocol.workspace = true' host-m-agent/Cargo.toml
+          grep -Fx 'host-protocol.workspace = true' clients/host-monitor/Cargo.toml
           grep -Fx 'host-protocol.workspace = true' host-monitoring-server/Cargo.toml
           if grep -RE 'host-protocol[[:space:]]*=.*(git|rev|branch|tag)[[:space:]]*=' \
-              -- Cargo.toml host-m-agent/Cargo.toml host-monitoring-server/Cargo.toml; then
+              -- Cargo.toml clients/host-monitor/Cargo.toml host-monitoring-server/Cargo.toml; then
             echo 'Host components must use the authoritative workspace protocol path.' >&2
             exit 1
           fi
-          cargo pkgid --locked -p host-m-agent | grep -F '#0.7.0'
+          cargo pkgid --locked -p host-monitor | grep -F '#0.7.0'
           cargo pkgid --locked -p host-monitoring-server \
             | grep -F '#0.7.0'
           cargo pkgid --locked -p host-protocol | grep -F '#host-protocol@0.7.0'
@@ -67,8 +67,8 @@ jobs:
       - name: Clippy
         run: cargo clippy --locked -p host-monitoring-server -p host-protocol --all-targets -- -D warnings
 
-  host-m-agent:
-    name: Desktop host-m-agent (${{ matrix.os }})
+  host-monitor:
+    name: Desktop host-monitor (${{ matrix.os }})
     permissions:
       contents: read
     timeout-minutes: 60
@@ -85,15 +85,15 @@ jobs:
         run: rustup toolchain install 1.98.0 --profile minimal --component clippy
       - name: Resolve Windows MSI version from Cargo metadata
         if: runner.os == 'Windows'
-        id: host_m_agent_version
+        id: host_monitor_version
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
           $metadata = cargo metadata --locked --no-deps --format-version 1 | ConvertFrom-Json
           if ($LASTEXITCODE -ne 0) { throw "cargo metadata failed." }
-          $agentPackage = @($metadata.packages | Where-Object name -eq "host-m-agent")
+          $agentPackage = @($metadata.packages | Where-Object name -eq "host-monitor")
           if ($agentPackage.Count -ne 1) {
-              throw "cargo metadata did not contain exactly one host-m-agent package."
+              throw "cargo metadata did not contain exactly one host-monitor package."
           }
           $version = $agentPackage[0].version
           if ($version -notmatch '^\d+\.\d+\.\d+$') {
@@ -101,51 +101,51 @@ jobs:
           }
           "version=$version" >> $env:GITHUB_OUTPUT
       - name: Clippy
-        run: cargo clippy --locked -p host-m-agent --all-targets -- -D warnings
+        run: cargo clippy --locked -p host-monitor --all-targets -- -D warnings
       - name: Test
-        run: cargo test --locked -p host-m-agent
+        run: cargo test --locked -p host-monitor
       - name: Check without optional features
-        run: cargo check --locked -p host-m-agent --no-default-features --all-targets
+        run: cargo check --locked -p host-monitor --no-default-features --all-targets
       - name: Check OTLP only
-        run: cargo check --locked -p host-m-agent --no-default-features --features otlp --all-targets
+        run: cargo check --locked -p host-monitor --no-default-features --features otlp --all-targets
       - name: Check NVIDIA only
-        run: cargo check --locked -p host-m-agent --no-default-features --features nvidia --all-targets
+        run: cargo check --locked -p host-monitor --no-default-features --features nvidia --all-targets
       - name: Validate Linux packaging lifecycle
         if: runner.os == 'Linux'
-        run: sh host-m-agent/packaging/linux/tests/test-lifecycle.sh
+        run: sh clients/host-monitor/packaging/linux/tests/test-lifecycle.sh
       - name: Validate Linux package builder
         if: runner.os == 'Linux'
-        run: sh host-m-agent/packaging/linux/tests/test-build-packages.sh
+        run: sh clients/host-monitor/packaging/linux/tests/test-build-packages.sh
       - name: Build native Windows service, tray companion, and maintenance helper
         if: runner.os == 'Windows'
         run: >-
-          cargo build --locked --release -p host-m-agent --target x86_64-pc-windows-msvc
-          --bin host-m-agent --bin host-m-agent-maintenance --bin host-m-agent-tray
+          cargo build --locked --release -p host-monitor --target x86_64-pc-windows-msvc
+          --bin host-monitor --bin host-monitor-maintenance --bin host-monitor-tray
       - name: Verify native Windows PE subsystems
         if: runner.os == 'Windows'
         shell: powershell
-        run: host-m-agent\packaging\windows\tests\Test-PeSubsystems.ps1
+        run: host-monitor\packaging\windows\tests\Test-PeSubsystems.ps1
       - name: Validate WiX MSI authoring
         if: runner.os == 'Windows'
         shell: powershell
-        run: host-m-agent\packaging\windows\tests\Test-WixAuthoring.ps1
+        run: host-monitor\packaging\windows\tests\Test-WixAuthoring.ps1
       - name: Build WiX 4 MSI
         if: runner.os == 'Windows'
         shell: cmd
         env:
-          HOST_M_AGENT_VERSION: ${{ steps.host_m_agent_version.outputs.version }}
+          HOST_MONITOR_VERSION: ${{ steps.host_monitor_version.outputs.version }}
         run: >-
-          host-m-agent\packaging\windows\wix\build-msi.cmd %HOST_M_AGENT_VERSION%
-          target\x86_64-pc-windows-msvc\release\host-m-agent.exe
-          target\x86_64-pc-windows-msvc\release\host-m-agent-maintenance.exe
-          target\x86_64-pc-windows-msvc\release\host-m-agent-tray.exe
+          host-monitor\packaging\windows\wix\build-msi.cmd %HOST_MONITOR_VERSION%
+          target\x86_64-pc-windows-msvc\release\host-monitor.exe
+          target\x86_64-pc-windows-msvc\release\host-monitor-maintenance.exe
+          target\x86_64-pc-windows-msvc\release\host-monitor-tray.exe
       - name: Validate macOS packaging lifecycle
         if: runner.os == 'macOS'
         shell: bash
-        run: sh host-m-agent/packaging/macos/tests/validate-packaging.sh
+        run: sh clients/host-monitor/packaging/macos/tests/validate-packaging.sh
 
-  android-host-m-agent-library:
-    name: Mobile host-m-agent library (Android / ${{ matrix.target }})
+  android-host-monitor-library:
+    name: Mobile host-monitor library (Android / ${{ matrix.target }})
     permissions:
       contents: read
     runs-on: ubuntu-24.04
@@ -165,11 +165,11 @@ jobs:
           rustup target add --toolchain 1.98.0 ${{ matrix.target }}
       - name: Check host-driven library boundary
         run: >-
-          cargo check --locked -p host-m-agent --target ${{ matrix.target }}
+          cargo check --locked -p host-monitor --target ${{ matrix.target }}
           --lib --no-default-features
 
-  apple-mobile-host-m-agent-library:
-    name: Mobile host-m-agent library (${{ matrix.scope }} / ${{ matrix.target }})
+  apple-mobile-host-monitor-library:
+    name: Mobile host-monitor library (${{ matrix.scope }} / ${{ matrix.target }})
     permissions:
       contents: read
     runs-on: macos-26
@@ -192,11 +192,11 @@ jobs:
           rustup target add --toolchain 1.98.0 ${{ matrix.target }}
       - name: Check host-driven library boundary
         run: >-
-          cargo check --locked -p host-m-agent --target ${{ matrix.target }}
+          cargo check --locked -p host-monitor --target ${{ matrix.target }}
           --lib --no-default-features
 
   otlp:
-    name: host-m-agent OTLP end-to-end
+    name: host-monitor OTLP end-to-end
     permissions:
       contents: read
     runs-on: ubuntu-24.04
@@ -207,8 +207,8 @@ jobs:
         ports:
           - 4318:4318
     env:
-      HOST_M_AGENT_TEST_OTLP_ENDPOINT: http://127.0.0.1:4318/v1/metrics
-      HOST_M_AGENT_TEST_REQUIRE_OTLP: '1'
+      HOST_MONITOR_TEST_OTLP_ENDPOINT: http://127.0.0.1:4318/v1/metrics
+      HOST_MONITOR_TEST_REQUIRE_OTLP: '1'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -229,11 +229,11 @@ jobs:
           echo "collector did not become ready" >&2; exit 1
       - name: Validate OTLP protobuf encoding
         run: >-
-          cargo test --locked -p host-m-agent --no-default-features --features otlp
+          cargo test --locked -p host-monitor --no-default-features --features otlp
           --test otlp_encoding
       - name: OTLP end-to-end
         run: >-
-          cargo test --locked -p host-m-agent --no-default-features --features otlp
+          cargo test --locked -p host-monitor --no-default-features --features otlp
           --test otlp_live
 
   frontend-contract:
@@ -250,10 +250,10 @@ jobs:
         with:
           node-version: '26.7.0'
           cache: npm
-          cache-dependency-path: host-monitoring-server/web/package-lock.json
+          cache-dependency-path: clients/web/package-lock.json
       - name: Install frontend dependencies
-        working-directory: host-monitoring-server/web
+        working-directory: clients/web
         run: npm ci
       - name: Build standalone frontend
-        working-directory: host-monitoring-server/web
+        working-directory: clients/web
         run: npm run build
