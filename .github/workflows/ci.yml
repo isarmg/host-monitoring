@@ -145,18 +145,18 @@ jobs:
       - name: Verify native Windows PE subsystems
         if: runner.os == 'Windows'
         shell: powershell
-        run: host-monitor\packaging\windows\tests\Test-PeSubsystems.ps1
+        run: .\clients\host-monitor\packaging\windows\tests\Test-PeSubsystems.ps1
       - name: Validate WiX MSI authoring
         if: runner.os == 'Windows'
         shell: powershell
-        run: host-monitor\packaging\windows\tests\Test-WixAuthoring.ps1
+        run: .\clients\host-monitor\packaging\windows\tests\Test-WixAuthoring.ps1
       - name: Build WiX 4 MSI
         if: runner.os == 'Windows'
         shell: cmd
         env:
           HOST_MONITOR_VERSION: ${{ steps.host_monitor_version.outputs.version }}
         run: >-
-          host-monitor\packaging\windows\wix\build-msi.cmd %HOST_MONITOR_VERSION%
+          clients\host-monitor\packaging\windows\wix\build-msi.cmd %HOST_MONITOR_VERSION%
           target\x86_64-pc-windows-msvc\release\host-monitor.exe
           target\x86_64-pc-windows-msvc\release\host-monitor-maintenance.exe
           target\x86_64-pc-windows-msvc\release\host-monitor-tray.exe
