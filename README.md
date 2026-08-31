@@ -1,76 +1,43 @@
-# Host Monitoring
+# Host Monitoring 主机监控
 
-Host Monitoring is an independent product containing:
+Host Monitoring `0.7.0` 是一个独立的主机遥测产品，仓库同时包含本地 Web 控制面、共享网络协议和
+跨平台 `host-monitor`。服务端使用本地管理员账户和 SQLite；Agent 只读采集主机状态，通过配对取得
+凭据，并经 HTTPS 发送有界报告。
 
-- `host-monitoring-server`: local web control plane with administrator accounts and sessions.
-- `host-protocol`: stable JSON wire types shared by the server and agent.
-- `host-m-agent`: cross-platform read-only host telemetry agent.
-- `web/`: small standalone management page compiled into the server.
+产品只接受当前 `0.7.0` 配置、协议、SQLite Schema 和发行身份。服务端与 Agent 都不读取旧状态、
+不注册旧路由，也不执行迁移、备份或恢复；跨版本操作由 `sarmg-upgrade` 离线完成。
 
-The server and agent communicate over the project's own pairing and report endpoints. They do
-not depend on a central runtime or a shared session service.
-Validated reports enter a bounded queue and one batched SQLite writer, so concurrent agents do
-not each compete independently for the database write lock.
-Older scalar reports are compacted into idempotent per-Host UTC-hour aggregates before bounded
-raw deletion. The latest report for every Host is retained, and aggregate rows have an independent
-retention window so neither history table grows without limit.
-
-## Build
-
-```bash
-cargo build --workspace --release
-```
-
-## Run an unbound development server
+## 仓库组成
 
 ```text
-HOST_MONITORING_DATABASE_URL=sqlite:///var/lib/isarmg/host-monitoring/db/app.db
-HOST_MONITORING_BOOTSTRAP_ADMIN_EMAIL=admin@example.com
-HOST_MONITORING_BOOTSTRAP_ADMIN_PASSWORD=<initial admin password>
+protocol/                  host-protocol：Agent/Server 唯一共享 wire contract
+host-monitoring-server/    Axum API、Web 控制台、SQLite 写入与保留策略
+clients/web/               React/Vite 管理客户端源码
+clients/host-monitor/      桌面 daemon/CLI、移动宿主库、采集器和持久 spool
+clients/host-monitor/packaging/    Linux、Windows、macOS 安装资产和生命周期测试
+config/                    可提交的当前配置样例；不存放生产 Secret
+scripts/                   发行打包、manifest 和供应链门禁
 ```
+
+## 快速验证
 
 ```bash
-host-monitoring-server serve
+cargo +1.98.0 fmt --all -- --check
+cargo +1.98.0 check --workspace --locked --all-targets --all-features
+cargo +1.98.0 clippy --workspace --locked --all-targets --all-features -- -D warnings
+cargo +1.98.0 test --workspace --locked --all-targets --all-features
+python3 scripts/check-workflow-supply-chain.py
+python3 scripts/test-server-release-tooling.py
 ```
 
-`serve` is deliberately limited to ordinary development binaries whose source identity is
-`unbound`. An official source-bound server rejects it. Production has no mutable `current` link:
-systemd executes the physical
-`/opt/isarmg/host-monitoring/releases/0.7.0/bin/host-monitoring-server` with
-`serve-release --root /opt/isarmg/host-monitoring/releases/0.7.0`, and the process verifies its
-complete immutable tree before opening application state.
+## 文档
 
-## Build the immutable 0.7 server release
+- [文档总览](docs/README.md)
+- [初学者学习指南](docs/beginner-guide/README.md)
+- [项目工作流程与流程树](docs/project-workflow.md)
+- [完整功能与取舍清单](docs/feature-inventory-and-tradeoffs.md)
+- [部署、平台打包、安全和故障运维](docs/operations.md)
 
-From a completely clean checkout whose annotated `v0.7.0` tag dereferences to `HEAD`, publish to
-an existing output directory outside the repository:
+## 许可证
 
-```bash
-python3 scripts/package-server-release.py /absolute/output-directory
-```
-
-The builder binds the full lowercase source commit into the binary, runs `npm ci` and the Web
-build, writes a strict whole-tree manifest, creates a deterministic archive and checksum without
-overwriting either output, extracts and re-verifies the archive, then starts it from `/` and probes
-both liveness and a compiled JavaScript asset. Release archives contain no migration, backup or
-restore implementation.
-
-Browser sessions and CSRF tokens are random, revocable SQLite records. Pairing admission applies
-separate bounded budgets to the real TCP source, device, pairing request/invite and administrator
-account; the service does not trust forwarded-address headers by default.
-
-## Database schema lifecycle
-
-The 0.7 product initializes only an absent database with its single current schema. It does not
-contain migration, backup or restore commands. Existing databases must have the exact
-`product_metadata` application, Cargo package version, schema revision and SHA-256 fingerprint, and
-the fingerprint is independently recomputed from `sqlite_schema` before a write connection is
-opened. A 0.6 database, a database without metadata or any schema drift is rejected read-only;
-version upgrades, backup and restore belong to the independent upgrade tool.
-
-The server owns an exclusive per-database instance lock and a shared maintenance lock from before
-SQLite is opened until shutdown completes. `doctor` shares the maintenance lock; administrator
-commands take it exclusively and fail immediately while the server is running. Database and
-adjacent lock paths are opened on Linux through a trusted directory descriptor with `openat2`
-symlink and traversal protection. Do not replace the database or its adjacent lock files with
-symbolic links, hard links or special files.
+代码采用 Apache License 2.0，见 [LICENSE-APACHE](LICENSE-APACHE) 与 [NOTICE](NOTICE)。
