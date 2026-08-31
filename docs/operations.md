@@ -202,9 +202,12 @@ WiX 4 MSI 同时安装 Windows Service、Tray 和维护 helper。Tray 是用户�
 主体；两者通过受保护本机控制通道通信。构建/验收使用：
 
 ```powershell
-host-monitor\packaging\windows\wix\build-msi.cmd
-powershell -File host-monitor\packaging\windows\tests\Test-WixAuthoring.ps1
-powershell -File host-monitor\packaging\windows\tests\Test-PeSubsystems.ps1
+clients\host-monitor\packaging\windows\wix\build-msi.cmd 0.7.0 `
+  target\x86_64-pc-windows-msvc\release\host-monitor.exe `
+  target\x86_64-pc-windows-msvc\release\host-monitor-maintenance.exe `
+  target\x86_64-pc-windows-msvc\release\host-monitor-tray.exe
+powershell -File clients\host-monitor\packaging\windows\tests\Test-WixAuthoring.ps1
+powershell -File clients\host-monitor\packaging\windows\tests\Test-PeSubsystems.ps1
 ```
 
 当前 MSI 不声明跨版本 UpgradeCode 家族，也不迁移非当前状态。每个发行版本按全新产品安装；需要数据

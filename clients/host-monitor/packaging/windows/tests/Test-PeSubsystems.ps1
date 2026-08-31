@@ -7,7 +7,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 if ([string]::IsNullOrWhiteSpace($ReleaseRoot)) {
-    $repositoryRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..\..\..")).Path
+    $repositoryRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..\..\..\..")).Path
     $ReleaseRoot = Join-Path $repositoryRoot "target\x86_64-pc-windows-msvc\release"
 }
 

@@ -12,9 +12,9 @@
 
     <!-- Callers must provide x64 executables for this exact package version. -->
     <ProductVersion Condition="'$(ProductVersion)' == ''">0.7.0</ProductVersion>
-    <AgentExe Condition="'$(AgentExe)' == ''">$(MSBuildThisFileDirectory)..\..\..\..\target\x86_64-pc-windows-msvc\release\host-monitor.exe</AgentExe>
-    <MaintenanceExe Condition="'$(MaintenanceExe)' == ''">$(MSBuildThisFileDirectory)..\..\..\..\target\x86_64-pc-windows-msvc\release\host-monitor-maintenance.exe</MaintenanceExe>
-    <TrayExe Condition="'$(TrayExe)' == ''">$(MSBuildThisFileDirectory)..\..\..\..\target\x86_64-pc-windows-msvc\release\host-monitor-tray.exe</TrayExe>
+    <AgentExe Condition="'$(AgentExe)' == ''">$(MSBuildThisFileDirectory)..\..\..\..\..\target\x86_64-pc-windows-msvc\release\host-monitor.exe</AgentExe>
+    <MaintenanceExe Condition="'$(MaintenanceExe)' == ''">$(MSBuildThisFileDirectory)..\..\..\..\..\target\x86_64-pc-windows-msvc\release\host-monitor-maintenance.exe</MaintenanceExe>
+    <TrayExe Condition="'$(TrayExe)' == ''">$(MSBuildThisFileDirectory)..\..\..\..\..\target\x86_64-pc-windows-msvc\release\host-monitor-tray.exe</TrayExe>
     <OutputName>host-monitor-$(ProductVersion)-x64</OutputName>
     <DefineConstants>$(DefineConstants);ProductVersion=$(ProductVersion);AgentExe=$(AgentExe);MaintenanceExe=$(MaintenanceExe);TrayExe=$(TrayExe)</DefineConstants>
   </PropertyGroup>

@@ -10,7 +10,7 @@ $packagePath = Join-Path $wixRoot "Package.wxs"
 $projectPath = Join-Path $wixRoot "HostMonitor.Installer.wixproj"
 $buildPath = Join-Path $wixRoot "build-msi.cmd"
 $agentRoot = Split-Path -Parent (Split-Path -Parent $packagingRoot)
-$workspaceRoot = Split-Path -Parent $agentRoot
+$workspaceRoot = Split-Path -Parent (Split-Path -Parent $agentRoot)
 $workspacePath = Join-Path $workspaceRoot "Cargo.toml"
 $helperPath = Join-Path $agentRoot "src\bin\host-monitor-maintenance.rs"
 $trayPath = Join-Path $agentRoot "src\bin\host-monitor-tray.rs"
@@ -532,6 +532,19 @@ if ($defaultProductVersions.Count -ne 1) {
 Assert-Equal $defaultProductVersions[0].InnerText `
     $workspaceVersionMatches[0].Groups["version"].Value `
     "The default WiX ProductVersion must match the host-monitor workspace package version."
+$expectedPayloads = [ordered]@{
+    AgentExe = '$(MSBuildThisFileDirectory)..\..\..\..\..\target\x86_64-pc-windows-msvc\release\host-monitor.exe'
+    MaintenanceExe = '$(MSBuildThisFileDirectory)..\..\..\..\..\target\x86_64-pc-windows-msvc\release\host-monitor-maintenance.exe'
+    TrayExe = '$(MSBuildThisFileDirectory)..\..\..\..\..\target\x86_64-pc-windows-msvc\release\host-monitor-tray.exe'
+}
+foreach ($propertyName in $expectedPayloads.Keys) {
+    $payloadNodes = @($project.Project.PropertyGroup.$propertyName)
+    if ($payloadNodes.Count -ne 1) {
+        throw "Expected exactly one WiX default payload path for $propertyName."
+    }
+    Assert-Equal $payloadNodes[0].InnerText $expectedPayloads[$propertyName] `
+        "The WiX default payload path must resolve from the current repository layout."
+}
 Assert-Contains $projectText "'^\d+\.\d+\.\d+$'" `
     "The build must enforce a strict three-field MSI version."
 Assert-Contains $projectText '.Major) &gt; 255' `
