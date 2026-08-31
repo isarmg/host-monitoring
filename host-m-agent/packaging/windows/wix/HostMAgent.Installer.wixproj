@@ -5,6 +5,8 @@
     <Platform>x64</Platform>
     <Cultures>en-US</Cultures>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <!-- WIX1075 recommends a cross-version UpgradeCode, which this current-only MSI forbids. -->
+    <SuppressSpecificWarnings>1075</SuppressSpecificWarnings>
 
     <!-- Callers must provide x64 executables for this exact package version. -->
     <ProductVersion Condition="'$(ProductVersion)' == ''">0.7.0</ProductVersion>

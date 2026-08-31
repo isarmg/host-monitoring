@@ -513,6 +513,18 @@ if ($projectText -match '(?i)SuppressIce') {
 }
 Assert-Contains $projectText 'WixToolset.Sdk/4.0.6' `
     "The WiX SDK version must be pinned for reproducible builds."
+$warningsAsErrors = @($project.Project.PropertyGroup.TreatWarningsAsErrors)
+if ($warningsAsErrors.Count -ne 1) {
+    throw "Expected exactly one WiX TreatWarningsAsErrors setting; found $($warningsAsErrors.Count)."
+}
+Assert-Equal $warningsAsErrors[0].InnerText "true" `
+    "All unsuppressed WiX warnings must remain build errors."
+$suppressedWarnings = @($project.Project.PropertyGroup.SuppressSpecificWarnings)
+if ($suppressedWarnings.Count -ne 1) {
+    throw "Expected exactly one WiX warning suppression; found $($suppressedWarnings.Count)."
+}
+Assert-Equal $suppressedWarnings[0].InnerText "1075" `
+    "Only the cross-version UpgradeCode recommendation may be suppressed."
 $workspaceVersionMatches = [regex]::Matches(
     $workspaceText,
     '(?m)^version\s*=\s*"(?<version>\d+\.\d+\.\d+)"\s*$'
