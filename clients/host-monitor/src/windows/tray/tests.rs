@@ -41,13 +41,13 @@ mod tests {
         assert!(serde_json::from_str::<TrayPreferences>(r#"{"server":""}"#).is_err());
         assert!(
             serde_json::from_str::<TrayPreferences>(
-                r#"{"application_version":"0.3.1","server":""}"#
+                r#"{"application_version":"0.0.0","server":""}"#
             )
             .is_err()
         );
         assert!(
             serde_json::from_str::<TrayPreferences>(
-                r#"{"application_version":"0.4.0","server":"","legacy":true}"#
+                r#"{"application_version":"0.0.0","server":"","unknown_extension":true}"#
             )
             .is_err()
         );
@@ -67,7 +67,7 @@ mod tests {
         assert!(serde_json::from_str::<ConnectionRequest>(r#"{"server":""}"#).is_ok());
         assert!(serde_json::from_str::<ConnectionRequest>(r#"{}"#).is_err());
         assert!(serde_json::from_str::<StateRequest>(r#"{}"#).is_ok());
-        assert!(serde_json::from_str::<StateRequest>(r#"{"legacy":true}"#).is_err());
+        assert!(serde_json::from_str::<StateRequest>(r#"{"unknown_extension":true}"#).is_err());
         assert!(serde_json::from_str::<ServiceRequest>(r#"{"action":"start","extra":1}"#).is_err());
         assert!(serde_json::from_str::<OperationRequest>(r#"{"id":"id","extra":1}"#).is_err());
 
@@ -79,7 +79,7 @@ mod tests {
         );
         assert!(
             serde_json::from_str::<PairIpcMessage>(
-                r#"{"generation":"generation","request_id":"request","activation_url":"https://server.example/activate/request","pairing_endpoint":"https://server.example/api/v2/host-monitor/pairing-requests","legacy":true}"#
+                r#"{"generation":"generation","request_id":"request","activation_url":"https://server.example/activate/request","pairing_endpoint":"https://server.example/api/v2/host-monitor/pairing-requests","unknown_extension":true}"#
             )
             .is_err()
         );
@@ -94,17 +94,17 @@ mod tests {
             env!("CARGO_PKG_VERSION")
         );
         assert!(serde_json::from_str::<PairEvent>(&waiting_event_without_expiry).is_err());
-        let paired_event_with_legacy_field = format!(
-            r#"{{"event":"paired","version":"{}","request_id":"request","instance_id":"instance","endpoint":"https://server.example/api/v2/host-monitor/report","legacy":true}}"#,
+        let paired_event_with_unknown_field = format!(
+            r#"{{"event":"paired","version":"{}","request_id":"request","instance_id":"instance","endpoint":"https://server.example/api/v2/host-monitor/report","unknown_extension":true}}"#,
             env!("CARGO_PKG_VERSION")
         );
-        assert!(serde_json::from_str::<PairEvent>(&paired_event_with_legacy_field).is_err());
+        assert!(serde_json::from_str::<PairEvent>(&paired_event_with_unknown_field).is_err());
         assert!(
             serde_json::from_str::<PairEvent>(r#"{"event":"pairing_cancelled","version":1}"#)
                 .is_err()
         );
         assert!(
-            serde_json::from_str::<PairEvent>(r#"{"event":"pairing_cancelled","version":"0.3.1"}"#)
+            serde_json::from_str::<PairEvent>(r#"{"event":"pairing_cancelled","version":"0.0.0"}"#)
                 .is_err()
         );
 
@@ -117,12 +117,12 @@ mod tests {
             serde_json::from_str::<ServerHealthResponse>(r#"{"status":"ok","uptime_seconds":1}"#)
                 .is_err()
         );
-        let health_response_with_legacy_field = format!(
-            r#"{{"status":"ok","version":"{}","uptime_seconds":1,"legacy":true}}"#,
+        let health_response_with_unknown_field = format!(
+            r#"{{"status":"ok","version":"{}","uptime_seconds":1,"unknown_extension":true}}"#,
             env!("CARGO_PKG_VERSION")
         );
         assert!(
-            serde_json::from_str::<ServerHealthResponse>(&health_response_with_legacy_field)
+            serde_json::from_str::<ServerHealthResponse>(&health_response_with_unknown_field)
                 .is_err()
         );
     }

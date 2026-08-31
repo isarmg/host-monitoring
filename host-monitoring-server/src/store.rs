@@ -30,49 +30,55 @@ pub async fn retention_ready(pool: &SqlitePool) -> bool {
 #[derive(Debug, Clone, sqlx::FromRow)]
 pub struct StoredUser {
     pub user_id: String,
-    pub email: String,
+    pub username: String,
     pub password_hash: String,
     pub active: bool,
     pub session_version: i64,
 }
 
-pub async fn find_active_user_by_email(
+pub async fn find_active_user_by_username(
     pool: &SqlitePool,
-    email: &str,
+    username: &str,
 ) -> anyhow::Result<Option<StoredUser>> {
-    let normalized = normalize_user_email(email);
+    let normalized = normalize_username(username)?;
     let row = sqlx::query_as::<_, StoredUser>(
-        "SELECT user_id,email,password_hash,active,session_version FROM auth_users \
-         WHERE email=? AND active=true",
+        "SELECT user_id,username,password_hash,active,session_version FROM auth_users \
+         WHERE username=? AND active=true",
     )
     .bind(normalized)
     .fetch_optional(pool)
     .await?;
+    if let Some(user) = &row {
+        sarmg_admin_auth::require_canonical_administrator_username(&user.username)
+            .map_err(anyhow::Error::from)?;
+        sarmg_admin_auth::require_current_password_hash(&user.password_hash)
+            .map_err(anyhow::Error::from)?;
+    }
     Ok(row)
 }
 
-pub fn normalize_user_email(email: &str) -> String {
-    email.trim().to_lowercase()
+pub fn normalize_username(username: &str) -> anyhow::Result<String> {
+    sarmg_admin_auth::normalize_administrator_username(username).map_err(anyhow::Error::from)
 }
 
 pub async fn ensure_admin_user(
     pool: &SqlitePool,
-    email: &str,
+    username: &str,
     password: Option<&str>,
 ) -> anyhow::Result<()> {
     let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM auth_users")
         .fetch_one(pool)
         .await?;
     if count > 0 {
-        return Ok(());
+        return validate_stored_administrator_users(pool).await;
     }
     let password = password.ok_or_else(|| {
         anyhow::anyhow!("HOST_MONITORING_BOOTSTRAP_ADMIN_PASSWORD is required while no users exist")
     })?;
-    let normalized = normalize_user_email(email);
+    let normalized = normalize_username(username)?;
     let password_hash = crate::auth::hash_password(password)?;
     sqlx::query(
-        "INSERT INTO auth_users(user_id,email,password_hash,active,created_at) \
+        "INSERT INTO auth_users(user_id,username,password_hash,active,created_at) \
          VALUES(?,?,?,true,datetime('now'))",
     )
     .bind(Uuid::new_v4().to_string())
@@ -85,20 +91,39 @@ pub async fn ensure_admin_user(
 
 pub async fn reset_admin_password(
     pool: &SqlitePool,
-    email: &str,
+    username: &str,
     password: &str,
 ) -> anyhow::Result<()> {
-    let normalized = normalize_user_email(email);
+    let normalized = normalize_username(username)?;
+    validate_stored_administrator_users(pool).await?;
     let password_hash = crate::auth::hash_password(password)?;
-    let result = sqlx::query("UPDATE auth_users SET password_hash=? WHERE email=?")
+    let result = sqlx::query("UPDATE auth_users SET password_hash=? WHERE username=?")
         .bind(password_hash)
         .bind(normalized)
         .execute(pool)
         .await?;
     anyhow::ensure!(
         result.rows_affected() == 1,
-        "no active or existing user matched {email}"
+        "no existing administrator matched {username}"
     );
+    Ok(())
+}
+
+/// Refuse to start with administrator identities or password hashes from any
+/// policy other than the current Foundation contract. Repair and migration
+/// deliberately belong outside this server repository.
+async fn validate_stored_administrator_users(pool: &SqlitePool) -> anyhow::Result<()> {
+    let rows = sqlx::query_as::<_, (String, String)>(
+        "SELECT username,password_hash FROM auth_users ORDER BY user_id",
+    )
+    .fetch_all(pool)
+    .await?;
+    for (username, password_hash) in rows {
+        sarmg_admin_auth::require_canonical_administrator_username(&username)
+            .map_err(anyhow::Error::from)?;
+        sarmg_admin_auth::require_current_password_hash(&password_hash)
+            .map_err(anyhow::Error::from)?;
+    }
     Ok(())
 }
 

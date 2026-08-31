@@ -1,0 +1,244 @@
+use std::{path::PathBuf, time::Duration};
+
+use axum::{
+    Router,
+    body::Body,
+    http::{Request, Response, StatusCode, header},
+};
+use chrono::Utc;
+use host_monitor::transport::{SendError, classify_host_monitoring_response};
+use host_monitoring_server::{
+    auth::{Auth, CookieMode},
+    http::{AppState, router},
+    store,
+    telemetry::{TelemetryWriterConfig, TelemetryWriterTask},
+    token_hash,
+};
+use host_protocol::{
+    AgentHealth, AgentReport, CpuSnapshot, HostIdentity, MemorySnapshot, SystemSnapshot,
+};
+use http_body_util::BodyExt;
+use sarmg_error::ErrorEnvelope;
+use sqlx::SqlitePool;
+use tower::ServiceExt;
+use uuid::Uuid;
+
+struct Fixture {
+    app: Router,
+    pool: SqlitePool,
+    _telemetry_writer: TelemetryWriterTask,
+}
+
+async fn fixture() -> Fixture {
+    let pool = sqlx::sqlite::SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .expect("open test database");
+    store::initialize_empty(&pool)
+        .await
+        .expect("initialize current test schema");
+    let auth = Auth::new(
+        Duration::from_secs(60),
+        Duration::from_secs(600),
+        CookieMode::LoopbackDevelopment,
+    )
+    .expect("build development auth");
+    let (state, telemetry_writer) =
+        AppState::with_telemetry_config(pool.clone(), auth, TelemetryWriterConfig::production());
+    Fixture {
+        app: router(state, PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("web")),
+        pool,
+        _telemetry_writer: telemetry_writer,
+    }
+}
+
+fn report(host_id: Uuid) -> AgentReport {
+    AgentReport {
+        schema_version: host_protocol::AGENT_REPORT_SCHEMA_VERSION,
+        report_id: Uuid::new_v4().to_string(),
+        collected_at: Utc::now(),
+        host: HostIdentity {
+            id: host_id.to_string(),
+            os: "linux".into(),
+            os_version: None,
+            kernel_version: None,
+            arch: "x86_64".into(),
+            agent_version: env!("CARGO_PKG_VERSION").into(),
+        },
+        interval_seconds: 10.0,
+        system: SystemSnapshot {
+            uptime_seconds: 1,
+            cpu: CpuSnapshot {
+                usage_percent: 0.0,
+                logical_count: 1,
+                physical_count: Some(1),
+                per_core_percent: vec![0.0],
+            },
+            memory: MemorySnapshot {
+                total_bytes: 1,
+                used_bytes: 0,
+                available_bytes: 1,
+                swap_total_bytes: 0,
+                swap_used_bytes: 0,
+            },
+            networks: Vec::new(),
+            disks: Vec::new(),
+            temperatures: Vec::new(),
+            gpus: Vec::new(),
+        },
+        capabilities: Vec::new(),
+        agent: AgentHealth {
+            spool_pending_batches: 0,
+            collector_errors: 0,
+        },
+    }
+}
+
+async fn send_report(fixture: &Fixture, token: &str, report: &AgentReport) -> Response<Body> {
+    fixture
+        .app
+        .clone()
+        .oneshot(
+            Request::post(host_protocol::AGENT_REPORT_PATH)
+                .header(header::AUTHORIZATION, format!("Bearer {token}"))
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(serde_json::to_vec(report).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .expect("router response")
+}
+
+async fn response_contract(response: Response<Body>) -> (StatusCode, String, Vec<u8>) {
+    let status = response.status();
+    let content_type = response
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .expect("error response content type")
+        .to_str()
+        .unwrap()
+        .to_owned();
+    let body = response
+        .into_body()
+        .collect()
+        .await
+        .expect("collect response body")
+        .to_bytes()
+        .to_vec();
+    serde_json::from_slice::<ErrorEnvelope>(&body).expect("strict Foundation error envelope");
+    (status, content_type, body)
+}
+
+#[tokio::test]
+async fn server_error_envelopes_drive_the_agent_credential_state_machine() {
+    let fixture = fixture().await;
+
+    let unknown_host_report = report(Uuid::new_v4());
+    let (status, content_type, body) = response_contract(
+        send_report(&fixture, "revoked-or-unknown-token", &unknown_host_report).await,
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    let envelope: ErrorEnvelope = serde_json::from_slice(&body).unwrap();
+    assert_eq!(envelope.code.as_str(), "unauthorized");
+    assert!(!envelope.retryable);
+    assert!(matches!(
+        classify_host_monitoring_response(status, Some(&content_type), &body),
+        Err(SendError::Unauthorized(_))
+    ));
+
+    let credential_host = Uuid::new_v4();
+    let token = "current-host-credential";
+    let now = Utc::now();
+    sqlx::query(
+        "INSERT INTO monitored_hosts(\
+           host_id,name,os,arch,agent_version,registered_at,last_seen_at\
+         ) VALUES(?,?,?,?,?,?,?)",
+    )
+    .bind(credential_host)
+    .bind("Bound Host")
+    .bind("linux")
+    .bind("x86_64")
+    .bind(env!("CARGO_PKG_VERSION"))
+    .bind(now)
+    .bind(now)
+    .execute(&fixture.pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO agent_credentials(credential_id,host_id,token_hash,issued_at) VALUES(?,?,?,?)",
+    )
+    .bind(Uuid::new_v4())
+    .bind(credential_host)
+    .bind(token_hash(token))
+    .bind(now)
+    .execute(&fixture.pool)
+    .await
+    .unwrap();
+
+    let mismatched_report = report(Uuid::new_v4());
+    let (status, content_type, body) =
+        response_contract(send_report(&fixture, token, &mismatched_report).await).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    let envelope: ErrorEnvelope = serde_json::from_slice(&body).unwrap();
+    assert_eq!(envelope.code.as_str(), "agent_host_mismatch");
+    assert!(!envelope.retryable);
+    assert!(matches!(
+        classify_host_monitoring_response(status, Some(&content_type), &body),
+        Err(SendError::Permanent(_))
+    ));
+}
+
+#[tokio::test]
+async fn framework_api_rejections_are_replaced_by_the_same_strict_envelope() {
+    let fixture = fixture().await;
+    let malformed = fixture
+        .app
+        .clone()
+        .oneshot(
+            Request::post(host_protocol::AGENT_REPORT_PATH)
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from("{"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let (status, _, body) = response_contract(malformed).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let envelope: ErrorEnvelope = serde_json::from_slice(&body).unwrap();
+    assert_eq!(envelope.code.as_str(), "bad_request");
+    assert!(!envelope.retryable);
+
+    let unknown = fixture
+        .app
+        .clone()
+        .oneshot(
+            Request::get("/api/v3/removed-route")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let (status, _, body) = response_contract(unknown).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let envelope: ErrorEnvelope = serde_json::from_slice(&body).unwrap();
+    assert_eq!(envelope.code.as_str(), "not_found");
+    assert!(!envelope.retryable);
+
+    let wrong_method = fixture
+        .app
+        .clone()
+        .oneshot(
+            Request::get(host_protocol::AGENT_REPORT_PATH)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let (status, _, body) = response_contract(wrong_method).await;
+    assert_eq!(status, StatusCode::METHOD_NOT_ALLOWED);
+    let envelope: ErrorEnvelope = serde_json::from_slice(&body).unwrap();
+    assert_eq!(envelope.code.as_str(), "method_not_allowed");
+    assert!(!envelope.retryable);
+}

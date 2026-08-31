@@ -1,76 +1,93 @@
-import { FormEvent, useEffect, useState } from "react";
-import { CURRENT_API_PREFIX, loadSession, login, logout, requestJson } from "./api";
+import { useAdministratorSession } from "@sarmg/admin-web/react";
+import { useEffect, useState } from "react";
+import type { FormEvent } from "react";
+import {
+  CURRENT_API_PREFIX,
+  administratorApi,
+  errorEnvelope,
+  isHostListResponse,
+  type Host,
+} from "./api";
 
-type Host = Record<string, unknown>;
+function errorMessage(cause: unknown): string {
+  return (
+    errorEnvelope(cause)?.message ??
+    (cause instanceof Error ? cause.message : "request failed")
+  );
+}
 
 export default function App() {
-  const [authenticated, setAuthenticated] = useState(false);
-  const [loading, setLoading] = useState(true);
+  const auth = useAdministratorSession(administratorApi);
   const [hosts, setHosts] = useState<Host[]>([]);
-  const [email, setEmail] = useState("admin@example.com");
+  const [username, setUsername] = useState("admin");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
 
   useEffect(() => {
+    if (auth.phase !== "authenticated") {
+      setHosts([]);
+      return;
+    }
     let cancelled = false;
-    loadSession()
-      .then(() => {
-        if (!cancelled) setAuthenticated(true);
+    administratorApi
+      .request(
+        `${CURRENT_API_PREFIX}/monitoring/hosts`,
+        isHostListResponse,
+      )
+      .then((response) => {
+        if (!cancelled) setHosts(response.hosts);
       })
-      .catch(() => {
-        if (!cancelled) setAuthenticated(false);
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
+      .catch((cause: unknown) => {
+        if (!cancelled) setError(errorMessage(cause));
       });
     return () => {
       cancelled = true;
     };
-  }, []);
-
-  useEffect(() => {
-    if (authenticated) {
-      requestJson<Host[]>(`${CURRENT_API_PREFIX}/monitoring/hosts`)
-        .then(setHosts)
-        .catch(() => setAuthenticated(false));
-    }
-  }, [authenticated]);
+  }, [auth.phase]);
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     try {
-      await login(email, password);
-      setAuthenticated(true);
+      await auth.login(username, password);
       setPassword("");
       setError("");
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "login failed");
+      setError(errorMessage(cause));
     }
   };
 
   const leave = async () => {
     try {
-      await logout();
+      await auth.logout();
       setError("");
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "logout failed");
-    } finally {
-      setAuthenticated(false);
-      setHosts([]);
+      setError(errorMessage(cause));
     }
   };
 
-  if (loading) return <main>正在加载会话…</main>;
+  if (auth.phase === "loading") return <main>正在加载会话…</main>;
 
-  if (!authenticated) {
+  if (auth.phase === "error") {
+    return (
+      <main>
+        <h1>Host Monitoring</h1>
+        <p>{errorMessage(auth.error)}</p>
+        <button onClick={() => void auth.restore()}>重试</button>
+      </main>
+    );
+  }
+
+  if (auth.phase === "anonymous") {
     return (
       <main>
         <h1>Host Monitoring</h1>
         <form onSubmit={submit}>
           <input
-            type="email"
-            value={email}
-            onChange={(event) => setEmail(event.target.value)}
+            type="text"
+            name="username"
+            autoComplete="username"
+            value={username}
+            onChange={(event) => setUsername(event.target.value)}
           />
           <input
             type="password"
@@ -87,7 +104,9 @@ export default function App() {
   return (
     <main>
       <h1>Host Monitoring</h1>
+      <p>{auth.session.username}</p>
       <button onClick={leave}>退出</button>
+      {error && <p>{error}</p>}
       <pre>{JSON.stringify(hosts, null, 2)}</pre>
     </main>
   );

@@ -1,5 +1,6 @@
 [Unit]
 Description=Host Monitoring Server
+ConditionArchitecture=x86-64
 After=network-online.target
 Wants=network-online.target
 

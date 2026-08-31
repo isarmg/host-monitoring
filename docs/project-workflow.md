@@ -6,8 +6,8 @@
 Host Monitoring
 ├─ Server
 │  ├─ 验证发行树/配置/当前 Schema
-│  ├─ 管理员登录与 Session/CSRF
-│  ├─ Agent 配对审批
+│  ├─ Foundation admin 用户名登录与 Session/CSRF
+│  ├─ Agent 邀请、配对请求与一次性激活
 │  ├─ 报告限流 -> 有界队列 -> 单 SQLite writer
 │  └─ 原始报告 -> 小时聚合 -> 分层保留
 ├─ Desktop Agent
@@ -18,32 +18,60 @@ Host Monitoring
 ├─ Mobile library
 │  └─ 宿主快照 -> 合约收敛 -> JSON payload
 └─ Delivery
-   ├─ Linux deb/rpm + systemd
-   ├─ Windows Service + Tray + MSI
-   ├─ macOS LaunchDaemon + pkg
-   └─ Server 不可变 tar release
+   ├─ Server：x86_64 GNU/Linux 不可变 tar release
+   └─ Agent
+      ├─ Linux deb/rpm + systemd
+      ├─ Windows x86_64 Service + Tray + MSI
+      └─ macOS LaunchDaemon + pkg
 ```
 
 ## 2. Server 启动
 
-正式进程先确认自己位于 `/opt/isarmg/host-monitoring/releases/0.7.0`，验证 manifest、完整源码 revision、
-target、API、Schema、Web 文件集合/Hash/权限，再解析 `HOST_MONITORING_*`。随后取得数据库 instance
-排他锁和 maintenance 共享锁；已有库先在只读隔离 generation 中验证 `product_metadata` 与实际
-`sqlite_schema` 指纹，最后才打开写连接、启动 writer/retention 和 HTTP listener。
+Server 进程只允许 `x86_64-unknown-linux-gnu` 构建，并在解析命令/配置前通过 `uname` 确认当前内核是
+Linux、机器是 x86_64。正式二进制要求 `--root` 是规范绝对的 `.../releases/0.7.0` 且当前 executable
+就是该树的 `bin/host-monitoring-server`；systemd 提供的标准部署根才固定为
+`/opt/isarmg/host-monitoring/releases/0.7.0`。随后验证 manifest、完整源码 revision、target、API、
+Schema、Web 文件集合/Hash/权限，再解析
+`HOST_MONITORING_*`。随后取得数据库 instance
+排他锁和 maintenance 共享锁；已有库先用独立只读连接验证 `product_metadata` 与实际
+`sqlite_schema` 指纹，最后才通过 `sarmg-sqlite` 打开 WAL、foreign keys、5 秒 busy timeout、FULL
+synchronous 的 SQLx pool，启动 writer/retention 和 HTTP listener。文件创建/权限、精确产品 DDL、
+只读预检和锁仍由产品负责；Foundation 不执行 migration 或初始化产品表。Host 数据库没有可供运维
+调用的 generation/journal API；不要把外部通用引擎的术语写成产品现有能力。
+
+当前数据库身份是 application `host-monitoring`、version `0.7.0`、schema revision `1`、SHA
+`12dd1e61426b6b99df3d429b8c36ee3a5b22d1da776d98fc960b45b4f58c8e05`。`auth_users` DDL 先用 CHECK/
+UNIQUE 约束 canonical username、非空 hash 和布尔 active；`serve`/`admin-create` 再用 Foundation
+primitive 检查已有 username 与完整 Argon2id 参数。`doctor` 检查 Schema/integrity/FK，但不做这项账户
+加载检查。
 
 ## 3. 管理员登录和配对
 
 ```text
-管理员密码 -> Argon2 校验 -> SQLite Session + CSRF
-  -> 浏览器创建/查看 pairing request
-  -> Agent 以一次性 request/invite 轮询
-  -> 管理员批准
-  -> 服务端发放 Agent credential
-  -> Agent 原子提交 active-binding.json
+{username,password} -> Foundation username 规范化 + Argon2id 校验 -> SQLite Session + CSRF
+  -> 受保护管理 API 创建 invite 并返回一次性 activation code
+  -> Agent 创建含 token/polling-secret 摘要的 pairing request
+  -> code 经 Agent 激活端点或管理员激活端点提交
+  -> Server 在一个事务中绑定 invite/request/Host/credential
+  -> Agent 轮询到 active 后原子提交 active-binding.json
 ```
 
 来源、设备、请求/邀请和管理员账户分别拥有有界准入预算；TCP peer 是来源事实，默认不信任 forwarded
-address。相同 pairing request 重放幂等，单设备最多保留四个 live pending 请求。
+address。登录请求恰好是 `{username,password}`。候选 username 必须是 1..64 字节 printable ASCII；
+Server 使用 Foundation 唯一规则 trim ASCII whitespace 并转 ASCII 小写，然后要求 canonical 值为
+3..64 字节、首尾 `[a-z0-9]`、全部字符仅 `[a-z0-9._-]`，明确禁止 `@`，相邻分隔符允许。持久
+`auth_users.username` 只保存 canonical 值并具有 UNIQUE 约束。
+
+登录与 Session 查询只返回 Foundation 精确 `AdministratorSession`：`authenticated=true`、`user_id`、
+`username`、`role=admin`、`csrf_token`，不得出现 email、权限数组或附加字段。`admin` 是默认 username；
+固定的是 `role=admin`，不是 username 只能叫 `admin`。产品没有 viewer/operator/RBAC。相同 pairing
+request 重放幂等，单设备最多保留四个 live pending 请求。
+
+Web 只创建一个 Foundation `AdministratorApiClient`，React 通过共享 hook 以 username 恢复/登录/登出并
+响应 401；
+Session 与 CSRF 仅保存在该 client 的内存闭包。当前页面只请求 Host 列表并以 JSON 展示；Host 列表精确
+响应 guard 仍属于产品。仓库当前没有 invite 创建/取消、激活、备注修改、删除、详情或历史的 React
+交互，也没有 `/activate/{request_id}` 专用页面；这些管理 API 的存在不能被写成已完成的浏览器工作流。
 
 ## 4. Agent 采集与投递
 
@@ -58,6 +86,11 @@ address。相同 pairing request 重放幂等，单设备最多保留四个 live
 writer 停止、总等待超时或写入失败返回 503；两者带 `Retry-After: 1`。客户端断开不会取消已经入队、
 归 writer 所有的工作。
 
+所有 `/api` 失败都输出 Foundation 当前 `ErrorEnvelope`。Agent 只有在严格 JSON、正确 Content-Type、
+状态码/机器码一致且 `retryable=false` 时才作永久 spool/凭据裁决：`401 + unauthorized` 进入重新授权，
+`403 + agent_host_mismatch` 只永久丢弃该错误 Host 的报告。代理/WAF 的文本或非合同响应保持可重试，
+不得改变凭据。
+
 ## 6. 聚合与保留
 
 ```text
@@ -71,6 +104,7 @@ writer 停止、总等待超时或写入失败返回 503；两者带 `Retry-Afte
 
 默认 raw 7 天、aggregate 365 天。崩溃在聚合和删除之间不会丢失或双计；每个 Host 的 latest report 永久
 避开聚合删除。维护任务启动即运行，随后默认五分钟一次，并受事务数、行数、时间和 yield 预算限制。
+当前历史 API 只查询仍存在的 raw 标量行；小时聚合是保留层资产，没有公开读取 API，也不会显示在当前 Web。
 
 ## 7. 平台安装生命周期
 
@@ -84,19 +118,24 @@ writer 停止、总等待超时或写入失败返回 503；两者带 `Retry-Afte
 ## 8. Server 发行流程
 
 ```text
-干净且 annotated v0.7.0 tag == HEAD
+build.rs 拒绝非 x86_64-unknown-linux-gnu
+  -> 打包器确认 x86_64 glibc Linux 宿主
+  -> 干净且 annotated v0.7.0 tag == HEAD
   -> npm ci + Web build
-  -> source revision 绑定 Rust release build
+  -> 显式 target + source revision 绑定 Rust release build
   -> 严格全树 manifest
   -> deterministic archive + checksum
   -> 解包、重定位、真实启动和静态资源探测
   -> 篡改/额外文件/权限负例
 ```
 
-归档没有 migration、backup 或 restore。版本目录不可覆盖，也没有 `current` 链接。
+归档没有 migration、backup 或 restore。版本目录不可覆盖，也没有 `current` 链接；不生成 ARM Linux、
+musl、Windows 或 macOS Server 归档。Windows Agent 的 MSVC 构建继续由独立 CI 矩阵负责。
 
 ## 9. 维护流程
 
-`doctor` 取得 maintenance 共享锁；`admin-create`、`admin-reset-password` 和外部有状态维护取得排他锁，
-运行中的 Server 会让排他维护立即失败。升级时停止 Server 和 Agent，外部工具明确处理旧代；新产品
-安装后重新配对，不让当前产品读取旧凭据。
+`doctor` 取得 maintenance 共享锁，并执行 Schema identity、integrity 与 foreign-key 检查；因此它可以与
+Server 并行执行，但不验证管理员用户名/hash，也不构成离线快照、修复、备份或恢复。
+`admin-create`、`admin-reset-password` 和外部有状态维护取得排他锁，
+运行中的 Server 会让排他维护立即失败。产品本身没有跨版本流程；外部工具只有在存在已评审的具体
+转换边时才能处理非当前输入。当前安装只读取当前凭据和数据身份。

@@ -7,6 +7,7 @@ use anyhow::{Context, bail};
 #[cfg(feature = "otlp")]
 use flate2::{Compression, write::GzEncoder};
 use reqwest::{Certificate, Client, Identity, StatusCode};
+use sarmg_error::ErrorEnvelope;
 
 use host_protocol::AgentReportAck;
 
@@ -133,7 +134,7 @@ impl Reporter {
             .await
             .map_err(anyhow::Error::msg)?;
         // OTLP 是可选的次要输出，调用方只做告警，不区分永久/暂时失败。
-        Ok(ensure_success(status, &body, "OTLP")?)
+        Ok(ensure_generic_success(status, &body, "OTLP")?)
     }
 
     #[cfg(not(feature = "otlp"))]
@@ -255,8 +256,8 @@ pub(crate) fn persist_private_value(path: &Path, token: &str, kind: &str) -> any
 /// | `Transient`  | 只需等待 | 退避重试 |
 #[derive(Debug, thiserror::Error)]
 pub enum SendError {
-    /// 服务端拒绝了报文内容本身（400/409/413）。重试必然再次失败，
-    /// 继续入队只会让 spool 被必失败的数据占满并挤掉后续有效报文。
+    /// 服务端以严格当前 envelope 拒绝了报文内容本身（400/409/413）。重试必然
+    /// 再次失败，继续入队只会让 spool 被必失败的数据占满并挤掉后续有效报文。
     #[error("{0}")]
     Permanent(String),
     /// Host Monitoring 以 401 和稳定 `unauthorized` 机器码确认凭据不被接受。主机进入
@@ -292,7 +293,7 @@ fn validate_host_monitoring_ack(
                 "Host Monitoring returned unexpected HTTP {status}; report acknowledgements require HTTP 202 Accepted"
             )));
         }
-        return ensure_success(status, body, "Host Monitoring");
+        return classify_host_monitoring_response(status, content_type, body);
     }
     if !content_type.is_some_and(is_application_json) {
         return Err(SendError::Transient(format!(
@@ -321,40 +322,69 @@ fn is_application_json(value: &str) -> bool {
         .is_some_and(|media_type| media_type.trim().eq_ignore_ascii_case("application/json"))
 }
 
-fn ensure_success(status: StatusCode, body: &[u8], target: &str) -> Result<(), SendError> {
+/// Classify a Host Monitoring response using both HTTP status and the strict
+/// Foundation `ErrorEnvelope`. A proxy/WAF body, a non-contract `{message}` body or
+/// an envelope with unknown/missing fields is deliberately never allowed to
+/// trigger credential deletion or permanent spool removal.
+pub fn classify_host_monitoring_response(
+    status: StatusCode,
+    content_type: Option<&str>,
+    body: &[u8],
+) -> Result<(), SendError> {
     if status.is_success() {
         return Ok(());
     }
-    let error_code = std::str::from_utf8(body)
-        .ok()
-        .and_then(|body| serde_json::from_str::<ServerErrorCode>(body).ok())
-        .map(|error| error.code);
-    let detail: String = String::from_utf8_lossy(body).chars().take(512).collect();
-    let message = format!("{target} rejected telemetry with HTTP {status}: {detail}");
+    let envelope = content_type
+        .filter(|value| is_application_json(value))
+        .and_then(|_| serde_json::from_slice::<ErrorEnvelope>(body).ok());
+    let detail: String = envelope
+        .as_ref()
+        .map(|error| error.message.chars().take(512).collect())
+        .unwrap_or_else(|| String::from_utf8_lossy(body).chars().take(512).collect());
+    let message = format!("Host Monitoring rejected telemetry with HTTP {status}: {detail}");
     // 404/408/421/429 与 5xx 留作可重试：服务端重启、反代修复、限流退避之后，
     // 同一份报文仍可能被接受。
     match status {
-        StatusCode::BAD_REQUEST | StatusCode::CONFLICT | StatusCode::PAYLOAD_TOO_LARGE => {
-            Err(SendError::Permanent(message))
-        }
+        StatusCode::BAD_REQUEST => match envelope.as_ref() {
+            Some(error) if error.code.as_str() == "bad_request" && !error.retryable => {
+                Err(SendError::Permanent(message))
+            }
+            _ => Err(SendError::Transient(message)),
+        },
+        StatusCode::CONFLICT => match envelope.as_ref() {
+            Some(error) if error.code.as_str() == "conflict" && !error.retryable => {
+                Err(SendError::Permanent(message))
+            }
+            _ => Err(SendError::Transient(message)),
+        },
+        StatusCode::PAYLOAD_TOO_LARGE => match envelope.as_ref() {
+            Some(error) if error.code.as_str() == "payload_too_large" && !error.retryable => {
+                Err(SendError::Permanent(message))
+            }
+            _ => Err(SendError::Transient(message)),
+        },
         // 421 = 请求没走对链路（反向代理未透传 X-Forwarded-*），**不是**凭据问题。
         // 必须早于下面这一支匹配，否则会误判为需要创建新实例并再次配对。
         StatusCode::MISDIRECTED_REQUEST => Err(SendError::Transient(format!(
             "{message}（这是部署配置问题，不是凭据失效：请检查反向代理是否透传 \
              X-Forwarded-Proto 与 X-Forwarded-For）"
         ))),
-        StatusCode::UNAUTHORIZED => match error_code.as_deref() {
-            Some("unauthorized") => Err(SendError::Unauthorized(message)),
+        StatusCode::UNAUTHORIZED => match envelope.as_ref() {
+            Some(error) if error.code.as_str() == "unauthorized" && !error.retryable => {
+                Err(SendError::Unauthorized(message))
+            }
             // A reverse proxy, WAF, or temporary upstream auth layer may generate its own 401.
             // Only Host Monitoring's stable machine code proves that the host credential is invalid;
             // otherwise keep the report queued and retry after the deployment recovers.
             _ => Err(SendError::Transient(message)),
         },
-        StatusCode::FORBIDDEN => match error_code.as_deref() {
+        StatusCode::FORBIDDEN => match envelope.as_ref() {
             // A valid credential accompanied by another host identity can never make this exact
             // report valid. This is the expected fate of old queued reports after pairing to a
             // different server/instance, so discard only that report and continue the FIFO.
-            Some("agent_host_mismatch") => Err(SendError::Permanent(message)),
+            Some(error) if error.code.as_str() == "agent_host_mismatch" && !error.retryable => {
+                Err(SendError::Permanent(message))
+            }
             // A proxy or WAF may generate an unrelated 403. Retrying is safer than permanently
             // deauthorizing a valid credential or deleting telemetry.
             _ => Err(SendError::Transient(message)),
@@ -363,9 +393,15 @@ fn ensure_success(status: StatusCode, body: &[u8], target: &str) -> Result<(), S
     }
 }
 
-#[derive(serde::Deserialize)]
-struct ServerErrorCode {
-    code: String,
+#[cfg(feature = "otlp")]
+fn ensure_generic_success(status: StatusCode, body: &[u8], target: &str) -> Result<(), SendError> {
+    if status.is_success() {
+        return Ok(());
+    }
+    let detail: String = String::from_utf8_lossy(body).chars().take(512).collect();
+    Err(SendError::Transient(format!(
+        "{target} rejected telemetry with HTTP {status}: {detail}"
+    )))
 }
 
 #[cfg(test)]
@@ -487,21 +523,47 @@ mod tests {
 
     #[test]
     fn report_id_conflicts_are_permanent() {
-        let error = ensure_success(
+        let error = classify_host_monitoring_response(
             StatusCode::CONFLICT,
-            b"report_id already belongs to another host",
-            "Host Monitoring",
+            Some("application/json"),
+            br#"{"code":"conflict","message":"report_id already belongs to another host","retryable":false}"#,
         )
         .expect_err("409 cannot become successful by retrying the same report");
         assert!(error.is_permanent());
+
+        let non_contract = classify_host_monitoring_response(
+            StatusCode::CONFLICT,
+            Some("application/json"),
+            br#"{"message":"report_id already belongs to another host"}"#,
+        )
+        .expect_err("a non-contract 409 response must not become a permanent server decision");
+        assert!(matches!(non_contract, SendError::Transient(_)));
+    }
+
+    #[test]
+    fn strict_bad_request_and_payload_limit_codes_are_permanent() {
+        for (status, code) in [
+            (StatusCode::BAD_REQUEST, "bad_request"),
+            (StatusCode::PAYLOAD_TOO_LARGE, "payload_too_large"),
+        ] {
+            let body = serde_json::to_vec(&serde_json::json!({
+                "code": code,
+                "message": "report cannot be accepted",
+                "retryable": false
+            }))
+            .unwrap();
+            let error = classify_host_monitoring_response(status, Some("application/json"), &body)
+                .expect_err("the current server contract rejected the report permanently");
+            assert!(error.is_permanent());
+        }
     }
 
     #[test]
     fn non_contract_422_is_not_treated_as_a_current_permanent_rejection() {
-        let error = ensure_success(
+        let error = classify_host_monitoring_response(
             StatusCode::UNPROCESSABLE_ENTITY,
+            Some("text/plain"),
             b"unexpected response",
-            "Host Monitoring",
         )
         .expect_err("422 is not part of the current Server report contract");
         assert!(matches!(error, SendError::Transient(_)));
@@ -580,19 +642,19 @@ mod tests {
             Err(SendError::Transient(_))
         ));
 
-        let with_obsolete_field = serde_json::to_vec(&serde_json::json!({
+        let with_unknown_field = serde_json::to_vec(&serde_json::json!({
             "host_id": report.host.id,
             "report_id": report.report_id,
             "accepted": true,
             "received_at": Utc::now(),
-            "legacy_status": "ok"
+            "unknown_status_detail": "ok"
         }))
         .unwrap();
         assert!(matches!(
             validate_host_monitoring_ack(
                 StatusCode::ACCEPTED,
                 Some("application/json"),
-                &with_obsolete_field,
+                &with_unknown_field,
                 &report
             ),
             Err(SendError::Transient(_))
@@ -618,10 +680,10 @@ mod tests {
 
     #[test]
     fn stable_unauthorized_code_requires_new_pairing() {
-        let error = ensure_success(
+        let error = classify_host_monitoring_response(
             StatusCode::UNAUTHORIZED,
-            br#"{"code":"unauthorized","message":"unauthorized"}"#,
-            "Host Monitoring",
+            Some("application/json; charset=utf-8"),
+            br#"{"code":"unauthorized","message":"unauthorized","retryable":false}"#,
         )
         .expect_err(
             "Host Monitoring's stable unauthorized code must require a newly authorized pairing",
@@ -633,25 +695,39 @@ mod tests {
     fn unrecognized_unauthorized_response_keeps_the_credential_retryable() {
         let responses: &[&[u8]] = &[
             b"<html><body>temporary proxy authentication</body></html>",
-            br#"{"code":"upstream_auth_required","message":"try again"}"#,
+            br#"{"code":"upstream_auth_required","message":"try again","retryable":false}"#,
             br#"{"message":"missing machine code"}"#,
-            br#"{"code":"Unauthorized","message":"machine codes are case-sensitive"}"#,
-            b"{\"code\":\"unauthorized\",\"message\":\"invalid UTF-8: \xff\"}",
+            br#"{"code":"Unauthorized","message":"machine codes are case-sensitive","retryable":false}"#,
+            br#"{"code":"unauthorized","message":"unknown field","retryable":false,"unknown_extension":true}"#,
+            br#"{"code":"unauthorized","message":"server says retry","retryable":true}"#,
+            b"{\"code\":\"unauthorized\",\"message\":\"invalid UTF-8: \xff\",\"retryable\":false}",
         ];
         for body in responses {
-            let error = ensure_success(StatusCode::UNAUTHORIZED, body, "Host Monitoring")
-                .expect_err("an unknown 401 must not be accepted");
+            let error = classify_host_monitoring_response(
+                StatusCode::UNAUTHORIZED,
+                Some("application/json"),
+                body,
+            )
+            .expect_err("an unknown 401 must not be accepted");
             assert!(matches!(error, SendError::Transient(_)));
             assert!(!error.is_unauthorized());
         }
+
+        let wrong_content_type = classify_host_monitoring_response(
+            StatusCode::UNAUTHORIZED,
+            Some("text/plain"),
+            br#"{"code":"unauthorized","message":"unauthorized","retryable":false}"#,
+        )
+        .expect_err("a non-JSON content type must not authorize credential state changes");
+        assert!(matches!(wrong_content_type, SendError::Transient(_)));
     }
 
     #[test]
     fn forbidden_host_identity_mismatch_is_permanent_for_that_report() {
-        let error = ensure_success(
+        let error = classify_host_monitoring_response(
             StatusCode::FORBIDDEN,
-            br#"{"code":"agent_host_mismatch","message":"token does not belong to host"}"#,
-            "Host Monitoring",
+            Some("application/json"),
+            br#"{"code":"agent_host_mismatch","message":"token does not belong to host","retryable":false}"#,
         )
         .expect_err("a queued report for another host can never match the current credential");
         assert!(error.is_permanent());
@@ -661,10 +737,14 @@ mod tests {
     fn unrecognized_forbidden_response_keeps_the_credential_retryable() {
         for body in [
             b"temporary policy rejection".as_slice(),
-            br#"{"code":"forbidden","message":"unrelated access policy"}"#,
+            br#"{"code":"forbidden","message":"unrelated access policy","retryable":false}"#,
         ] {
-            let error = ensure_success(StatusCode::FORBIDDEN, body, "Host Monitoring")
-                .expect_err("an unknown 403 must not be accepted");
+            let error = classify_host_monitoring_response(
+                StatusCode::FORBIDDEN,
+                Some("application/json"),
+                body,
+            )
+            .expect_err("an unknown 403 must not be accepted");
             assert!(matches!(error, SendError::Transient(_)));
             assert!(!error.is_permanent());
         }

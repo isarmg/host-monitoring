@@ -25,7 +25,8 @@ const ACCOUNT_ENTRY_CAPACITY: usize = 4_096;
 const RATE_ENTRY_TTL: Duration = Duration::from_secs(15 * 60);
 const ARGON2_CONCURRENCY: usize = 2;
 const ARGON2_ACQUIRE_TIMEOUT: Duration = Duration::from_secs(1);
-// Generated with the same Argon2::default parameters used by isarmg-auth.
+// Generated with the exact current sarmg-admin-auth Argon2id policy. This
+// account-independent hash keeps missing-account verification timing bounded.
 const DUMMY_PASSWORD_HASH: &str = "$argon2id$v=19$m=19456,t=2,p=1$aOVS660TGXMspMgoSOcv6A$1eMydp1lX0/SzNdUYR28nln2fa2gMPGF626+W6gPKK8";
 
 #[derive(Clone)]
@@ -60,6 +61,8 @@ impl LoginAdmission {
     ) -> Self {
         assert!(argon2_concurrency > 0);
         assert!(!argon2_acquire_timeout.is_zero());
+        sarmg_admin_auth::require_current_password_hash(DUMMY_PASSWORD_HASH)
+            .expect("the built-in dummy hash must use the current Foundation policy");
         Self {
             rates: Arc::new(Mutex::new(LoginRateState {
                 sources: BoundedBuckets::new(source_policy, source_capacity, entry_ttl),
@@ -354,8 +357,8 @@ mod tests {
             .check_source_at("192.0.2.11".parse().unwrap(), now)
             .unwrap();
 
-        let first_spelling = crate::store::normalize_user_email(" Admin@Example.COM ");
-        let second_spelling = crate::store::normalize_user_email("admin@example.com");
+        let first_spelling = crate::store::normalize_username(" Admin ").unwrap();
+        let second_spelling = crate::store::normalize_username("admin").unwrap();
         assert_eq!(first_spelling, second_spelling);
         admission.check_account_at(&first_spelling, now).unwrap();
         admission.check_account_at(&second_spelling, now).unwrap();
@@ -363,9 +366,7 @@ mod tests {
             admission.check_account_at(&first_spelling, now),
             Err(Error::LoginRateLimited { .. })
         ));
-        admission
-            .check_account_at("other@example.com", now)
-            .unwrap();
+        admission.check_account_at("other-admin", now).unwrap();
     }
 
     #[test]
@@ -439,7 +440,7 @@ mod tests {
         let admission = LoginAdmission::for_test(8, 8, 2, Duration::from_secs(1));
         let user = StoredUser {
             user_id: "user-id".into(),
-            email: "admin@example.com".into(),
+            username: "admin".into(),
             password_hash: crate::auth::hash_password("correct-password").unwrap(),
             active: true,
             session_version: 1,

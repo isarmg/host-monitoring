@@ -136,9 +136,9 @@ async fn finish_create_request(
         bail!("internal error: expected a creating pairing state");
     };
     validate_state_version(version)?;
-    // Pairing state survives upgrades and is an input in its own right. Do not
-    // rely only on validation of today's config: an older state file may have
-    // persisted a remote plaintext bootstrap endpoint under looser rules.
+    // Pairing state survives process restarts and is an input in its own right.
+    // Validate the persisted current-format endpoint again: configuration may
+    // have changed or local state may have been modified after it was written.
     crate::config::validate_pairing_endpoint(&pairing_endpoint)
         .context("stored pairing endpoint is unsafe")?;
     config

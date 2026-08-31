@@ -19,6 +19,41 @@ SPEC.loader.exec_module(PACKAGE)
 
 
 class ReleaseToolingTests(unittest.TestCase):
+    def test_release_host_is_exactly_linux_x86_64(self) -> None:
+        PACKAGE.require_release_host("Linux", "x86_64", "glibc 2.41")
+        for system, machine, libc in [
+            ("Linux", "aarch64", "glibc 2.41"),
+            ("Linux", "x86_64", "musl 1.2.5"),
+            ("Darwin", "x86_64", None),
+            ("Windows", "AMD64", None),
+        ]:
+            with self.subTest(system=system, machine=machine, libc=libc):
+                with self.assertRaisesRegex(
+                    SystemExit, "require an x86_64 GNU/Linux build host"
+                ):
+                    PACKAGE.require_release_host(system, machine, libc)
+
+    def test_server_build_uses_the_only_supported_target(self) -> None:
+        self.assertEqual(
+            PACKAGE.server_build_command(),
+            [
+                "cargo",
+                "build",
+                "--locked",
+                "--release",
+                "-p",
+                "host-monitoring-server",
+                "--target",
+                "x86_64-unknown-linux-gnu",
+            ],
+        )
+        target_directory = Path("/tmp/release-target")
+        self.assertEqual(
+            PACKAGE.built_server_path(target_directory),
+            target_directory
+            / "x86_64-unknown-linux-gnu/release/host-monitoring-server",
+        )
+
     def test_copy_exclusive_creates_read_only_content(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

@@ -404,13 +404,13 @@ mod tests {
     fn unknown_report_fields_are_rejected_at_every_level() {
         let mut values = Vec::new();
         let mut top_level = serde_json::to_value(fixture()).unwrap();
-        top_level["removed_top_level"] = serde_json::json!(true);
+        top_level["unknown_top_level"] = serde_json::json!(true);
         values.push(top_level);
         let mut host = serde_json::to_value(fixture()).unwrap();
-        host["host"]["legacy_id"] = serde_json::json!(true);
+        host["host"]["unknown_identity"] = serde_json::json!(true);
         values.push(host);
         let mut cpu = serde_json::to_value(fixture()).unwrap();
-        cpu["system"]["cpu"]["old_usage"] = serde_json::json!(true);
+        cpu["system"]["cpu"]["unknown_measurement"] = serde_json::json!(true);
         values.push(cpu);
         for value in values {
             assert!(serde_json::from_value::<AgentReport>(value).is_err());

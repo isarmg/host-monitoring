@@ -20,6 +20,8 @@ use host_monitoring_server::{
 use host_protocol::{
     AgentHealth, AgentReport, Capability, CpuSnapshot, HostIdentity, MemorySnapshot, SystemSnapshot,
 };
+use http_body_util::BodyExt;
+use sarmg_error::ErrorEnvelope;
 use sqlx::{Sqlite, SqlitePool, pool::PoolConnection};
 use tempfile::TempDir;
 use tokio::task::JoinSet;
@@ -165,6 +167,23 @@ fn application(pool: SqlitePool, writer: TelemetryWriter) -> Router {
     )
 }
 
+async fn assert_error_envelope(
+    response: axum::response::Response,
+    status: StatusCode,
+    code: &str,
+    retryable: bool,
+) {
+    assert_eq!(response.status(), status);
+    assert_eq!(
+        response.headers().get(header::CONTENT_TYPE).unwrap(),
+        "application/json"
+    );
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let envelope: ErrorEnvelope = serde_json::from_slice(&body).unwrap();
+    assert_eq!(envelope.code.as_str(), code);
+    assert_eq!(envelope.retryable, retryable);
+}
+
 async fn begin_write_lock(pool: &SqlitePool) -> PoolConnection<Sqlite> {
     let mut connection = pool.acquire().await.unwrap();
     sqlx::query("BEGIN IMMEDIATE")
@@ -206,7 +225,13 @@ async fn router_authentication_binding_body_and_validation_all_precede_enqueue()
         .oneshot(report_request("wrong-agent-token", &valid))
         .await
         .unwrap();
-    assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
+    assert_error_envelope(
+        unauthorized,
+        StatusCode::UNAUTHORIZED,
+        "unauthorized",
+        false,
+    )
+    .await;
 
     let wrong_binding = app
         .clone()
@@ -216,7 +241,13 @@ async fn router_authentication_binding_body_and_validation_all_precede_enqueue()
         ))
         .await
         .unwrap();
-    assert_eq!(wrong_binding.status(), StatusCode::UNAUTHORIZED);
+    assert_error_envelope(
+        wrong_binding,
+        StatusCode::FORBIDDEN,
+        "agent_host_mismatch",
+        false,
+    )
+    .await;
 
     let mut invalid = valid.clone();
     invalid.interval_seconds = 0.0;
@@ -225,7 +256,7 @@ async fn router_authentication_binding_body_and_validation_all_precede_enqueue()
         .oneshot(report_request(&token, &invalid))
         .await
         .unwrap();
-    assert_eq!(invalid.status(), StatusCode::BAD_REQUEST);
+    assert_error_envelope(invalid, StatusCode::BAD_REQUEST, "bad_request", false).await;
 
     let oversized = app
         .clone()
@@ -242,7 +273,13 @@ async fn router_authentication_binding_body_and_validation_all_precede_enqueue()
         )
         .await
         .unwrap();
-    assert_eq!(oversized.status(), StatusCode::PAYLOAD_TOO_LARGE);
+    assert_error_envelope(
+        oversized,
+        StatusCode::PAYLOAD_TOO_LARGE,
+        "payload_too_large",
+        false,
+    )
+    .await;
     assert_eq!(writer.stats().enqueued, 0);
 
     let accepted = app.oneshot(report_request(&token, &valid)).await.unwrap();
@@ -433,15 +470,27 @@ async fn router_overload_is_fast_bounded_and_closed_writer_is_retryable() {
         .oneshot(report_request(&token, &third))
         .await
         .unwrap();
-    assert_eq!(overloaded.status(), StatusCode::TOO_MANY_REQUESTS);
     assert_eq!(overloaded.headers()[header::RETRY_AFTER], "1");
     assert!(overload_started.elapsed() < Duration::from_millis(150));
+    assert_error_envelope(
+        overloaded,
+        StatusCode::TOO_MANY_REQUESTS,
+        "too_many_requests",
+        true,
+    )
+    .await;
 
     let first_response = first_task.await.unwrap();
     let second_response = second_task.await.unwrap();
     for response in [first_response, second_response] {
-        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
         assert_eq!(response.headers()[header::RETRY_AFTER], "1");
+        assert_error_envelope(
+            response,
+            StatusCode::SERVICE_UNAVAILABLE,
+            "service_unavailable",
+            true,
+        )
+        .await;
     }
     release_write_lock(blocker).await;
     task.shutdown().await.unwrap();
@@ -465,8 +514,14 @@ async fn router_overload_is_fast_bounded_and_closed_writer_is_retryable() {
         ))
         .await
         .unwrap();
-    assert_eq!(after_close.status(), StatusCode::SERVICE_UNAVAILABLE);
     assert_eq!(after_close.headers()[header::RETRY_AFTER], "1");
+    assert_error_envelope(
+        after_close,
+        StatusCode::SERVICE_UNAVAILABLE,
+        "service_unavailable",
+        true,
+    )
+    .await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -489,8 +544,14 @@ async fn writer_failure_is_503_and_restart_preserves_report_idempotency() {
         .oneshot(report_request(&token, &item))
         .await
         .unwrap();
-    assert_eq!(failed.status(), StatusCode::SERVICE_UNAVAILABLE);
     assert_eq!(failed.headers()[header::RETRY_AFTER], "1");
+    assert_error_envelope(
+        failed,
+        StatusCode::SERVICE_UNAVAILABLE,
+        "service_unavailable",
+        true,
+    )
+    .await;
     failed_task.shutdown().await.unwrap();
 
     let (first_writer, first_task) =

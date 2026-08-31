@@ -8,12 +8,16 @@
 
 ## 8.2 本地基础门禁
 
+完整 workspace/Server 门禁仅在 x86_64 GNU/Linux 执行。Windows/macOS 不尝试构建 Server，而是继续
+验证各自 Agent；尤其不得删除 CI 中的 `x86_64-pc-windows-msvc` Windows Agent release 构建。
+
 ```bash
 cargo +1.98.0 fmt --all -- --check
-cargo +1.98.0 check --workspace --locked --all-targets --all-features
-cargo +1.98.0 clippy --workspace --locked --all-targets --all-features -- -D warnings
-cargo +1.98.0 test --workspace --locked
+cargo +1.98.0 check --workspace --locked --target x86_64-unknown-linux-gnu --all-targets --all-features
+cargo +1.98.0 clippy --workspace --locked --target x86_64-unknown-linux-gnu --all-targets --all-features -- -D warnings
+cargo +1.98.0 test --workspace --locked --target x86_64-unknown-linux-gnu
 cd clients/web
+# Node 必须与仓库根 .node-version 的 26.7.0 一致
 npm ci
 npm run build
 ```
@@ -27,8 +31,8 @@ npm run build
 2. `status` 验证本地状态与配对。
 3. `once` 验证 spool 和主投递。
 4. Server readiness/日志验证准入与 writer。
-5. 数据库/API 验证 latest/raw。
-6. Web 验证展示。
+5. 数据库/API 验证 latest/raw；不要期待 history 自动读取 aggregate。
+6. Web 只验证 Session 和 Host 列表 JSON；详情、图表、pairing 与管理变更 UI 尚不存在。
 
 每次只跨一层，避免用“重装一切”掩盖原因。
 
@@ -45,18 +49,24 @@ npm run build
 ## 8.6 安全测试
 
 包含链接/特殊文件/硬链接、宽权限目录、超大 JSON、unknown fields、CSRF/Origin、forwarded spoof、Secret
-redaction、TLS 验证和安装脚本路径替换。安全负例必须与功能正例同等重要。
+redaction、TLS 证书/主机名验证、redirect 拒绝、默认远程 HTTP 拒绝与持久明文开关，以及安装脚本路径
+替换。安全负例必须与功能正例同等重要。
+
+管理员合同变更还要跨 Rust DTO、Foundation TS guard/JSON Schema、Host SQLite DDL/Schema SHA、登录
+限流 key、Session response、CLI/env 和 React 表单做全文闭包检查。当前正例应覆盖 ` Admin ` 规范化为
+`admin`；负例覆盖 `@`、内部空格、首尾分隔符、非 ASCII、control、过短/过长、额外 JSON 字段和非
+`admin` role。Host Server/Web 中不应出现 email 字段或兼容 alias。
 
 ## 8.7 版本与名称变更
 
-破坏性变更应全量替换 crate/binary/package/service/API/配置/文档/测试/发行 identity，删除旧入口。用
+破坏性变更应全量替换 crate/binary/package/service/API/配置/文档/测试/发行 identity，只留下唯一入口。用
 全文和文件路径搜索审计，再构建真实包；仅 Cargo metadata 成功不足以证明安装资产已同步。
 
 ## 8.8 提交前检查表
 
 - 工作树只包含本问题相关修改。
-- 格式、编译、Clippy、测试、Web 和脚本全部通过。
-- 当前名称与版本全局唯一，忽略构建目录后旧身份搜索为零。
+- 格式、Server x86_64 GNU/Linux、各 Agent 目标、Clippy、测试、Web 和脚本全部通过。
+- 当前名称与版本全局唯一，忽略构建目录后不存在任何非当前产品身份。
 - 文档命令确实存在，链接可解析。
 - 没有凭据、真实主机数据、target/node_modules 或临时包。
 - 大问题形成可独立回滚的提交。

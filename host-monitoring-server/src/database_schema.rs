@@ -6,11 +6,11 @@ use std::{
 
 use anyhow::{Context, ensure};
 use rusqlite::{Connection, OpenFlags, OptionalExtension};
-use sha2::{Digest, Sha256};
-use sqlx::{
-    Row, Sqlite, SqlitePool,
-    sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous},
+use sarmg_schema_identity::{
+    ProductMetadataRow, SQLITE_SCHEMA_ROWS_QUERY, SchemaIdentity, SchemaRow, verify_current_schema,
 };
+use sarmg_sqlite::{PRODUCT_METADATA_DDL, PoolOptions};
+use sqlx::SqlitePool;
 
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
@@ -18,25 +18,9 @@ use std::os::unix::fs::OpenOptionsExt;
 pub const APPLICATION: &str = "host-monitoring";
 pub const APPLICATION_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const SCHEMA_REVISION: i64 = 1;
-pub const SCHEMA_SHA256: &str = "2f63778e94b345d100c10f8b45b98f06e39590547f6b1d65f9b5b0e7f6989328";
+pub const SCHEMA_SHA256: &str = "12dd1e61426b6b99df3d429b8c36ee3a5b22d1da776d98fc960b45b4f58c8e05";
 
 const CURRENT_SCHEMA_SQL: &str = include_str!("../schema.sql");
-const PRODUCT_METADATA_DDL: &str = "CREATE TABLE product_metadata (\n\
-    singleton INTEGER PRIMARY KEY NOT NULL CHECK(singleton=1),\n\
-    application TEXT NOT NULL,\n\
-    application_version TEXT NOT NULL,\n\
-    schema_revision INTEGER NOT NULL,\n\
-    schema_sha256 TEXT NOT NULL\n\
-)";
-
-#[derive(Debug, PartialEq, Eq)]
-struct ProductMetadata {
-    singleton: i64,
-    application: String,
-    application_version: String,
-    schema_revision: i64,
-    schema_sha256: String,
-}
 
 pub async fn open_or_initialize(database_url: &str) -> anyhow::Result<SqlitePool> {
     let path = database_path(database_url)?;
@@ -45,7 +29,7 @@ pub async fn open_or_initialize(database_url: &str) -> anyhow::Result<SqlitePool
     #[cfg(unix)]
     options.mode(0o600);
     match options.open(&path) {
-        Ok(file) => initialize_created(database_url, &path, file).await,
+        Ok(file) => initialize_created(&path, file).await,
         Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
             open_existing(database_url).await
         }
@@ -59,7 +43,7 @@ pub async fn open_existing(database_url: &str) -> anyhow::Result<SqlitePool> {
     tokio::task::spawn_blocking(move || validate_read_only(&validation_path))
         .await
         .context("join read-only database schema validation")??;
-    let pool = open_pool(database_url, false).await?;
+    let pool = open_pool(&path).await?;
     if let Err(error) = validate_pool(&pool).await {
         pool.close().await;
         return Err(error);
@@ -67,11 +51,7 @@ pub async fn open_existing(database_url: &str) -> anyhow::Result<SqlitePool> {
     Ok(pool)
 }
 
-async fn initialize_created(
-    database_url: &str,
-    path: &Path,
-    file: File,
-) -> anyhow::Result<SqlitePool> {
+async fn initialize_created(path: &Path, file: File) -> anyhow::Result<SqlitePool> {
     if let Err(error) = file
         .sync_all()
         .context("synchronize new Host Monitoring database file")
@@ -84,7 +64,7 @@ async fn initialize_created(
         return fail_initialization(path, error);
     }
     drop(file);
-    let pool = match open_pool(database_url, false).await {
+    let pool = match open_pool(path).await {
         Ok(pool) => pool,
         Err(error) => return fail_initialization(path, error),
     };
@@ -109,32 +89,19 @@ fn fail_initialization<T>(path: &Path, error: anyhow::Error) -> anyhow::Result<T
 }
 
 async fn checkpoint_and_sync(pool: &SqlitePool, path: &Path) -> anyhow::Result<()> {
-    let (busy, log_frames, checkpointed_frames): (i64, i64, i64) =
-        sqlx::query_as("PRAGMA wal_checkpoint(TRUNCATE)")
-            .fetch_one(pool)
-            .await
-            .context("checkpoint initialized Host Monitoring schema")?;
-    ensure!(
-        busy == 0 && checkpointed_frames == log_frames,
-        "initialized schema WAL checkpoint was incomplete"
-    );
+    sarmg_sqlite::checkpoint(pool)
+        .await
+        .context("checkpoint initialized Host Monitoring schema")?;
     sync_file_and_parent(path)
 }
 
-async fn open_pool(database_url: &str, create_if_missing: bool) -> anyhow::Result<SqlitePool> {
-    let options = database_url
-        .parse::<SqliteConnectOptions>()?
-        .create_if_missing(create_if_missing)
-        .journal_mode(SqliteJournalMode::Wal)
-        .foreign_keys(true)
-        .busy_timeout(Duration::from_secs(5))
-        .synchronous(SqliteSynchronous::Full);
-    Ok(SqlitePoolOptions::new()
-        .max_connections(16)
-        .min_connections(1)
-        .acquire_timeout(Duration::from_secs(5))
-        .connect_with(options)
-        .await?)
+async fn open_pool(database_path: &Path) -> anyhow::Result<SqlitePool> {
+    let options = PoolOptions::new(16)
+        .with_min_connections(1)
+        .with_acquire_timeout(Duration::from_secs(5));
+    sarmg_sqlite::open_existing(database_path, options)
+        .await
+        .context("open Host Monitoring database with the Foundation SQLite baseline")
 }
 
 /// Initializes one completely empty SQLite database with the single current
@@ -156,7 +123,7 @@ pub async fn initialize_empty(pool: &SqlitePool) -> anyhow::Result<()> {
     sqlx::raw_sql(CURRENT_SCHEMA_SQL)
         .execute(&mut *transaction)
         .await?;
-    let actual = fingerprint_transaction(&mut transaction).await?;
+    let actual = sarmg_sqlite::schema_fingerprint(&mut *transaction).await?;
     ensure!(
         actual == SCHEMA_SHA256,
         "compiled current schema fingerprint mismatch: expected {SCHEMA_SHA256}, computed {actual}"
@@ -186,25 +153,10 @@ pub async fn validate_pool(pool: &SqlitePool) -> anyhow::Result<()> {
         metadata_sql.as_deref() == Some(PRODUCT_METADATA_DDL),
         "database product_metadata schema is not the exact current contract"
     );
-    let rows = sqlx::query(
-        "SELECT singleton,application,application_version,schema_revision,schema_sha256 \
-         FROM product_metadata ORDER BY singleton",
-    )
-    .fetch_all(pool)
-    .await?;
-    let metadata = rows
-        .iter()
-        .map(|row| ProductMetadata {
-            singleton: row.get(0),
-            application: row.get(1),
-            application_version: row.get(2),
-            schema_revision: row.get(3),
-            schema_sha256: row.get(4),
-        })
-        .collect::<Vec<_>>();
-    validate_metadata(&metadata)?;
-    let actual = fingerprint_pool(pool).await?;
-    validate_fingerprint(&metadata[0], &actual)
+    sarmg_sqlite::require_pool_current_schema(pool, &expected_identity()?)
+        .await
+        .context("database is not the exact current Host Monitoring schema")?;
+    Ok(())
 }
 
 pub async fn is_current(pool: &SqlitePool) -> bool {
@@ -212,7 +164,9 @@ pub async fn is_current(pool: &SqlitePool) -> bool {
 }
 
 pub async fn actual_schema_sha256(pool: &SqlitePool) -> anyhow::Result<String> {
-    fingerprint_pool(pool).await
+    sarmg_sqlite::schema_fingerprint(pool)
+        .await
+        .context("fingerprint Host Monitoring schema")
 }
 
 fn validate_read_only(path: &Path) -> anyhow::Result<()> {
@@ -259,7 +213,7 @@ fn validate_connection_contract(connection: &Connection) -> anyhow::Result<()> {
         )?;
         statement
             .query_map([], |row| {
-                Ok(ProductMetadata {
+                Ok(ProductMetadataRow {
                     singleton: row.get(0)?,
                     application: row.get(1)?,
                     application_version: row.get(2)?,
@@ -269,98 +223,30 @@ fn validate_connection_contract(connection: &Connection) -> anyhow::Result<()> {
             })?
             .collect::<Result<Vec<_>, _>>()?
     };
-    validate_metadata(&metadata)?;
-    let actual = fingerprint_connection(connection)?;
-    validate_fingerprint(&metadata[0], &actual)
-}
-
-fn validate_metadata(metadata: &[ProductMetadata]) -> anyhow::Result<()> {
-    ensure!(
-        metadata.len() == 1,
-        "product_metadata must contain exactly one row"
-    );
-    let metadata = &metadata[0];
-    ensure!(
-        metadata.singleton == 1
-            && metadata.application == APPLICATION
-            && metadata.application_version == APPLICATION_VERSION
-            && metadata.schema_revision == SCHEMA_REVISION
-            && metadata.schema_sha256 == SCHEMA_SHA256,
-        "database metadata is not the exact current Host Monitoring version; use the external upgrade tool"
-    );
-    Ok(())
-}
-
-fn validate_fingerprint(metadata: &ProductMetadata, actual: &str) -> anyhow::Result<()> {
-    ensure!(
-        metadata.schema_sha256 == SCHEMA_SHA256 && actual == SCHEMA_SHA256,
-        "database schema fingerprint is not the exact current Host Monitoring schema; use the external upgrade tool"
-    );
-    Ok(())
-}
-
-async fn fingerprint_pool(pool: &SqlitePool) -> anyhow::Result<String> {
-    let rows = schema_rows(pool).await?;
-    Ok(fingerprint(rows))
-}
-
-async fn fingerprint_transaction(
-    transaction: &mut sqlx::Transaction<'_, Sqlite>,
-) -> anyhow::Result<String> {
-    let rows = sqlx::query(
-        "SELECT type,name,tbl_name,COALESCE(sql,'') FROM sqlite_schema \
-         WHERE name NOT GLOB 'sqlite_*' AND name <> 'product_metadata' \
-         ORDER BY type,name,tbl_name",
-    )
-    .fetch_all(&mut **transaction)
-    .await?
-    .into_iter()
-    .map(|row| (row.get(0), row.get(1), row.get(2), row.get(3)))
-    .collect();
-    Ok(fingerprint(rows))
-}
-
-async fn schema_rows(pool: &SqlitePool) -> anyhow::Result<Vec<(String, String, String, String)>> {
-    Ok(sqlx::query(
-        "SELECT type,name,tbl_name,COALESCE(sql,'') FROM sqlite_schema \
-         WHERE name NOT GLOB 'sqlite_*' AND name <> 'product_metadata' \
-         ORDER BY type,name,tbl_name",
-    )
-    .fetch_all(pool)
-    .await?
-    .into_iter()
-    .map(|row| (row.get(0), row.get(1), row.get(2), row.get(3)))
-    .collect())
-}
-
-fn fingerprint_connection(connection: &Connection) -> anyhow::Result<String> {
-    let mut statement = connection.prepare(
-        "SELECT type,name,tbl_name,COALESCE(sql,'') FROM sqlite_schema \
-         WHERE name NOT GLOB 'sqlite_*' AND name <> 'product_metadata' \
-         ORDER BY type,name,tbl_name",
-    )?;
+    let mut statement = connection.prepare(SQLITE_SCHEMA_ROWS_QUERY)?;
     let rows = statement
         .query_map([], |row| {
-            Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+            Ok(SchemaRow::new(
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+            ))
         })?
         .collect::<Result<Vec<_>, _>>()?;
-    Ok(fingerprint(rows))
+    verify_current_schema(&metadata, &rows, &expected_identity()?)
+        .context("database is not the exact current Host Monitoring schema")?;
+    Ok(())
 }
 
-fn fingerprint(rows: Vec<(String, String, String, String)>) -> String {
-    let mut digest = Sha256::new();
-    for row in rows {
-        for field in [row.0, row.1, row.2, row.3] {
-            let bytes = field.as_bytes();
-            digest.update((bytes.len() as u64).to_be_bytes());
-            digest.update(bytes);
-        }
-    }
-    digest
-        .finalize()
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect()
+fn expected_identity() -> anyhow::Result<SchemaIdentity> {
+    SchemaIdentity::new(
+        APPLICATION,
+        APPLICATION_VERSION,
+        u64::try_from(SCHEMA_REVISION).context("schema revision must not be negative")?,
+        SCHEMA_SHA256,
+    )
+    .context("compiled Host Monitoring schema identity is invalid")
 }
 
 fn database_path(database_url: &str) -> anyhow::Result<PathBuf> {
@@ -414,13 +300,13 @@ mod tests {
     #[test]
     fn fingerprint_uses_the_upgrade_contract_binary_framing() {
         let rows = vec![
-            (
+            SchemaRow::new(
                 "table".to_string(),
                 "a".to_string(),
                 "a".to_string(),
                 "CREATE TABLE a(x)".to_string(),
             ),
-            (
+            SchemaRow::new(
                 "trigger".to_string(),
                 "触发".to_string(),
                 "a".to_string(),
@@ -428,7 +314,7 @@ mod tests {
             ),
         ];
         assert_eq!(
-            fingerprint(rows),
+            sarmg_schema_identity::schema_fingerprint(&rows).unwrap(),
             "c51a04c9248c03f8637dadfa8aafad30bd3f233b474f464f807892071c010049"
         );
     }

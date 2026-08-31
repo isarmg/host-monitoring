@@ -191,7 +191,7 @@ mod tests {
             "report_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
             "accepted": true,
             "received_at": "2026-01-01T00:00:00Z",
-            "legacy_status": "ok"
+            "unknown_status_detail": "ok"
         });
         assert!(serde_json::from_value::<AgentReportAck>(value).is_err());
     }

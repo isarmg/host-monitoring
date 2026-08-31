@@ -13,8 +13,6 @@ pub mod retention;
 pub mod store;
 pub mod telemetry;
 
-use sha2::{Digest, Sha256};
-
 pub fn token_hash(token: &str) -> String {
-    format!("{:x}", Sha256::digest(token.as_bytes()))
+    sarmg_admin_auth::token_hash_hex(token)
 }

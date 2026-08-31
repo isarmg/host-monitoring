@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import platform
 import re
 import shutil
 import socket
@@ -26,6 +27,47 @@ TAG = f"v{VERSION}"
 
 def fail(message: str) -> NoReturn:
     raise SystemExit(f"package server release: {message}")
+
+
+def require_release_host(
+    system: str | None = None,
+    machine: str | None = None,
+    gnu_libc: str | None = None,
+) -> None:
+    system = platform.system() if system is None else system
+    machine = platform.machine() if machine is None else machine
+    if gnu_libc is None:
+        try:
+            gnu_libc = os.confstr("CS_GNU_LIBC_VERSION")
+        except (AttributeError, OSError, ValueError):
+            gnu_libc = None
+    if (
+        system != "Linux"
+        or machine != "x86_64"
+        or gnu_libc is None
+        or not gnu_libc.startswith("glibc ")
+    ):
+        fail(
+            f"official Server releases require an x86_64 GNU/Linux build host; "
+            f"detected system={system!r}, machine={machine!r}, libc={gnu_libc!r}"
+        )
+
+
+def server_build_command() -> list[str]:
+    return [
+        "cargo",
+        "build",
+        "--locked",
+        "--release",
+        "-p",
+        APPLICATION,
+        "--target",
+        TARGET,
+    ]
+
+
+def built_server_path(cargo_target: Path) -> Path:
+    return cargo_target / TARGET / "release" / APPLICATION
 
 
 def run(
@@ -192,7 +234,7 @@ def relocated_smoke(extracted: Path, temporary: Path) -> None:
             "HOST_MONITORING_STATIC_DIR": os.fspath(extracted / "web"),
             "HOST_MONITORING_BIND": f"127.0.0.1:{port}",
             "HOST_MONITORING_DEVELOPMENT": "true",
-            "HOST_MONITORING_BOOTSTRAP_ADMIN_EMAIL": "release-smoke@example.invalid",
+            "HOST_MONITORING_BOOTSTRAP_ADMIN_USERNAME": "release-smoke",
             "HOST_MONITORING_BOOTSTRAP_ADMIN_PASSWORD": "release-smoke-password",
         }
     )
@@ -278,6 +320,7 @@ def relocated_smoke(extracted: Path, temporary: Path) -> None:
 def main() -> None:
     if len(sys.argv) != 2:
         fail("usage: package-server-release.py /absolute/output-directory")
+    require_release_host()
     source = Path(__file__).resolve(strict=True).parent.parent
     output_directory = Path(sys.argv[1])
     if not output_directory.is_absolute():
@@ -341,18 +384,14 @@ def main() -> None:
                 "HOST_MONITORING_SOURCE_REVISION": revision,
             }
         )
-        run(
-            ["cargo", "build", "--locked", "--release", "-p", "host-monitoring-server"],
-            cwd=source,
-            env=build_environment,
-        )
-        built_binary = cargo_target / "release/host-monitoring-server"
+        run(server_build_command(), cwd=source, env=build_environment)
+        built_binary = built_server_path(cargo_target)
         if not built_binary.is_file() or built_binary.is_symlink():
             fail("Cargo did not produce the expected server release binary")
 
         shutil.copyfile(built_binary, root / "bin/host-monitoring-server")
         shutil.copyfile(
-            source / "host-monitoring-server/systemd/host-monitoring-server.service",
+            source / "deploy/host-monitoring-server.service",
             root / "systemd/host-monitoring-server.service",
         )
         shutil.copyfile(source / "docs/operations.md", root / "README.md")

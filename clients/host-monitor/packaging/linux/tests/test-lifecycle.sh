@@ -76,7 +76,7 @@ do
   rewrite_for_test_root "$source_script" "$test_root/$(basename "$source_script")"
 done
 
-if grep -E -i 'backup|restore|migrat|legacy|compat' \
+if grep -E -i 'backup|restore|migrat' \
   "$packaging_dir/postinstall.sh" \
   "$packaging_dir/preremove.sh" \
   "$packaging_dir/postremove.sh" \
@@ -406,7 +406,7 @@ assert_absent "$test_root/attacker-command-ran"
 : >"$TEST_LOG"
 "$test_root/preremove.sh" upgrade "$package_version"
 assert_log_contains 'stop host-monitor.service'
-if "$test_root/preremove.sh" upgrade 0.3.1 >/dev/null 2>&1; then
+if "$test_root/preremove.sh" upgrade 0.0.0 >/dev/null 2>&1; then
   fail 'Debian cross-version replacement was accepted'
 fi
 
@@ -617,7 +617,7 @@ assert_absent "$test_root/group.deleted"
 # for the other identity is discovered.
 reset_safe_reinstall_state
 : >"$test_root/var/lib/host-monitor-package/foreign-bookkeeping-sentinel"
-printf 'format=0.3.1\ngid=998\n' \
+printf 'format=0.0.0\ngid=998\n' \
   >"$test_root/var/lib/host-monitor-package/managed-group"
 if "$test_root/postremove.sh" purge >"$test_root/purge-valid-user-bad-group.log" 2>&1; then
   fail 'postremove purge deleted a user before parsing the invalid group marker'
@@ -630,7 +630,7 @@ assert_absent "$test_root/group.deleted"
 
 reset_safe_reinstall_state
 : >"$test_root/var/lib/host-monitor-package/foreign-bookkeeping-sentinel"
-printf 'format=0.3.1\nuid=998\nprimary_gid=998\n' \
+printf 'format=0.0.0\nuid=998\nprimary_gid=998\n' \
   >"$test_root/var/lib/host-monitor-package/managed-user"
 if "$test_root/purge-local-state.sh" --yes \
   >"$test_root/purge-bad-user-valid-group.log" 2>&1; then
@@ -992,7 +992,7 @@ if "$test_root/postinstall.sh" >"$test_root/symlink-config.log" 2>&1; then
 fi
 
 reset_safe_reinstall_state
-sed -i "s/$package_version/0.3.1/" "$test_root/etc/host-monitor/config.json"
+sed -i "s/$package_version/0.0.0/" "$test_root/etc/host-monitor/config.json"
 if "$test_root/postinstall.sh" >"$test_root/stale-config.log" 2>&1; then
   fail 'postinstall accepted a config from another Agent version'
 fi

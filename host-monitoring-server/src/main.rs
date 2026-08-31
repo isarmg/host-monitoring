@@ -10,6 +10,7 @@ use host_monitoring_server::{
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    host_monitoring_server::release_contract::ensure_supported_runtime()?;
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
@@ -31,19 +32,21 @@ async fn main() -> anyhow::Result<()> {
         Command::AdminCreate(database) => {
             let maintenance = MaintenanceLock::exclusive(&database.database_url)?;
             let pool = store::open_or_initialize(&maintenance.database_url()).await?;
-            let email = std::env::var("HOST_MONITORING_BOOTSTRAP_ADMIN_EMAIL")
-                .unwrap_or_else(|_| "admin@example.com".to_string());
+            let username = std::env::var("HOST_MONITORING_BOOTSTRAP_ADMIN_USERNAME")
+                .unwrap_or_else(|_| "admin".to_string());
+            let username = store::normalize_username(&username)?;
             let password = std::env::var("HOST_MONITORING_BOOTSTRAP_ADMIN_PASSWORD").ok();
-            store::ensure_admin_user(&pool, &email, password.as_deref()).await?;
-            println!("{{\"status\":\"admin-ready\",\"email\":{email:?}}}");
+            store::ensure_admin_user(&pool, &username, password.as_deref()).await?;
+            println!("{{\"status\":\"admin-ready\",\"username\":{username:?}}}");
         }
         Command::AdminResetPassword(args) => {
             let maintenance = MaintenanceLock::exclusive(&args.database_url)?;
             let pool = store::open_existing(&maintenance.database_url()).await?;
-            store::reset_admin_password(&pool, &args.email, &args.password).await?;
+            let username = store::normalize_username(&args.username)?;
+            store::reset_admin_password(&pool, &username, &args.password).await?;
             println!(
-                "{{\"status\":\"password-reset\",\"email\":{:?}}}",
-                args.email
+                "{{\"status\":\"password-reset\",\"username\":{:?}}}",
+                username
             );
         }
         Command::Doctor => {
@@ -52,16 +55,30 @@ async fn main() -> anyhow::Result<()> {
             let pool = store::open_existing(&maintenance.database_url()).await?;
             let database_ready = store::ready(&pool).await;
             let retention_ready = store::retention_ready(&pool).await;
+            let integrity_ready = match sarmg_sqlite::integrity_check(&pool).await {
+                Ok(()) => true,
+                Err(error) => {
+                    tracing::warn!(%error, "Host Monitoring doctor integrity check failed");
+                    false
+                }
+            };
+            let foreign_keys_ready = match sarmg_sqlite::foreign_key_check(&pool).await {
+                Ok(()) => true,
+                Err(error) => {
+                    tracing::warn!(%error, "Host Monitoring doctor foreign-key check failed");
+                    false
+                }
+            };
             println!(
-                "{{\"status\":\"{}\",\"bind\":\"{}\",\"database_ready\":{database_ready},\"retention_ready\":{retention_ready}}}",
-                if database_ready && retention_ready {
+                "{{\"status\":\"{}\",\"bind\":\"{}\",\"database_ready\":{database_ready},\"retention_ready\":{retention_ready},\"integrity_ready\":{integrity_ready},\"foreign_keys_ready\":{foreign_keys_ready}}}",
+                if database_ready && retention_ready && integrity_ready && foreign_keys_ready {
                     "ok"
                 } else {
                     "degraded"
                 },
                 config.bind
             );
-            if !database_ready || !retention_ready {
+            if !database_ready || !retention_ready || !integrity_ready || !foreign_keys_ready {
                 anyhow::bail!("database is not ready");
             }
         }
@@ -96,7 +113,7 @@ async fn serve(release_root: Option<&std::path::Path>) -> anyhow::Result<()> {
     let pool = store::open_or_initialize(&application_lock.database_url()).await?;
     store::ensure_admin_user(
         &pool,
-        &config.bootstrap_admin_email,
+        &config.bootstrap_admin_username,
         config.bootstrap_admin_password.as_deref(),
     )
     .await?;

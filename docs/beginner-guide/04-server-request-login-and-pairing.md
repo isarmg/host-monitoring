@@ -10,30 +10,59 @@ Web 文件和权限；再解析环境、取得数据库 instance 排他锁与 ma
 
 ```text
 TCP peer + bounded body
+ -> exact {username,password} DTO
+ -> username candidate normalize/canonical check
  -> source/account/global admission
  -> bounded Argon2 verification
  -> SQLite Session digest
- -> Secure Cookie + CSRF plaintext
+ -> 生产 `__Host-` Secure/HttpOnly Cookie + 响应内 CSRF plaintext
 ```
 
-未知账户仍执行等价成本密码工作，降低用户名枚举侧信道。写请求同时验证 Session、CSRF、Origin/Host；
+登录候选 username 为 1..64 字节 printable ASCII。Foundation primitive 先 trim ASCII whitespace、转
+ASCII 小写，再要求持久 canonical username 为 3..64 字节，首尾 `[a-z0-9]`，所有字符只允许
+`[a-z0-9._-]`，禁止 `@`，但不禁止相邻分隔符。默认 username 是 `admin`。账户 bucket 使用规范化值，
+因此 ` Admin ` 与 `admin` 共享同一预算和唯一数据库行。
+
+密码 wire candidate 上限为 1024 字节，真正验证前还必须满足当前 12..1024 字节、无 ASCII control 的
+Foundation 密码策略。未知账户仍执行固定 current-policy dummy hash，降低用户名枚举侧信道；全局
+Argon2 semaphore 防止无界 CPU 并发。写请求同时验证 Session、CSRF、Origin/Host/Sec-Fetch-Site；
 forwarded address 默认不是可信来源事实。
+
+登录和 Session 查询响应固定为 Foundation `AdministratorSession` 精确五字段：
+`authenticated=true`、`user_id`、`username`、`role=admin`、`csrf_token`。不存在 email、权限数组或额外
+角色字段；本产品没有 viewer/operator/RBAC。
+Web 的恢复/登录/登出、401 清理与内存 Session/CSRF 状态统一由
+`@sarmg/admin-web` client/hook 负责；页面和 Host API 响应 guard 仍在产品仓库。
 
 ## 4.3 配对的参与者
 
-Agent、管理员浏览器和 Server 共同完成配对。Agent 创建一次性请求并持久保存 pending；管理员看到设备
-摘要后明确批准；Server 只向持有一次性秘密的一方交付 credential；Agent 原子写入 active binding。
+Agent、管理员 API 和 Server 共同完成配对。管理员 API 创建 invite 并只在创建响应返回一次 activation
+code。Agent 在本地生成长期 bearer secret 与独立 polling secret，只发送两者的 SHA-256；Server 从不把
+bearer plaintext 发回浏览器。code 与 pairing request 成功激活后，Server 把已提交的 bearer
+摘要绑定到新 Host；Agent 轮询 active 并原子写入本地 secret、Host identity 与 active binding。
+
+当前 React 页面只做管理员认证和 Host 列表，不实现 invite/activation UI，也不处理 Agent 给出的
+`/activate/{request_id}`。因此“浏览器打开链接即可批准”目前不是已完成能力；真正存在的是受保护管理
+API、持有一次性 code 的客户端可调用的 activation API 和 Windows Tray code 提交通路。公开 activation
+端点依靠 code 本身作为 capability，不应把任意调用方描述为已经认证的管理员或设备。
 
 ## 4.4 配对状态机
 
 ```text
-none -> pending -> approved -> activated -> active
-          |           |            |
-          + expired   + rejected   + local commit failed/recoverable
+local none -> creating -> pending -> activating -> active
+                         |             |
+                         |             + local commit crash: journal convergence
+                         + Server waiting -> active / denied / expired
+
+Server invite:  pending -> active / cancelled / expired
+Server request: pending -> active / expired（当前没有管理员拒绝路由）
 ```
 
-网络中断后必须恢复同一 pending request，而非自动生成多个身份。替换未完成请求需要显式用户动作。Server
-对来源、设备、邀请码和管理员分别限流，防止一个维度绕过另一个维度的预算。
+网络中断后必须恢复同一 generation/request，而非自动生成多个身份。替换未完成请求需要显式用户动作。
+Server 对来源、设备、request、invite 和管理员分别限流，防止一个维度绕过另一个维度的预算。单设备
+最多四个 live pending request，全库最多 4096 个；创建请求时会有界清理过期 pending。协议枚举和本地
+Agent 状态仍包含 `denied`，数据库清理 SQL 也识别它，但当前 Server 没有把 request 转为 denied 的路由；
+因此不能把“拒绝 pairing”列为已实现的管理员能力。
 
 ## 4.5 报告请求链路
 
@@ -48,10 +77,19 @@ none -> pending -> approved -> activated -> active
 ## 4.7 响应的精确含义
 
 - `202`：报告事务已提交，不只是进入队列。
-- `401/403`：身份或授权失败，不能无界重试。
-- `409/422`：当前请求与状态/合同冲突，需修正源数据。
+- `401 + code=unauthorized + retryable=false`：Server 严格确认 credential 无效，Agent 进入
+  `reauth_required`，等待用户显式重新配对。
+- `403 + code=agent_host_mismatch + retryable=false`：credential 属于另一 Host；当前报告永久无效，
+  Agent 丢弃这一条但不撤销 credential。
+- `400/413`：报告字段或大小不符合当前合同，同一报告不再重试。
+- `409`：`report_id` 与另一 Host 冲突，同一报告永久无效。
+- `422`：框架无法提取当前 API 请求；Web 调用方修正请求，Agent 报告通路不把它当作当前永久裁决。
 - `429`：准入容量不足，遵循 `Retry-After`。
 - `503`：writer 或依赖不可用，保留同一报告后重试。
+
+所有 `/api` 失败都使用 Foundation 严格顶层 `{code,message,retryable,request_id?,details?}`；未知字段、
+缺字段、错误 Content-Type 或代理生成的 HTML 都不是可信机器合同。Web 与 Agent 按 `code` 分支，
+`message` 只用于展示和受限诊断。
 
 ## 4.8 调试顺序
 
@@ -61,4 +99,4 @@ none -> pending -> approved -> activated -> active
 ## 4.9 变更检查
 
 新增路由需明确公开/管理员/设备身份、body 上限、超时、来源事实、CSRF、错误 envelope 和负例。当前 API
-发生破坏性变化时直接更新所有调用方与测试，不注册另一条旧路径。
+发生破坏性变化时直接更新所有调用方与测试，不注册平行路径。

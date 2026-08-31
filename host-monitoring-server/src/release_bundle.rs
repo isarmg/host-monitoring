@@ -682,12 +682,12 @@ mod tests {
     }
 
     #[test]
-    fn old_extra_layout_and_unknown_manifest_fields_are_rejected() {
+    fn unexpected_extra_layout_and_unknown_manifest_fields_are_rejected() {
         let fixture = Fixture::new();
         fixture.make_writable();
-        fs::write(fixture.root.join("old-launcher.sh"), b"old").unwrap();
+        fs::write(fixture.root.join("unexpected-launcher.sh"), b"unexpected").unwrap();
         fs::set_permissions(
-            fixture.root.join("old-launcher.sh"),
+            fixture.root.join("unexpected-launcher.sh"),
             fs::Permissions::from_mode(0o444),
         )
         .unwrap();
@@ -699,7 +699,7 @@ mod tests {
         fs::set_permissions(&manifest_path, fs::Permissions::from_mode(0o644)).unwrap();
         let mut value: serde_json::Value =
             serde_json::from_slice(&fs::read(&manifest_path).unwrap()).unwrap();
-        value["legacy"] = serde_json::json!(true);
+        value["unknown_extension"] = serde_json::json!(true);
         fs::write(&manifest_path, serde_json::to_vec(&value).unwrap()).unwrap();
         fs::set_permissions(&manifest_path, fs::Permissions::from_mode(0o444)).unwrap();
         assert!(verify_release_with_options(&fixture.root, false, false).is_err());

@@ -439,7 +439,7 @@ mod tests {
                 "activation_url": "https://host-monitoring.example/agent/activate/request",
                 "expires_in": 300,
                 "poll_interval": 2,
-                "enrollment_secret": "obsolete"
+                "enrollment_secret": "unexpected"
             }))
             .is_err()
         );
@@ -456,7 +456,7 @@ mod tests {
             serde_json::from_value::<ActivatePairingResponse>(serde_json::json!({
                 "instance_id": Uuid::new_v4(),
                 "status": "active",
-                "token": "obsolete"
+                "token": "unexpected"
             }))
             .is_err()
         );
@@ -480,14 +480,14 @@ mod tests {
                 "status": "authorized",
                 "reason": "browser pairing completed",
                 "changed_at": Utc::now(),
-                "legacy": true
+                "unknown_extension": true
             }))
             .is_err()
         );
         for version in [
             serde_json::Value::Null,
             serde_json::json!(1),
-            serde_json::json!("0.1.0"),
+            serde_json::json!("0.0.0"),
         ] {
             let mut state = serde_json::json!({
                 "version": env!("CARGO_PKG_VERSION"),
@@ -1261,8 +1261,10 @@ mod tests {
 
     #[test]
     fn active_state_without_binding_is_rejected() {
-        let directory =
-            std::env::temp_dir().join(format!("host-monitoring-binding-migration-{}", Uuid::new_v4()));
+        let directory = std::env::temp_dir().join(format!(
+            "host-monitoring-missing-binding-{}",
+            Uuid::new_v4()
+        ));
         let config = test_config(directory.clone());
         fs::create_dir_all(&directory).unwrap();
         let generation = Uuid::new_v4();

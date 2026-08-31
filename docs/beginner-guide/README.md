@@ -8,7 +8,7 @@
 3. [Rust、遥测与协议基础](03-rust-telemetry-and-protocol-basics.md)
 4. [服务端请求、登录与配对链路](04-server-request-login-and-pairing.md)
 5. [采集、Spool 与投递可靠性](05-collection-spool-and-delivery.md)
-6. [Linux、Windows、macOS 与移动宿主](06-platforms-and-packaging.md)
+6. [Agent 的 Linux、Windows、macOS 与移动宿主](06-platforms-and-packaging.md)
 7. [当前报告协议、写入与保留](07-current-report-contract.md)
 8. [测试、调试与安全变更方法](08-testing-debugging-and-change-workflow.md)
 9. [部署、安全与生产运维](09-deployment-security-and-operations.md)
@@ -18,14 +18,14 @@
 
 ## 1. 产品解决什么问题
 
-Host Monitoring 用一个本地控制面集中查看多台主机的 CPU、内存、磁盘、网络和平台传感器。每台主机
-运行 `host-monitor`，Agent 只发起出站连接，不监听公网端口；服务端负责配对授权、报告验证、历史
-存储、聚合、用户会话和 Web 展示。
+Host Monitoring 用一个本地控制面接收多台主机的 CPU、内存、磁盘、网络和平台传感器。每台主机运行
+`host-monitor`，Agent 只发起出站连接，不监听公网端口；服务端负责 invite/配对/激活、报告验证、raw
+存储、内部聚合和管理员 Session。当前 React 页面只展示 Host 列表 JSON，不是完整可视化或配对控制台。
 
 “只读采集”表示 Agent 不以监控为理由修改系统配置。安装器仍需要平台权限创建服务账户、安装服务和
 保护本地状态，因此运行时最小权限与安装时权限要分开理解。
 
-## 2. 三个核心 crate
+## 2. 三个核心 crate 与 Web
 
 ```text
 host-protocol
@@ -41,10 +41,12 @@ host-monitor
   └─ packaging/：三桌面平台安装生命周期
 
 host-monitoring-server
-  ├─ auth/login/pairing：管理员和设备身份
+  ├─ auth/login/pairing：admin 用户名会话和设备身份
   ├─ telemetry/store：有界队列和 SQLite 写入器
   ├─ retention：小时聚合与保留
-  └─ web/：独立 React/Vite 管理页面
+
+clients/web
+  └─ React/Vite 最小状态页：管理员认证与 Host 列表（Server 仅 x86_64 GNU/Linux）
 ```
 
 协议 crate 是唯一 wire contract，Server 和 Agent 都通过 workspace path 使用它，不能复制一份 DTO
@@ -52,16 +54,17 @@ host-monitoring-server
 
 ## 3. 开发环境
 
-仓库固定 Rust `1.98.0`。服务端 Web 还需要其 lockfile 对应的 Node/npm。先运行：
+仓库固定 Rust `1.98.0`。服务端 Web 还需要其 lockfile 对应的 Node/npm。完整 workspace 命令只在
+x86_64 GNU/Linux 运行；Windows/macOS CI 保留并单独验证 Agent：
 
 ```bash
 rustup toolchain install 1.98.0
-cargo +1.98.0 check --workspace --locked --all-targets --all-features
-cargo +1.98.0 test --workspace --locked
+cargo +1.98.0 check --workspace --locked --target x86_64-unknown-linux-gnu --all-targets --all-features
+cargo +1.98.0 test --workspace --locked --target x86_64-unknown-linux-gnu
 cd clients/web && npm ci && npm run build
 ```
 
-跨平台安装包需要额外工具：Linux nFPM 与 systemd 测试环境，Windows WiX 4/PowerShell，macOS
+跨平台 Agent 安装包需要额外工具：Linux nFPM 与 systemd 测试环境，Windows WiX 4/PowerShell，macOS
 `pkgbuild`、`productbuild` 与 `launchctl` 相关工具。普通业务修改不需要在单机上模拟全部平台，CI
 矩阵会在真实目标系统验证。
 
@@ -72,16 +75,23 @@ cd clients/web && npm ci && npm run build
 ```text
 HOST_MONITORING_DATABASE_URL=sqlite:///tmp/host-monitoring/app.db
 HOST_MONITORING_STATIC_DIR=/绝对路径/clients/web/dist
-HOST_MONITORING_BOOTSTRAP_ADMIN_EMAIL=admin@example.com
+HOST_MONITORING_BOOTSTRAP_ADMIN_USERNAME=admin
 HOST_MONITORING_BOOTSTRAP_ADMIN_PASSWORD=<开发密码>
 HOST_MONITORING_DEVELOPMENT=true
 ```
 
 ```bash
-cargo run -p host-monitoring-server -- serve
+cargo run --target x86_64-unknown-linux-gnu -p host-monitoring-server -- serve
 ```
 
 开发模式仍应绑定回环。正式 source-bound 二进制拒绝 `serve`，只接受固定发行树的 `serve-release`。
+Server 不提供 ARM Linux、musl、Windows 或 macOS 构建；这些平台描述均只适用于 Agent。
+
+这里的 `admin` 是默认 username，Foundation 固定的是 `role=admin`，并非要求 username 只能叫 admin。
+当前登录 JSON 只有 `{username,password}`；成功 Session 只有
+`{authenticated,user_id,username,role,csrf_token}`。候选 username 为 1..64 字节 printable ASCII，
+Server trim ASCII whitespace、转 ASCII 小写后要求 3..64 字节 canonical 值：首尾字母/数字、字符仅
+`[a-z0-9._-]`，禁止 `@`。不要再配置邮箱或期待 email alias。
 
 ## 5. 运行 Agent 的学习顺序
 
@@ -98,7 +108,7 @@ host-monitor run --config /etc/host-monitor/config.json
 ```
 
 - `probe` 只验证本地采集。
-- `pair` 创建或恢复配对请求，等待浏览器管理员批准。
+- `pair` 创建或恢复配对请求并轮询 active；当前 React 页面未实现 activation UI。
 - `once` 采集并投递一次。
 - `doctor` 默认只读检查；显式 delivery 模式才进行端到端发送。
 - `run` 是长期服务模式。
@@ -106,9 +116,15 @@ host-monitor run --config /etc/host-monitor/config.json
 
 ## 6. 配对为什么分阶段
 
-Agent 先生成请求并保存 pending 状态；管理员在 Web 控制台授权；Agent 轮询到激活结果后，先将新凭据
-原子写入当前状态，再切换 active binding。网络中断时可以恢复同一请求，不会静默生成另一套身份。
-明确替换未完成请求必须由用户确认。
+管理员管理 API 先创建 invite 并得到一次性 activation code。Agent 生成 bearer/polling secret，只把摘要
+随 pairing request 发送，并保存 pending。code 可由受信 Tray/Agent 调用公开 activation 端点提交，也可由
+已登录管理员调用受保护 activation 端点提交；Server 在一个事务中绑定 invite、request、Host 与
+credential。Agent 轮询到 active 后原子写入状态，再切换 active binding。网络中断时恢复同一请求，不会
+静默生成另一套身份；明确替换未完成请求必须由用户确认。
+
+当前代码的重要缺口是：`clients/web/src/App.tsx` 没有 invite 创建、activation code 输入或
+`/activate/{request_id}` 页面。开发者不能只凭后端路由和 Agent 打印的 activation URL 宣称浏览器配对已
+交付；补齐 React 流程及正负测试后，才可按 UI 工作流验收。
 
 设备凭据、TLS 私钥、OTLP Token 和 spool 都是主机敏感数据，不能提交、打印或放在宽权限目录。
 
@@ -131,13 +147,13 @@ SQLite writer 批量事务写入，每个报告使用 savepoint 隔离。只有�
 - 服务端写入：不能绕过有界队列让每个请求直接争用 SQLite。
 - 保留策略：必须保持“先幂等聚合、后有界删除、永不删除 latest”。
 - 平台安装：修改脚本时同时运行安装、卸载、回滚、purge 和 PE/WiX/LaunchDaemon 静态测试。
-- 版本变更：产品只接受新当前身份，不添加旧字段、旧路径或旧状态 fallback。
+- 版本变更：产品只接受新的唯一当前身份，不添加平行字段、路径或状态 fallback。
 
 ## 10. 术语
 
 - **OTLP**：OpenTelemetry Protocol，可选的遥测额外导出目标。
 - **spool**：Agent 本地有界持久重试队列。
-- **pairing**：管理员显式批准设备并发放当前凭据的流程。
+- **pairing**：invite、一次性 code、Agent request/poll 与原子 credential 绑定组成的流程。
 - **savepoint**：SQLite 事务内部隔离单条报告失败的检查点。
-- **WHEP/FFI** 不属于本项目；移动侧只使用 Rust library contract。
+- **移动宿主 contract**：当前只是 Rust library API；仓库没有稳定 C ABI/FFI 包装、移动 UI 或 APK/IPA。
 - **fail closed**：不能证明当前身份、安全路径或数据完整时拒绝运行。

@@ -20,7 +20,8 @@ writer、retention、release 验证和 Web 调用。
 
 ## 10.3 建议练习
 
-1. 在临时环境完成 probe、pair、once、Web latest。
+1. 在临时环境完成 probe、通过 API/code 激活 pair、once，并在 Web Host 列表 JSON 中看到 latest 摘要；
+   同时记录当前缺少 React activation 页面。
 2. 断开 Server，观察 spool；恢复后确认相同 report ID 被接收。
 3. 让假 Server 返回 429，确认遵循退避且容量有界。
 4. 尝试同时启动两个 Agent，确认状态锁拒绝第二实例。
@@ -32,8 +33,11 @@ writer、retention、release 验证和 Web 调用。
 | 术语 | 本项目含义 |
 |---|---|
 | Agent / `host-monitor` | 受管主机上的当前客户端产品 |
+| Server / `host-monitoring-server` | 只支持 `x86_64-unknown-linux-gnu` 的控制面；不等于跨平台 Agent |
+| administrator username | Foundation 规范化的本地管理标识；默认 `admin`，不是 email |
+| admin role | 唯一管理角色；没有 viewer/operator/RBAC，与 username 文本是两件事 |
 | binding | Host identity 与服务端 credential 的当前原子绑定 |
-| pairing | 管理员批准并发放设备 credential 的一次性流程 |
+| pairing | invite/code、Agent request/poll 和 Server 原子绑定设备 credential 的流程 |
 | report ID | 一次逻辑报告的稳定幂等标识 |
 | spool | Agent 本地有界持久待投递队列 |
 | backpressure | 容量不足时显式拒绝/延迟，而非无界积压 |
@@ -48,9 +52,10 @@ writer、retention、release 验证和 Web 调用。
 
 ## 10.5 完成学习的标准
 
-维护者应能独立回答：报告在哪一刻算持久化；断线后为何保留原 ID；配对怎样防止身份分叉；latest 为什么
-不随 raw 清理消失；三平台安装权限怎样收敛；Schema 变化为何必须去升级仓；一次名称变化要审计哪些
-制品层。
+维护者应能独立回答：报告在哪一刻算持久化；断线后为何保留原 ID；同 Host 同 ID 改正文为何当前不会
+冲突；配对怎样防止身份分叉以及 React 为何还不能完成激活；latest 为什么不随 raw 清理消失；aggregate
+为何当前查不到；Agent 三平台安装权限怎样收敛；Schema 变化何时才需要外部仓新增具体 edge；一次名称
+变化要检查哪些制品层。
 
 ## 10.6 后续文档
 

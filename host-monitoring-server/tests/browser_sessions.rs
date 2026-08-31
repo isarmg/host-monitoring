@@ -15,6 +15,7 @@ use host_monitoring_server::{
     token_hash,
 };
 use http_body_util::BodyExt;
+use sarmg_contracts::{AdministratorRole, AdministratorSession};
 use serde_json::{Value, json};
 use sqlx::SqlitePool;
 use tower::ServiceExt;
@@ -41,7 +42,7 @@ async fn fixture() -> Fixture {
     store::initialize_empty(&pool)
         .await
         .expect("initialize current test schema");
-    store::ensure_admin_user(&pool, "admin@example.com", Some("correct-password"))
+    store::ensure_admin_user(&pool, "admin", Some("correct-password"))
         .await
         .expect("seed administrator");
     let auth = Auth::new(
@@ -66,17 +67,18 @@ fn request(
     csrf_token: Option<&str>,
     body: Option<Value>,
 ) -> Request<Body> {
-    let unsafe_cookie_request = cookie.is_some()
-        && (method == Method::POST
-            || method == Method::PUT
-            || method == Method::PATCH
-            || method == Method::DELETE);
+    let unsafe_request = method == Method::POST
+        || method == Method::PUT
+        || method == Method::PATCH
+        || method == Method::DELETE;
     let mut builder = Request::builder()
         .method(method)
         .uri(uri)
-        .header(header::HOST, "console.example");
-    if unsafe_cookie_request {
-        builder = builder.header(header::ORIGIN, "http://console.example");
+        .header(header::HOST, "127.0.0.1");
+    if unsafe_request {
+        builder = builder
+            .header(header::ORIGIN, "http://127.0.0.1")
+            .header(sarmg_admin_auth::SEC_FETCH_SITE_HEADER, "same-origin");
     }
     if let Some(cookie) = cookie {
         builder = builder.header(header::COOKIE, cookie);
@@ -118,6 +120,16 @@ async fn response_json(response: Response<Body>) -> Value {
     serde_json::from_slice(&bytes).expect("JSON response body")
 }
 
+fn assert_administrator_session(value: &Value) {
+    let session: AdministratorSession = serde_json::from_value(value.clone())
+        .expect("response must be the strict Foundation administrator session");
+    assert!(session.authenticated);
+    assert_eq!(session.role, AdministratorRole::Admin);
+    assert_eq!(session.username, "admin");
+    Uuid::parse_str(&session.user_id).expect("administrator session user_id must be a UUID");
+    assert_eq!(session.csrf_token.len(), 43);
+}
+
 async fn login(fixture: &Fixture, password: &str) -> BrowserCredentials {
     let response = send(
         fixture,
@@ -127,7 +139,7 @@ async fn login(fixture: &Fixture, password: &str) -> BrowserCredentials {
             None,
             None,
             Some(json!({
-                "email": "admin@example.com",
+                "username": "admin",
                 "password": password
             })),
         ),
@@ -151,6 +163,7 @@ async fn login(fixture: &Fixture, password: &str) -> BrowserCredentials {
         .to_string();
     let session_token = cookie.split_once('=').expect("cookie token").1.to_string();
     let json = response_json(response).await;
+    assert_administrator_session(&json);
     BrowserCredentials {
         cookie,
         session_token,
@@ -175,6 +188,7 @@ async fn reload_session(fixture: &Fixture, cookie: &str) -> (StatusCode, Option<
         return (status, None);
     }
     let json = response_json(response).await;
+    assert_administrator_session(&json);
     (
         status,
         Some(json["csrf_token"].as_str().unwrap().to_string()),
@@ -398,7 +412,7 @@ async fn old_unversioned_and_unknown_api_epochs_are_zero_write_rejections() {
             Method::POST,
             "/api/v1/auth/login",
             Some(json!({
-                "email": "admin@example.com",
+                "username": "admin",
                 "password": "correct-password"
             })),
         ),
@@ -425,6 +439,28 @@ async fn old_unversioned_and_unknown_api_epochs_are_zero_write_rejections() {
     .await
     .unwrap();
     assert_eq!(after, before);
+}
+
+#[tokio::test]
+async fn login_policy_violations_are_bad_requests_not_credentials_failures() {
+    let fixture = fixture().await;
+    for credentials in [
+        json!({"username": "bad username", "password": "correct-password"}),
+        json!({"username": "admin", "password": "too-short"}),
+    ] {
+        let response = send(
+            &fixture,
+            request(
+                Method::POST,
+                "/api/v2/auth/login",
+                None,
+                None,
+                Some(credentials),
+            ),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
 }
 
 #[tokio::test]
@@ -460,7 +496,7 @@ async fn expiry_password_reset_and_disable_invalidate_existing_sessions() {
     );
 
     let before_reset = login(&fixture, "correct-password").await;
-    store::reset_admin_password(&fixture.pool, "admin@example.com", "new-password")
+    store::reset_admin_password(&fixture.pool, "admin", "new-password")
         .await
         .expect("reset password");
     assert_eq!(
@@ -468,16 +504,16 @@ async fn expiry_password_reset_and_disable_invalidate_existing_sessions() {
         StatusCode::UNAUTHORIZED
     );
     let session_version: i64 =
-        sqlx::query_scalar("SELECT session_version FROM auth_users WHERE email=?")
-            .bind("admin@example.com")
+        sqlx::query_scalar("SELECT session_version FROM auth_users WHERE username=?")
+            .bind("admin")
             .fetch_one(&fixture.pool)
             .await
             .unwrap();
     assert_eq!(session_version, 2);
 
     let after_reset = login(&fixture, "new-password").await;
-    sqlx::query("UPDATE auth_users SET active=false WHERE email=?")
-        .bind("admin@example.com")
+    sqlx::query("UPDATE auth_users SET active=false WHERE username=?")
+        .bind("admin")
         .execute(&fixture.pool)
         .await
         .expect("disable user");
@@ -493,7 +529,7 @@ async fn expiry_password_reset_and_disable_invalidate_existing_sessions() {
             None,
             None,
             Some(json!({
-                "email": "admin@example.com",
+                "username": "admin",
                 "password": "new-password"
             })),
         ),
@@ -501,8 +537,8 @@ async fn expiry_password_reset_and_disable_invalidate_existing_sessions() {
     .await;
     assert_eq!(disabled_login.status(), StatusCode::UNAUTHORIZED);
 
-    sqlx::query("UPDATE auth_users SET active=true WHERE email=?")
-        .bind("admin@example.com")
+    sqlx::query("UPDATE auth_users SET active=true WHERE username=?")
+        .bind("admin")
         .execute(&fixture.pool)
         .await
         .expect("re-enable user");
@@ -514,11 +550,86 @@ async fn expiry_password_reset_and_disable_invalidate_existing_sessions() {
         r#"SELECT count(*) FROM auth_session_csrf_tokens c
            JOIN auth_sessions s ON s.session_id=c.session_id
            JOIN auth_users u ON u.user_id=s.user_id
-           WHERE u.email=?"#,
+           WHERE u.username=?"#,
     )
-    .bind("admin@example.com")
+    .bind("admin")
     .fetch_one(&fixture.pool)
     .await
     .unwrap();
     assert_eq!(active_csrf_tokens, 0);
+}
+
+#[tokio::test]
+async fn ambiguous_cookies_and_non_current_password_hashes_fail_closed() {
+    let fixture = fixture().await;
+    let credentials = login(&fixture, "correct-password").await;
+
+    for (name, value) in [
+        (header::ORIGIN, "http://127.0.0.1"),
+        (header::HOST, "127.0.0.1"),
+        (
+            header::HeaderName::from_static(sarmg_admin_auth::SEC_FETCH_SITE_HEADER),
+            "same-origin",
+        ),
+        (
+            header::HeaderName::from_static(CSRF_HEADER),
+            credentials.csrf_token.as_str(),
+        ),
+    ] {
+        let mut duplicated = request(
+            Method::POST,
+            "/api/v2/monitoring/agent-instances",
+            Some(&credentials.cookie),
+            Some(&credentials.csrf_token),
+            Some(json!({"display_name": "Ambiguous Header", "expires_in_minutes": 15})),
+        );
+        duplicated
+            .headers_mut()
+            .append(name, value.parse().unwrap());
+        assert_eq!(
+            send(&fixture, duplicated).await.status(),
+            StatusCode::FORBIDDEN
+        );
+    }
+
+    let mut duplicate_header = request(
+        Method::GET,
+        "/api/v2/auth/session",
+        Some(&credentials.cookie),
+        None,
+        None,
+    );
+    duplicate_header
+        .headers_mut()
+        .append(header::COOKIE, credentials.cookie.parse().unwrap());
+    assert_eq!(
+        send(&fixture, duplicate_header).await.status(),
+        StatusCode::UNAUTHORIZED
+    );
+
+    let duplicate_pair = format!("{}; {}", credentials.cookie, credentials.cookie);
+    assert_eq!(
+        reload_session(&fixture, &duplicate_pair).await.0,
+        StatusCode::UNAUTHORIZED
+    );
+
+    sqlx::query("UPDATE auth_users SET password_hash='not-a-current-hash'")
+        .execute(&fixture.pool)
+        .await
+        .unwrap();
+    assert!(
+        store::ensure_admin_user(&fixture.pool, "admin", None)
+            .await
+            .is_err()
+    );
+    assert!(
+        store::find_active_user_by_username(&fixture.pool, "admin")
+            .await
+            .is_err()
+    );
+    assert!(
+        store::reset_admin_password(&fixture.pool, "admin", "replacement-password")
+            .await
+            .is_err()
+    );
 }

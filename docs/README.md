@@ -3,6 +3,11 @@
 本目录只描述当前 `0.7.0`。事实优先级依次为协议类型和当前 Schema、运行时校验、测试、发行 manifest、
 本文档。更改版本身份、HTTP 路由、报告字段或安装布局时，应在同一提交中同步对应文档。
 
+范围必须先分清：Server 与随包管理 Web 只属于 AMD64 GNU/Linux，Web 使用 React/Vite 与 Foundation
+admin-only username 合同；`host-monitor` Agent 继续拥有 Linux/Windows/macOS 与移动宿主边界。产品只
+接受当前状态，不提供旧字段/路由/Schema 兼容；`sarmg-upgrade` 目前没有 Host 转换边，因此本文档没有
+可执行的 Host 备份、恢复或迁移步骤。
+
 | 分类 | 文档 | 内容 |
 |---|---|---|
 | 初学者学习指南 | [beginner-guide/README.md](beginner-guide/README.md) | 从组件、遥测、配对、SQLite 到平台打包的学习路径 |

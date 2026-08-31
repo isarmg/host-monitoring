@@ -2,8 +2,9 @@
 
 ## 7.1 协议层次
 
-配对协议建立设备身份；报告协议提交遥测；管理员 API 查询 Host、latest、raw 和 aggregate。三类路由的
-身份、速率和数据暴露不同，不能共用一个“万能 token”。
+配对协议建立设备身份；报告协议提交遥测；管理员 API 查询 Host summary、latest payload 和仍保留的 raw
+标量 history。内部 aggregate 表目前没有查询路由。公开/管理员/设备三类路由的身份、速率和数据暴露
+不同，不能共用一个“万能 token”。
 
 ## 7.2 报告不变量
 
@@ -11,7 +12,11 @@
 - Host 与 credential 绑定且未撤销。
 - report ID 合法且稳定。
 - 时间和所有集合/字符串/数值在边界内。
-- 重放相同事实可幂等处理；相同 ID 不同内容必须冲突。
+- 相同 Host 重放同一 report ID 返回 `accepted=false` 和首次 `received_at`；跨 Host 复用 ID 返回 409。
+
+当前去重只比较 report ID 的所有 Host，不保存 request fingerprint，也不会验证同一 Host 的重放正文是否
+与首次完全相同。因此“相同 ID、同 Host、不同内容必冲突”尚未实现；调用方必须稳定重放同一 spool 文件，
+若要把服务端内容一致性提升为保证，需要新增 fingerprint、Schema 与负例，而不能只改文档。
 
 ## 7.3 服务端所有权转移
 
@@ -44,15 +49,26 @@ latest 表示每个 Host 当前选定的最新有效报告，不等同于数据�
 
 ## 7.8 过载观测
 
-监控队列深度、入队等待、429/503、batch 大小、事务延迟、spool 字节、最老待发时间、raw/aggregate 行数
-和 maintenance 用时。单看 CPU 无法发现可靠性退化。
+当前可直接取得的证据主要是 `/health/ready` 的 database/retention/writer 布尔值、分类日志、HTTP
+429/503，以及 Agent `status`/doctor 的 spool 状态。`RetentionMaintenanceStats` 只存在于进程内且启动方
+丢弃 handle，Server 也没有 metrics API；队列深度、入队等待、batch/事务延迟、raw/aggregate 行数和
+maintenance 用时目前不能由产品端点完整观测。它们是应补的运维 instrumentation，不能写成已交付指标。
 
 ## 7.9 Schema 变化
 
-产品只创建缺失的当前数据库，并验证 `product_metadata` 与现场规范 DDL fingerprint。新版本需要新当前
-Schema 时直接更新代码、测试和升级仓 adapter；Server 不执行 `ALTER TABLE` 或接受 metadata-free 库。
+产品只创建不存在的当前数据库，并验证 `product_metadata` 与现场规范 DDL fingerprint。新版本需要新
+当前 Schema 时直接更新代码、测试与 identity；只有确实决定支持某个离线输入时，才在外部仓新增明确
+adapter/edge。Server 不执行 `ALTER TABLE`，不接受 metadata-free 库，也不会因通用升级引擎存在而自动
+获得转换能力。
+
+当前四元身份是 `host-monitoring` / `0.7.0` / schema revision `1` /
+`12dd1e61426b6b99df3d429b8c36ee3a5b22d1da776d98fc960b45b4f58c8e05`。管理员列为
+`auth_users.username`；DDL CHECK/UNIQUE 与启动时 Foundation canonical username/current Argon2id 加载
+检查是两层不同防线。`doctor` 只覆盖 Schema、integrity、foreign key 和 retention 结构，不应被当作账户
+内容校验。
 
 ## 7.10 协议变更验收
 
-除正例外必须测试：unknown field/版本、极值、空集合、超长文本、大整数、重复 ID 不同内容、撤销竞态、
+除正例外必须测试：unknown field/版本、极值、空集合、超长文本、大整数、同 Host ID 重放的当前实际
+语义、跨 Host ID 冲突、撤销竞态、
 队列满、writer 停止、事务失败、乱序与保留崩溃恢复。

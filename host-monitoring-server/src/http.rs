@@ -8,8 +8,9 @@ use std::{
 
 use axum::{
     Json, Router,
+    body::Body,
     extract::{ConnectInfo, DefaultBodyLimit, Extension, Path, Query, Request, State},
-    http::{HeaderMap, HeaderValue, Method, StatusCode, header},
+    http::{HeaderMap, HeaderValue, Method, StatusCode, Uri, header},
     middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::{any, get, post},
@@ -20,12 +21,16 @@ use host_protocol::{
     ActivatePairingStatus, AgentPairingRequest, AgentPairingResponse, AgentPairingStatusResponse,
     AgentReport, AgentReportAck,
 };
+use sarmg_contracts::{
+    ADMIN_LOGIN_PATH, ADMIN_LOGOUT_PATH, ADMIN_SESSION_PATH, AdministratorLoginRequest,
+    AdministratorSession,
+};
 use tokio::sync::Mutex;
 use tower_http::services::ServeDir;
 
 use crate::{
     auth::{self, Principal},
-    error::{Error, Result, database},
+    error::{Error, FoundationErrorEnvelope, Result, database, framework_envelope},
     model::{
         CreateAgentInstanceRequest, CreatedAgentInstance, HistoryQuery, HistoryResponse,
         HostDetailResponse, HostListQuery, HostListResponse, UpdateMonitoringRemarkRequest,
@@ -211,7 +216,7 @@ impl ReportBuckets {
 
 pub fn router(state: AppState, static_dir: PathBuf) -> Router {
     let public_auth = Router::new()
-        .route("/api/v2/auth/login", post(login))
+        .route(ADMIN_LOGIN_PATH, post(login))
         .layer(DefaultBodyLimit::max(crate::login::LOGIN_BODY_LIMIT_BYTES))
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
@@ -219,8 +224,8 @@ pub fn router(state: AppState, static_dir: PathBuf) -> Router {
         ));
 
     let protected_auth = Router::new()
-        .route("/api/v2/auth/logout", post(logout))
-        .route("/api/v2/auth/session", get(session))
+        .route(ADMIN_LOGOUT_PATH, post(logout))
+        .route(ADMIN_SESSION_PATH, get(session))
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
             console_admission,
@@ -283,11 +288,40 @@ pub fn router(state: AppState, static_dir: PathBuf) -> Router {
         .route("/api", any(api_not_found))
         .route("/api/{*path}", any(api_not_found))
         .fallback_service(ServeDir::new(static_dir))
+        .layer(middleware::from_fn(normalize_api_errors))
         .with_state(state)
 }
 
 async fn api_not_found() -> StatusCode {
     StatusCode::NOT_FOUND
+}
+
+async fn normalize_api_errors(request: Request, next: Next) -> Response {
+    let path = request.uri().path();
+    let is_api = path == "/api" || path.starts_with("/api/");
+    let response = next.run(request).await;
+    if !is_api
+        || !(response.status().is_client_error() || response.status().is_server_error())
+        || response
+            .extensions()
+            .get::<FoundationErrorEnvelope>()
+            .is_some()
+    {
+        return response;
+    }
+
+    let envelope = framework_envelope(response.status());
+    let body = serde_json::to_vec(&envelope)
+        .expect("the Foundation error envelope always serializes as JSON");
+    let (mut parts, _) = response.into_parts();
+    parts.headers.remove(header::CONTENT_LENGTH);
+    parts.headers.remove(header::CONTENT_ENCODING);
+    parts.headers.insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("application/json"),
+    );
+    parts.extensions.insert(FoundationErrorEnvelope);
+    Response::from_parts(parts, Body::from(body))
 }
 
 async fn login_source_admission(
@@ -311,8 +345,13 @@ async fn console_admission(
     mut request: Request,
     next: Next,
 ) -> Result<Response> {
-    let principal =
-        auth::require_console(request.headers(), &state, requires_csrf(request.method())).await?;
+    let principal = auth::require_console(
+        request.headers(),
+        request.uri(),
+        &state,
+        requires_csrf(request.method()),
+    )
+    .await?;
     request.extensions_mut().insert(principal);
     Ok(next.run(request).await)
 }
@@ -324,28 +363,21 @@ fn requires_csrf(method: &Method) -> bool {
         || method == Method::DELETE
 }
 
-#[derive(serde::Deserialize)]
-#[serde(deny_unknown_fields)]
-struct LoginRequest {
-    email: String,
-    password: String,
-}
-
-#[derive(serde::Serialize)]
-struct BrowserSessionResponse {
-    authenticated: bool,
-    user_id: String,
-    email: String,
-    csrf_token: String,
-}
-
 async fn login(
     State(state): State<AppState>,
-    Json(request): Json<LoginRequest>,
+    uri: Uri,
+    headers: HeaderMap,
+    Json(request): Json<AdministratorLoginRequest>,
 ) -> Result<Response> {
-    let normalized_email = store::normalize_user_email(&request.email);
-    state.login_admission.check_account(&normalized_email)?;
-    let user = store::find_active_user_by_email(&state.pool, &normalized_email)
+    if !state.auth.request_is_same_origin(&headers, &uri) {
+        return Err(Error::Forbidden);
+    }
+    let normalized_username = store::normalize_username(&request.username)
+        .map_err(|error| Error::BadRequest(error.to_string()))?;
+    sarmg_admin_auth::validate_password(&request.password)
+        .map_err(|error| Error::BadRequest(error.to_string()))?;
+    state.login_admission.check_account(&normalized_username)?;
+    let user = store::find_active_user_by_username(&state.pool, &normalized_username)
         .await
         .map_err(database)?;
     let user = state
@@ -360,12 +392,11 @@ async fn login(
     let mut response = (
         StatusCode::OK,
         [(header::SET_COOKIE, value)],
-        Json(BrowserSessionResponse {
-            authenticated: true,
-            user_id: user.user_id,
-            email: user.email,
-            csrf_token: issued.csrf_token,
-        }),
+        Json(administrator_session(
+            user.user_id,
+            user.username,
+            issued.csrf_token,
+        )?),
     )
         .into_response();
     response
@@ -400,17 +431,25 @@ async fn session(
         .auth
         .issue_csrf_token(&state.pool, principal.session_id)
         .await?;
-    let mut response = Json(BrowserSessionResponse {
-        authenticated: true,
-        user_id: principal.subject,
-        email: principal.email,
+    let mut response = Json(administrator_session(
+        principal.subject,
+        principal.username,
         csrf_token,
-    })
+    )?)
     .into_response();
     response
         .headers_mut()
         .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
     Ok(response)
+}
+
+fn administrator_session(
+    user_id: String,
+    username: String,
+    csrf_token: String,
+) -> Result<AdministratorSession> {
+    AdministratorSession::new(user_id, username, csrf_token)
+        .map_err(|error| database(anyhow::Error::new(error)))
 }
 
 async fn live(State(state): State<AppState>) -> Response {
@@ -683,7 +722,7 @@ async fn report(
         .map_err(database)?
         .ok_or(Error::Unauthorized)?;
     if host.to_string() != report.host.id {
-        return Err(Error::Unauthorized);
+        return Err(Error::AgentHostMismatch);
     }
     let metrics = validate_report(&report)?;
     let mut buckets = state.report_buckets.lock().await;
@@ -878,10 +917,14 @@ mod tests {
         router(AppState::new(pool, auth), test_static_dir())
     }
 
-    async fn app_with_admin(email: &str, password: &str) -> Router {
-        app_with_admin_and_admission(email, password, crate::login::LoginAdmission::production())
-            .await
-            .0
+    async fn app_with_admin(username: &str, password: &str) -> Router {
+        app_with_admin_and_admission(
+            username,
+            password,
+            crate::login::LoginAdmission::production(),
+        )
+        .await
+        .0
     }
 
     async fn app_with_pairing_admission(
@@ -906,7 +949,7 @@ mod tests {
     }
 
     async fn app_with_admin_and_admission(
-        email: &str,
+        username: &str,
         password: &str,
         login_admission: crate::login::LoginAdmission,
     ) -> (Router, sqlx::SqlitePool) {
@@ -916,7 +959,7 @@ mod tests {
             .await
             .unwrap();
         store::initialize_empty(&pool).await.unwrap();
-        store::ensure_admin_user(&pool, email, Some(password))
+        store::ensure_admin_user(&pool, username, Some(password))
             .await
             .unwrap();
         let auth = crate::auth::Auth::new(
@@ -937,6 +980,9 @@ mod tests {
     fn login_request(body: impl Into<Body>, peer: &str) -> Request<Body> {
         let mut request = Request::post("/api/v2/auth/login")
             .header(header::CONTENT_TYPE, "application/json")
+            .header(header::HOST, "127.0.0.1")
+            .header(header::ORIGIN, "http://127.0.0.1")
+            .header(sarmg_admin_auth::SEC_FETCH_SITE_HEADER, "same-origin")
             .body(body.into())
             .unwrap();
         request.extensions_mut().insert(ConnectInfo(
@@ -976,6 +1022,15 @@ mod tests {
             .expect("collect response body")
             .to_bytes()
             .to_vec()
+    }
+
+    async fn error_envelope(response: Response) -> sarmg_error::ErrorEnvelope {
+        assert_eq!(
+            response.headers().get(header::CONTENT_TYPE).unwrap(),
+            "application/json"
+        );
+        serde_json::from_slice(&body_bytes(response).await)
+            .expect("strict Foundation error envelope")
     }
 
     #[test]
@@ -1043,10 +1098,10 @@ mod tests {
 
     #[tokio::test]
     async fn login_route_is_public() {
-        let response = app_with_admin("admin@example.com", "correct-password")
+        let response = app_with_admin("admin", "correct-password")
             .await
             .oneshot(login_request(
-                r#"{"email":"admin@example.com","password":"correct-password"}"#,
+                r#"{"username":"admin","password":"correct-password"}"#,
                 "192.0.2.10:41000",
             ))
             .await
@@ -1056,9 +1111,35 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn uri_authority_is_used_only_when_host_is_absent() {
+        let application = app_with_admin("admin", "correct-password").await;
+        let body = r#"{"username":"admin","password":"wrong-password"}"#;
+
+        let mut authority_only = login_request(body, "192.0.2.11:41000");
+        authority_only.headers_mut().remove(header::HOST);
+        *authority_only.uri_mut() = "http://127.0.0.1/api/v2/auth/login".parse().unwrap();
+        assert_eq!(
+            application
+                .clone()
+                .oneshot(authority_only)
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::UNAUTHORIZED
+        );
+
+        let mut ambiguous = login_request(body, "192.0.2.12:41000");
+        *ambiguous.uri_mut() = "http://127.0.0.1/api/v2/auth/login".parse().unwrap();
+        assert_eq!(
+            application.oneshot(ambiguous).await.unwrap().status(),
+            StatusCode::FORBIDDEN
+        );
+    }
+
+    #[tokio::test]
     async fn login_json_body_is_bounded_before_password_work() {
         let body = format!(
-            r#"{{"email":"admin@example.com","password":"{}"}}"#,
+            r#"{{"username":"admin","password":"{}"}}"#,
             "x".repeat(crate::login::LOGIN_BODY_LIMIT_BYTES)
         );
         let response = app()
@@ -1073,8 +1154,7 @@ mod tests {
     async fn source_rate_limit_returns_retry_after() {
         let admission =
             crate::login::LoginAdmission::for_test(1, 8, 1, std::time::Duration::from_millis(50));
-        let (app, _) =
-            app_with_admin_and_admission("admin@example.com", "correct-password", admission).await;
+        let (app, _) = app_with_admin_and_admission("admin", "correct-password", admission).await;
         let first = app
             .clone()
             .oneshot(login_request("{", "192.0.2.30:41000"))
@@ -1084,7 +1164,7 @@ mod tests {
 
         let limited = app
             .oneshot(login_request(
-                r#"{"email":"other@example.com","password":"wrong-password"}"#,
+                r#"{"username":"other-admin","password":"wrong-password"}"#,
                 "192.0.2.30:41001",
             ))
             .await
@@ -1102,12 +1182,11 @@ mod tests {
     async fn normalized_account_limit_spans_distinct_sources() {
         let admission =
             crate::login::LoginAdmission::for_test(8, 1, 1, std::time::Duration::from_secs(1));
-        let (app, _) =
-            app_with_admin_and_admission("admin@example.com", "correct-password", admission).await;
+        let (app, _) = app_with_admin_and_admission("admin", "correct-password", admission).await;
         let first = app
             .clone()
             .oneshot(login_request(
-                r#"{"email":" Admin@Example.COM ","password":"wrong-password"}"#,
+                r#"{"username":" Admin ","password":"wrong-password"}"#,
                 "192.0.2.31:41000",
             ))
             .await
@@ -1116,7 +1195,7 @@ mod tests {
 
         let limited = app
             .oneshot(login_request(
-                r#"{"email":"admin@example.com","password":"wrong-password"}"#,
+                r#"{"username":"admin","password":"wrong-password"}"#,
                 "192.0.2.32:41000",
             ))
             .await
@@ -1166,27 +1245,28 @@ mod tests {
                 .unwrap()
                 >= 1
         );
-        assert_eq!(
-            body_bytes(limited).await,
-            br#"{"message":"pairing source rate exceeded"}"#
-        );
+        let envelope = error_envelope(limited).await;
+        assert_eq!(envelope.code.as_str(), "too_many_requests");
+        assert_eq!(envelope.message, "pairing source rate exceeded");
+        assert!(envelope.retryable);
+        assert_eq!(envelope.details["retry_after_seconds"], 60);
     }
 
     #[tokio::test]
     async fn unknown_wrong_and_disabled_users_share_the_unauthorized_semantics() {
         let (app, pool) = app_with_admin_and_admission(
-            "admin@example.com",
+            "admin",
             "correct-password",
             crate::login::LoginAdmission::production(),
         )
         .await;
         let cases = [
             (
-                r#"{"email":"admin@example.com","password":"wrong-password"}"#,
+                r#"{"username":"admin","password":"wrong-password"}"#,
                 "192.0.2.40:41000",
             ),
             (
-                r#"{"email":"missing@example.com","password":"wrong-password"}"#,
+                r#"{"username":"missing-admin","password":"wrong-password"}"#,
                 "192.0.2.41:41000",
             ),
         ];
@@ -1197,23 +1277,29 @@ mod tests {
                 .await
                 .unwrap();
             assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
-            assert_eq!(body_bytes(response).await, br#"{"message":"unauthorized"}"#);
+            let envelope = error_envelope(response).await;
+            assert_eq!(envelope.code.as_str(), "unauthorized");
+            assert_eq!(envelope.message, "unauthorized");
+            assert!(!envelope.retryable);
         }
 
-        sqlx::query("UPDATE auth_users SET active=false WHERE email=?")
-            .bind("admin@example.com")
+        sqlx::query("UPDATE auth_users SET active=false WHERE username=?")
+            .bind("admin")
             .execute(&pool)
             .await
             .unwrap();
         let disabled = app
             .oneshot(login_request(
-                r#"{"email":"admin@example.com","password":"correct-password"}"#,
+                r#"{"username":"admin","password":"correct-password"}"#,
                 "192.0.2.42:41000",
             ))
             .await
             .unwrap();
         assert_eq!(disabled.status(), StatusCode::UNAUTHORIZED);
-        assert_eq!(body_bytes(disabled).await, br#"{"message":"unauthorized"}"#);
+        let envelope = error_envelope(disabled).await;
+        assert_eq!(envelope.code.as_str(), "unauthorized");
+        assert_eq!(envelope.message, "unauthorized");
+        assert!(!envelope.retryable);
         let sessions: i64 = sqlx::query_scalar("SELECT count(*) FROM auth_sessions")
             .fetch_one(&pool)
             .await

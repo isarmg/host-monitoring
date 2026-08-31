@@ -198,14 +198,14 @@ async fn exact_current_schema_survives_close_and_reopen() {
 async fn noncurrent_version_missing_metadata_and_schema_drift_are_read_only_rejections() {
     let directory = tempfile::tempdir().unwrap();
 
-    let legacy = directory.path().join("legacy.sqlite3");
-    rusqlite::Connection::open(&legacy)
+    let unknown_schema = directory.path().join("unknown-schema.sqlite3");
+    rusqlite::Connection::open(&unknown_schema)
         .unwrap()
-        .execute("CREATE TABLE legacy_data(id INTEGER PRIMARY KEY)", [])
+        .execute("CREATE TABLE unknown_data(id INTEGER PRIMARY KEY)", [])
         .unwrap();
     let before = directory_snapshot(directory.path());
     assert!(
-        store::open_or_initialize(&database_url(&legacy))
+        store::open_or_initialize(&database_url(&unknown_schema))
             .await
             .is_err()
     );

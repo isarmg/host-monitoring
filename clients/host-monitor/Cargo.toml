@@ -20,6 +20,7 @@ desktop = [
     "dep:libc",
     "dep:rand",
     "dep:reqwest",
+    "dep:sarmg-error",
     "dep:sha1",
     "dep:sha2",
     "dep:sysinfo",
@@ -44,6 +45,7 @@ rand = { version = "0.9", optional = true }
 reqwest = { version = "0.13", default-features = false, features = ["json", "http2"], optional = true }
 serde.workspace = true
 serde_json.workspace = true
+sarmg-error = { workspace = true, optional = true }
 sha2 = { version = "0.10", optional = true }
 sysinfo = { version = "0.39", default-features = false, features = ["system", "disk", "network", "component"], optional = true }
 thiserror.workspace = true

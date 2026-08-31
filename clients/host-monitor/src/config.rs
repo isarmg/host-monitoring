@@ -1224,7 +1224,7 @@ mod tests {
                 .insert(field.to_owned(), serde_json::Value::Null);
             assert!(
                 serde_json::from_value::<AgentConfig>(document).is_err(),
-                "obsolete field {field} must not be silently accepted"
+                "unknown field {field} must not be silently accepted"
             );
         }
     }

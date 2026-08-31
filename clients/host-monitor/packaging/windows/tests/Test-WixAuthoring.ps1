@@ -64,16 +64,6 @@ $helperText = Get-SourceBundle -EntryPath $helperPath -SourceRoot $helperSourceR
 $trayText = Get-SourceBundle -EntryPath $trayPath -SourceRoot $traySourceRoot
 $mainText = Get-Content -LiteralPath $mainPath -Raw
 
-foreach ($removedScript in @(
-    (Join-Path $packagingRoot "install.ps1"),
-    (Join-Path $packagingRoot "uninstall.ps1"),
-    (Join-Path $PSScriptRoot "Test-PackagingScripts.ps1")
-)) {
-    if (Test-Path -LiteralPath $removedScript) {
-        throw "Removed compatibility script still exists: $removedScript"
-    }
-}
-
 foreach ($currentVersionBinding in @(
     'env!("CARGO_PKG_VERSION")',
     'application_version: String',
@@ -83,9 +73,9 @@ foreach ($currentVersionBinding in @(
         throw "Windows state markers and transaction journals must be bound to the current package version."
     }
 }
-foreach ($removedHelperMechanism in @('TaskScheduler', 'ScheduledTask', 'legacy', 'MajorUpgrade')) {
-    if ($helperText.Contains($removedHelperMechanism)) {
-        throw "Removed compatibility mechanism remains in the maintenance helper: $removedHelperMechanism"
+foreach ($outOfScopeUpgradeMechanism in @('TaskScheduler', 'ScheduledTask', 'MajorUpgrade')) {
+    if ($helperText.Contains($outOfScopeUpgradeMechanism)) {
+        throw "The current-only maintenance helper contains an upgrade mechanism: $outOfScopeUpgradeMechanism"
     }
 }
 

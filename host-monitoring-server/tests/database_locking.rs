@@ -95,6 +95,12 @@ async fn lock_identity_survives_working_directory_and_sqlite_restarts() {
         "online doctor failed: {}",
         String::from_utf8_lossy(&doctor.stderr)
     );
+    let doctor: serde_json::Value = serde_json::from_slice(&doctor.stdout).unwrap();
+    assert_eq!(doctor["status"], "ok");
+    assert_eq!(doctor["database_ready"], true);
+    assert_eq!(doctor["retention_ready"], true);
+    assert_eq!(doctor["integrity_ready"], true);
+    assert_eq!(doctor["foreign_keys_ready"], true);
 
     let second_server = server_command()
         .arg("serve")

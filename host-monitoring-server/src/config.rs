@@ -53,7 +53,7 @@ pub struct AdminResetPassword {
     #[arg(long)]
     pub database_url: String,
     #[arg(long)]
-    pub email: String,
+    pub username: String,
     #[arg(long, hide_env_values = true)]
     pub password: String,
 }
@@ -63,7 +63,7 @@ pub struct ValidatedConfig {
     pub bind: SocketAddr,
     pub database_url: String,
     pub auth: Auth,
-    pub bootstrap_admin_email: String,
+    pub bootstrap_admin_username: String,
     pub bootstrap_admin_password: Option<String>,
     pub telemetry: TelemetryWriterConfig,
     pub retention: RetentionConfig,
@@ -83,6 +83,13 @@ impl ValidatedConfig {
         let cookie_mode = cookie_mode(bind, development)?;
         let static_dir =
             validate_static_dir(&required("HOST_MONITORING_STATIC_DIR")?, !development)?;
+        let bootstrap_admin_username = sarmg_admin_auth::normalize_administrator_username(&value(
+            "HOST_MONITORING_BOOTSTRAP_ADMIN_USERNAME",
+            "admin",
+        ))
+        .map_err(|error| {
+            anyhow::anyhow!("HOST_MONITORING_BOOTSTRAP_ADMIN_USERNAME is invalid: {error}")
+        })?;
         let idle_ttl = Duration::from_secs(parse_u64(
             "HOST_MONITORING_SESSION_IDLE_TTL_SECONDS",
             1_800,
@@ -133,10 +140,7 @@ impl ValidatedConfig {
             bind,
             database_url,
             auth: Auth::new(idle_ttl, absolute_ttl, cookie_mode)?,
-            bootstrap_admin_email: value(
-                "HOST_MONITORING_BOOTSTRAP_ADMIN_EMAIL",
-                "admin@example.com",
-            ),
+            bootstrap_admin_username,
             bootstrap_admin_password: env::var("HOST_MONITORING_BOOTSTRAP_ADMIN_PASSWORD").ok(),
             telemetry,
             retention,
@@ -287,6 +291,17 @@ mod tests {
                 Cli::try_parse_from(["host-monitoring-server", removed]).is_err(),
                 "removed product command {removed} was still accepted"
             );
+        }
+    }
+
+    #[test]
+    fn administrator_username_uses_the_foundation_canonical_form() {
+        assert_eq!(
+            sarmg_admin_auth::normalize_administrator_username("  Release.Admin  ").unwrap(),
+            "release.admin"
+        );
+        for rejected in ["ab", "admin@example.test", "管理员", "admin\n"] {
+            assert!(sarmg_admin_auth::normalize_administrator_username(rejected).is_err());
         }
     }
 

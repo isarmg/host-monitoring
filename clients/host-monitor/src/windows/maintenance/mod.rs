@@ -639,7 +639,7 @@ fn protected_directory_security_descriptor() -> String {
 fn is_protected_dacl_control(control: &str) -> bool {
     // Windows can retain SE_DACL_AUTO_INHERITED while setting SE_DACL_PROTECTED
     // on an object that previously inherited its ACL. SDDL renders that inert
-    // historical marker as PAI; P still prevents any future inheritance. Do
+    // retained marker as PAI; P still prevents any future inheritance. Do
     // not accept AR, AI without P, or unknown flags.
     matches!(control, "P" | "PAI")
 }
@@ -1148,11 +1148,11 @@ mod program_acl_template_tests {
 
     #[test]
     fn parser_accepts_only_the_current_program_template() {
-        let obsolete_service_only = format!(
+        let incomplete_service_only = format!(
             "O:SYD:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)\
              (A;OICI;0x1200a9;;;{SERVICE_SID})"
         );
-        assert!(parse_program_dacl(&obsolete_service_only, SERVICE_SID, true).is_err());
+        assert!(parse_program_dacl(&incomplete_service_only, SERVICE_SID, true).is_err());
 
         let directory = program_security_descriptor(SERVICE_SID);
         let file = managed_security_descriptor_for_target(&directory, false);

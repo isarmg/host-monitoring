@@ -7,7 +7,7 @@ use uuid::Uuid;
 
 use crate::error::{Error, Result, database};
 
-pub const CSRF_HEADER: &str = "x-csrf-token";
+pub const CSRF_HEADER: &str = sarmg_admin_auth::CSRF_HEADER;
 const PRODUCTION_SESSION_COOKIE: &str = "__Host-host_session";
 const DEVELOPMENT_SESSION_COOKIE: &str = "host_session";
 const MAX_CSRF_TOKENS_PER_SESSION: i64 = 8;
@@ -54,7 +54,8 @@ impl Auth {
         user: &crate::store::StoredUser,
     ) -> Result<IssuedSession> {
         let session_id = Uuid::new_v4();
-        let token = random_token();
+        let token = sarmg_admin_auth::random_token()
+            .map_err(|error| Error::Internal(anyhow::anyhow!(error)))?;
         let now = Utc::now();
         let absolute_expires_at = now + self.absolute_ttl;
         let idle_expires_at = std::cmp::min(now + self.idle_ttl, absolute_expires_at);
@@ -96,7 +97,8 @@ impl Auth {
         session_id: Uuid,
     ) -> Result<String> {
         let now = Utc::now();
-        let token = random_token();
+        let token = sarmg_admin_auth::random_token()
+            .map_err(|error| Error::Internal(anyhow::anyhow!(error)))?;
         let mut tx = pool.begin().await.map_err(database)?;
         let inserted = sqlx::query(
             r#"INSERT INTO auth_session_csrf_tokens(session_id,token_hash,created_at)
@@ -178,6 +180,12 @@ impl Auth {
     pub fn uses_insecure_development_cookie(&self) -> bool {
         self.cookie_mode == CookieMode::LoopbackDevelopment
     }
+
+    /// Login and authenticated mutations share the same strict Origin/Host
+    /// comparison so a browser cannot be forced into an attacker's account.
+    pub fn request_is_same_origin(&self, headers: &HeaderMap, uri: &Uri) -> bool {
+        same_origin(headers, uri, self.cookie_mode)
+    }
 }
 
 #[derive(Debug)]
@@ -189,7 +197,7 @@ pub struct IssuedSession {
 #[derive(Debug, Clone)]
 pub struct Principal {
     pub subject: String,
-    pub email: String,
+    pub username: String,
     pub session_id: Uuid,
 }
 
@@ -197,25 +205,34 @@ pub struct Principal {
 struct SessionRow {
     session_id: Uuid,
     user_id: String,
-    email: String,
+    username: String,
     last_seen_at: DateTime<Utc>,
     idle_expires_at: DateTime<Utc>,
     absolute_expires_at: DateTime<Utc>,
 }
 
-pub use isarmg_auth::{hash_password, verify_password};
+pub use sarmg_admin_auth::{hash_password, verify_password};
 
 pub async fn require_console(
     headers: &HeaderMap,
+    uri: &Uri,
     state: &crate::http::AppState,
     csrf_required: bool,
 ) -> Result<Principal> {
-    let token = isarmg_auth::parse_cookie_token(state.auth.session_cookie_name(), headers)
-        .filter(|token| valid_token_shape(token))
+    let mut cookie_headers = headers.get_all(header::COOKIE).iter();
+    let cookie_header = cookie_headers
+        .next()
+        .and_then(|value| value.to_str().ok())
+        .filter(|_| cookie_headers.next().is_none())
         .ok_or(Error::Unauthorized)?;
+    let token =
+        sarmg_admin_auth::parse_cookie_value(cookie_header, state.auth.session_cookie_name())
+            .filter(|token| sarmg_admin_auth::is_token_shape(token))
+            .ok_or(Error::Unauthorized)?
+            .to_owned();
     let now = Utc::now();
     let row = sqlx::query_as::<_, SessionRow>(
-        r#"SELECT s.session_id,s.user_id,u.email,s.last_seen_at,s.idle_expires_at,
+        r#"SELECT s.session_id,s.user_id,u.username,s.last_seen_at,s.idle_expires_at,
                   s.absolute_expires_at
            FROM auth_sessions s
            JOIN auth_users u ON u.user_id=s.user_id
@@ -233,18 +250,14 @@ pub async fn require_console(
         return Err(Error::Unauthorized);
     };
 
-    if csrf_required && !same_origin(headers, state.auth.cookie_mode) {
+    if csrf_required && !same_origin(headers, uri, state.auth.cookie_mode) {
         return Err(Error::Forbidden);
     }
 
     let csrf_hash = if csrf_required {
-        let csrf_token = headers
-            .get(CSRF_HEADER)
-            .and_then(|value| value.to_str().ok())
-            .filter(|token| valid_token_shape(token));
-        let Some(csrf_token) = csrf_token else {
-            return Err(Error::Forbidden);
-        };
+        let csrf_values = header_values(headers, CSRF_HEADER);
+        let csrf_token = sarmg_admin_auth::require_single_csrf_token(&csrf_values)
+            .map_err(|_| Error::Forbidden)?;
         let csrf_hash = crate::token_hash(csrf_token);
         let valid: bool = sqlx::query_scalar(
             "SELECT EXISTS(SELECT 1 FROM auth_session_csrf_tokens WHERE session_id=? AND token_hash=?)",
@@ -266,7 +279,7 @@ pub async fn require_console(
     if now - row.last_seen_at < touch_interval && row.idle_expires_at - now > touch_interval {
         return Ok(Principal {
             subject: row.user_id,
-            email: row.email,
+            username: row.username,
             session_id: row.session_id,
         });
     }
@@ -301,53 +314,45 @@ pub async fn require_console(
     }
     Ok(Principal {
         subject: row.user_id,
-        email: row.email,
+        username: row.username,
         session_id: row.session_id,
     })
 }
 
-fn same_origin(headers: &HeaderMap, cookie_mode: CookieMode) -> bool {
-    let mut origins = headers.get_all(header::ORIGIN).iter();
-    let Some(origin) = origins.next().and_then(|value| value.to_str().ok()) else {
-        return false;
+fn same_origin(headers: &HeaderMap, uri: &Uri, cookie_mode: CookieMode) -> bool {
+    let mode = match cookie_mode {
+        CookieMode::Production => sarmg_admin_auth::AdministratorOriginMode::ProductionHttps,
+        CookieMode::LoopbackDevelopment => {
+            sarmg_admin_auth::AdministratorOriginMode::LoopbackDevelopmentHttp
+        }
     };
-    if origins.next().is_some() {
-        return false;
+    let origins = header_values(headers, header::ORIGIN.as_str());
+    let mut hosts = header_values(headers, header::HOST.as_str());
+    if let Some(authority) = uri.authority() {
+        // HTTP/2 carries :authority in the URI rather than a Host field. If a
+        // request exposes both channels, pass both so Foundation rejects the
+        // ambiguity even when their text happens to match.
+        hosts.push(authority.as_str().as_bytes().to_vec());
     }
-    let Ok(origin) = origin.parse::<Uri>() else {
-        return false;
-    };
-    let expected_scheme = match cookie_mode {
-        CookieMode::Production => "https",
-        CookieMode::LoopbackDevelopment => "http",
-    };
-    if !origin
-        .scheme_str()
-        .is_some_and(|scheme| scheme.eq_ignore_ascii_case(expected_scheme))
-        || origin.query().is_some()
-        || origin.path() != "/"
-    {
-        return false;
-    }
-    let Some(origin_authority) = origin.authority() else {
-        return false;
-    };
+    let sites = header_values(headers, sarmg_admin_auth::SEC_FETCH_SITE_HEADER);
+    sarmg_admin_auth::require_administrator_same_origin(mode, &origins, &hosts, &sites).is_ok()
+}
 
-    let mut hosts = headers.get_all(header::HOST).iter();
-    let Some(host) = hosts.next().and_then(|value| value.to_str().ok()) else {
-        return false;
-    };
-    if hosts.next().is_some() {
-        return false;
-    }
-    origin_authority.as_str().eq_ignore_ascii_case(host)
+/// Preserve every field-line value so Foundation can reject ambiguous browser
+/// security headers instead of letting the HTTP framework select one.
+fn header_values(headers: &HeaderMap, name: &str) -> Vec<Vec<u8>> {
+    headers
+        .get_all(name)
+        .iter()
+        .map(|value| value.as_bytes().to_vec())
+        .collect()
 }
 
 async fn insert_csrf_token(
     tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     session_id: Uuid,
 ) -> anyhow::Result<String> {
-    let token = random_token();
+    let token = sarmg_admin_auth::random_token().map_err(anyhow::Error::from)?;
     sqlx::query(
         "INSERT INTO auth_session_csrf_tokens(session_id,token_hash,created_at) VALUES(?,?,?)",
     )
@@ -376,17 +381,6 @@ async fn prune_csrf_tokens(
     .execute(&mut **tx)
     .await?;
     Ok(())
-}
-
-fn random_token() -> String {
-    isarmg_auth::csrf_token()
-}
-
-fn valid_token_shape(token: &str) -> bool {
-    token.len() == 43
-        && token
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
 }
 
 #[cfg(test)]

@@ -1,7 +1,13 @@
 use std::env;
 
+const SUPPORTED_SERVER_TARGET: &str = "x86_64-unknown-linux-gnu";
+
 fn main() {
     let target = env::var("TARGET").expect("Cargo must provide TARGET");
+    assert_eq!(
+        target, SUPPORTED_SERVER_TARGET,
+        "Host Monitoring Server only supports the {SUPPORTED_SERVER_TARGET} compilation target"
+    );
     let source_revision =
         env::var("HOST_MONITORING_SOURCE_REVISION").unwrap_or_else(|_| "unbound".to_owned());
     assert!(

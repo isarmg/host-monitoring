@@ -15,7 +15,7 @@ env:
 
 jobs:
   rust-contracts:
-    name: Worker and protocol (Rust 1.98)
+    name: Server and protocol (x86_64 GNU/Linux, Rust 1.98)
     permissions:
       contents: read
     runs-on: ubuntu-24.04
@@ -42,6 +42,21 @@ jobs:
           fi
       - name: Install exact Rust toolchain
         run: rustup toolchain install 1.98.0 --profile minimal --component rustfmt,clippy
+      - name: Enforce the Server target boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustc -vV | grep -Fx 'host: x86_64-unknown-linux-gnu'
+          gate_binary="${RUNNER_TEMP}/host-monitoring-server-build-gate"
+          gate_stderr="${RUNNER_TEMP}/host-monitoring-server-build-gate.stderr"
+          rustc host-monitoring-server/build.rs -o "$gate_binary"
+          if TARGET=x86_64-pc-windows-msvc "$gate_binary" 2>"$gate_stderr"; then
+            echo 'Server build gate accepted an unsupported target.' >&2
+            exit 1
+          fi
+          grep -F \
+            'Host Monitoring Server only supports the x86_64-unknown-linux-gnu compilation target' \
+            "$gate_stderr"
       - name: Format
         run: cargo fmt --all -- --check
       - name: Assert the authoritative in-repository protocol boundary
@@ -60,12 +75,18 @@ jobs:
           cargo pkgid --locked -p host-monitoring-server \
             | grep -F '#0.7.0'
           cargo pkgid --locked -p host-protocol | grep -F '#host-protocol@0.7.0'
-      - name: Check worker and protocol
-        run: cargo check --locked -p host-monitoring-server -p host-protocol --all-targets
-      - name: Test worker, protocol, and Manifest contracts
-        run: cargo test --locked -p host-monitoring-server -p host-protocol
+      - name: Check Server and protocol
+        run: >-
+          cargo check --locked --target x86_64-unknown-linux-gnu
+          -p host-monitoring-server -p host-protocol --all-targets
+      - name: Test Server, protocol, and manifest contracts
+        run: >-
+          cargo test --locked --target x86_64-unknown-linux-gnu
+          -p host-monitoring-server -p host-protocol
       - name: Clippy
-        run: cargo clippy --locked -p host-monitoring-server -p host-protocol --all-targets -- -D warnings
+        run: >-
+          cargo clippy --locked --target x86_64-unknown-linux-gnu
+          -p host-monitoring-server -p host-protocol --all-targets -- -D warnings
 
   host-monitor:
     name: Desktop host-monitor (${{ matrix.os }})
@@ -248,7 +269,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
-          node-version: '26.7.0'
+          node-version-file: .node-version
           cache: npm
           cache-dependency-path: clients/web/package-lock.json
       - name: Install frontend dependencies
