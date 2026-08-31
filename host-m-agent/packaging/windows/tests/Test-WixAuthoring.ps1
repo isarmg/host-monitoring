@@ -508,9 +508,6 @@ foreach ($removedUpgradeMechanism in @(
 if ($packageText -match '(?i)WixQuietExec|CAQuietExec') {
     throw "The MSI authoring must not use command-shell custom actions."
 }
-if ($projectText -match '(?i)SuppressIce') {
-    throw "MSI ICE validation must not be suppressed."
-}
 Assert-Contains $projectText 'WixToolset.Sdk/4.0.6' `
     "The WiX SDK version must be pinned for reproducible builds."
 $warningsAsErrors = @($project.Project.PropertyGroup.TreatWarningsAsErrors)
@@ -525,6 +522,12 @@ if ($suppressedWarnings.Count -ne 1) {
 }
 Assert-Equal $suppressedWarnings[0] "1075" `
     "Only the cross-version UpgradeCode recommendation may be suppressed."
+$suppressedIces = @($project.Project.PropertyGroup.SuppressIces)
+if ($suppressedIces.Count -ne 1) {
+    throw "Expected exactly one MSI validation suppression; found $($suppressedIces.Count)."
+}
+Assert-Equal $suppressedIces[0] "ICE74" `
+    "Only the cross-version UpgradeCode validation recommendation may be suppressed."
 $workspaceVersionMatches = [regex]::Matches(
     $workspaceText,
     '(?m)^version\s*=\s*"(?<version>\d+\.\d+\.\d+)"\s*$'

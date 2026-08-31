@@ -7,6 +7,8 @@
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <!-- WIX1075 recommends a cross-version UpgradeCode, which this current-only MSI forbids. -->
     <SuppressSpecificWarnings>1075</SuppressSpecificWarnings>
+    <!-- ICE74 repeats the same cross-version recommendation during MSI validation. -->
+    <SuppressIces>ICE74</SuppressIces>
 
     <!-- Callers must provide x64 executables for this exact package version. -->
     <ProductVersion Condition="'$(ProductVersion)' == ''">0.7.0</ProductVersion>
