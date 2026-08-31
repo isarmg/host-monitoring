@@ -96,6 +96,16 @@ fn mutate_checkpoint_and_seed_sidecar_sentinels(path: &Path, sql: &str) {
     }
 }
 
+async fn copy_current_database_image(target: &Path) {
+    let source_directory = tempfile::tempdir().unwrap();
+    let source = source_directory.path().join("current.sqlite3");
+    let pool = store::open_or_initialize(&database_url(&source))
+        .await
+        .unwrap();
+    pool.close().await;
+    fs::copy(source, target).unwrap();
+}
+
 #[tokio::test]
 async fn exact_current_schema_survives_close_and_reopen() {
     let directory = tempfile::tempdir().unwrap();
@@ -202,10 +212,7 @@ async fn noncurrent_version_missing_metadata_and_schema_drift_are_read_only_reje
     assert_snapshot_unchanged(&before, &directory_snapshot(directory.path()));
 
     let noncurrent_version = directory.path().join("noncurrent-version.sqlite3");
-    let pool = store::open_or_initialize(&database_url(&noncurrent_version))
-        .await
-        .unwrap();
-    pool.close().await;
+    copy_current_database_image(&noncurrent_version).await;
     mutate_checkpoint_and_seed_sidecar_sentinels(
         &noncurrent_version,
         "UPDATE product_metadata SET application_version='not-current'",
@@ -219,10 +226,7 @@ async fn noncurrent_version_missing_metadata_and_schema_drift_are_read_only_reje
     assert_snapshot_unchanged(&before, &directory_snapshot(directory.path()));
 
     let drifted = directory.path().join("drifted.sqlite3");
-    let pool = store::open_or_initialize(&database_url(&drifted))
-        .await
-        .unwrap();
-    pool.close().await;
+    copy_current_database_image(&drifted).await;
     mutate_checkpoint_and_seed_sidecar_sentinels(&drifted, "CREATE TABLE unexpected(id INTEGER)");
     let before = directory_snapshot(directory.path());
     assert!(
