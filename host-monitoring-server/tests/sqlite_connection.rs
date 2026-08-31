@@ -81,12 +81,19 @@ fn assert_snapshot_unchanged(before: &[(String, Vec<u8>)], after: &[(String, Vec
     assert_eq!(summary(after), summary(before));
 }
 
-fn mutate_and_checkpoint(path: &Path, sql: &str) {
+fn mutate_checkpoint_and_seed_sidecar_sentinels(path: &Path, sql: &str) {
     let connection = rusqlite::Connection::open(path).unwrap();
     connection.execute(sql, []).unwrap();
     connection
         .execute_batch("PRAGMA wal_checkpoint(TRUNCATE)")
         .unwrap();
+    drop(connection);
+
+    for suffix in ["-wal", "-shm"] {
+        let mut sidecar = path.as_os_str().to_os_string();
+        sidecar.push(suffix);
+        fs::write(sidecar, b"noncurrent-sidecar-must-remain-unchanged").unwrap();
+    }
 }
 
 #[tokio::test]
@@ -178,7 +185,7 @@ async fn exact_current_schema_survives_close_and_reopen() {
 }
 
 #[tokio::test]
-async fn old_version_missing_metadata_and_schema_drift_are_read_only_rejections() {
+async fn noncurrent_version_missing_metadata_and_schema_drift_are_read_only_rejections() {
     let directory = tempfile::tempdir().unwrap();
 
     let legacy = directory.path().join("legacy.sqlite3");
@@ -194,18 +201,18 @@ async fn old_version_missing_metadata_and_schema_drift_are_read_only_rejections(
     );
     assert_snapshot_unchanged(&before, &directory_snapshot(directory.path()));
 
-    let wrong_version = directory.path().join("wrong-version.sqlite3");
-    let pool = store::open_or_initialize(&database_url(&wrong_version))
+    let noncurrent_version = directory.path().join("noncurrent-version.sqlite3");
+    let pool = store::open_or_initialize(&database_url(&noncurrent_version))
         .await
         .unwrap();
     pool.close().await;
-    mutate_and_checkpoint(
-        &wrong_version,
-        "UPDATE product_metadata SET application_version='0.6.0'",
+    mutate_checkpoint_and_seed_sidecar_sentinels(
+        &noncurrent_version,
+        "UPDATE product_metadata SET application_version='not-current'",
     );
     let before = directory_snapshot(directory.path());
     assert!(
-        store::open_or_initialize(&database_url(&wrong_version))
+        store::open_or_initialize(&database_url(&noncurrent_version))
             .await
             .is_err()
     );
@@ -216,7 +223,7 @@ async fn old_version_missing_metadata_and_schema_drift_are_read_only_rejections(
         .await
         .unwrap();
     pool.close().await;
-    mutate_and_checkpoint(&drifted, "CREATE TABLE unexpected(id INTEGER)");
+    mutate_checkpoint_and_seed_sidecar_sentinels(&drifted, "CREATE TABLE unexpected(id INTEGER)");
     let before = directory_snapshot(directory.path());
     assert!(
         store::open_or_initialize(&database_url(&drifted))
