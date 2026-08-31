@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import importlib.util
+import re
 import stat
 import tempfile
 import unittest
@@ -19,6 +20,21 @@ SPEC.loader.exec_module(PACKAGE)
 
 
 class ReleaseToolingTests(unittest.TestCase):
+    def test_release_readme_is_package_local_and_chinese(self) -> None:
+        repository = SCRIPT.parent.parent
+        readme = repository / PACKAGE.RELEASE_README
+        text = readme.read_text(encoding="utf-8")
+        self.assertGreater(len(text.encode("utf-8")), 10_000)
+        self.assertIn("Host Monitoring Server 0.7.0 发行包部署手册", text)
+        self.assertIn("bin/host-monitoring-server", text)
+        self.assertIn("systemd/host-monitoring-server.service", text)
+        self.assertIn("RELEASE-MANIFEST.json", text)
+        source_only = re.compile(r"(?:^|[`\s])(scripts|clients|config|deploy)/")
+        self.assertIsNone(
+            source_only.search(text),
+            "packaged README must not reference source-only repository paths",
+        )
+
     def test_release_host_is_exactly_linux_x86_64(self) -> None:
         PACKAGE.require_release_host("Linux", "x86_64", "glibc 2.41")
         for system, machine, libc in [

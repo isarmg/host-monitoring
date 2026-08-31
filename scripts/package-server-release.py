@@ -23,6 +23,7 @@ APPLICATION = "host-monitoring-server"
 VERSION = "0.7.0"
 TARGET = "x86_64-unknown-linux-gnu"
 TAG = f"v{VERSION}"
+RELEASE_README = Path("docs/server-release-readme.md")
 
 
 def fail(message: str) -> NoReturn:
@@ -394,7 +395,7 @@ def main() -> None:
             source / "deploy/host-monitoring-server.service",
             root / "systemd/host-monitoring-server.service",
         )
-        shutil.copyfile(source / "docs/operations.md", root / "README.md")
+        shutil.copyfile(source / RELEASE_README, root / "README.md")
         shutil.copytree(web_stage, root / "web", copy_function=shutil.copyfile)
 
         executable_paths = [root / "bin/host-monitoring-server"]
