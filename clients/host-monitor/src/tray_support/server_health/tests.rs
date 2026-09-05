@@ -42,6 +42,8 @@ fn probe_raw(response: String) -> ServerConnectionStatus {
                 Err(error) => panic!("health fixture accept: {error}"),
             }
         };
+        // macOS and Windows may inherit nonblocking mode from the listener.
+        stream.set_nonblocking(false).unwrap();
         stream
             .set_read_timeout(Some(Duration::from_secs(4)))
             .unwrap();
