@@ -9,6 +9,30 @@ mod tests {
     };
 
     use super::*;
+    const MAX_PAIRING_STATE_BYTES: usize = StateFile::Pairing.max_bytes();
+    const MAX_ACTIVE_BINDING_BYTES: usize = StateFile::Binding.max_bytes();
+    const MAX_AUTH_STATE_BYTES: usize = StateFile::Authorization.max_bytes();
+
+    // Deliberately incomplete authorization fixture for malformed-state tests.
+    // Production has no unconditional authorize/invalidate entry points.
+    fn persist_auth_state(config: &AgentConfig, state: &LocalAuthState) -> anyhow::Result<()> {
+        let transaction = lock_state(config)?;
+        persist_auth_state_unlocked(&transaction, state)
+    }
+
+    fn write_private_fixture(
+        path: impl AsRef<std::path::Path>,
+        bytes: impl AsRef<[u8]>,
+    ) -> std::io::Result<()> {
+        let path = path.as_ref();
+        std::fs::write(path, bytes)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+        }
+        Ok(())
+    }
 
     fn test_config(directory: PathBuf) -> AgentConfig {
         let config_path = directory.join("config.json");
@@ -29,6 +53,155 @@ mod tests {
             arch: "test".into(),
             agent_version: "test".into(),
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn activating_commit_and_reporter_snapshot_stay_under_the_locked_directory() {
+        let base = std::env::temp_dir().join(format!("host-state-rebound-{}", Uuid::new_v4()));
+        fs::create_dir(&base).unwrap();
+        let config = test_config(base.join("state"));
+        let transaction = lock_state(&config).unwrap();
+        let reader = StateReader::open(&config.state_dir).unwrap();
+        let instance_id = Uuid::new_v4();
+        let activating = StoredPairingState::Activating {
+            version: PAIRING_STATE_VERSION,
+            generation: Uuid::new_v4(),
+            request_id: Uuid::new_v4(),
+            instance_id,
+            activation_url: "https://host-monitoring.example/activate".into(),
+            expires_at: Utc::now() + TimeDelta::minutes(10),
+            poll_interval: 2,
+            pairing_endpoint: config.pairing_endpoint(),
+            report_endpoint: config.endpoint.clone(),
+            bearer_secret: std::sync::Arc::new(sarmg_agent_secret::SecretString::new(
+                "original-private-credential".into(),
+            )),
+        };
+        persist_state_unlocked(&transaction, &activating).unwrap();
+        fs::rename(&config.state_dir, base.join("held")).unwrap();
+        let replacement = StateTransaction::begin(&config.state_dir).unwrap();
+        for file in [
+            StateFile::Identity,
+            StateFile::Credential,
+            StateFile::Pairing,
+            StateFile::Authorization,
+            StateFile::Binding,
+        ] {
+            replacement
+                .write(file, "replacement-must-not-be-touched")
+                .unwrap();
+        }
+        finish_activating_unlocked(&config, &transaction, activating).unwrap();
+        assert!(
+            matches!(load_state(&transaction).unwrap(), Some(StoredPairingState::Active { instance_id: id, .. }) if id == instance_id)
+        );
+        // A reader opened before the rename shares the same anchored namespace.
+        assert!(matches!(
+            load_state(&reader).unwrap(),
+            Some(StoredPairingState::Active { .. })
+        ));
+        let binding = load_active_binding(&config, &transaction).unwrap().unwrap();
+        assert!(
+            reporter_for_active_binding_unlocked(&config, &transaction, &binding)
+                .unwrap()
+                .is_some()
+        );
+        assert_eq!(
+            crate::transport::read_secret(&transaction, "test credential")
+                .unwrap()
+                .expose(),
+            "original-private-credential"
+        );
+        for file in [
+            StateFile::Identity,
+            StateFile::Credential,
+            StateFile::Pairing,
+            StateFile::Authorization,
+            StateFile::Binding,
+        ] {
+            assert_eq!(
+                replacement.read(file).unwrap(),
+                b"replacement-must-not-be-touched"
+            );
+        }
+        drop(replacement);
+        drop(reader);
+        drop(transaction);
+        fs::remove_dir_all(base).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn local_state_readers_reject_oversized_and_linked_files_without_mutating_state() {
+        use std::os::unix::fs::symlink;
+        let directory = std::env::temp_dir().join(format!("host-private-read-{}", Uuid::new_v4()));
+        crate::private_fs::ensure_private_directory(&directory).unwrap();
+        let config = test_config(directory.clone());
+        type Reader = fn(&AgentConfig) -> anyhow::Result<()>;
+        let cases: [(&str, usize, serde_json::Value, Reader); 3] = [
+            (
+                PAIRING_STATE_FILE,
+                MAX_PAIRING_STATE_BYTES,
+                serde_json::json!({
+                    "version": env!("CARGO_PKG_VERSION"), "phase": "active", "generation": Uuid::new_v4(),
+                    "request_id": Uuid::new_v4(), "instance_id": Uuid::new_v4(),
+                    "activation_url": "https://host-monitoring.example/activate", "report_endpoint": config.endpoint,
+                    "completed_at": Utc::now()
+                }),
+                |config| {
+                    load_state(&StateReader::open(&config.state_dir)?)
+                        .map(|value| assert!(value.is_some()))
+                },
+            ),
+            (
+                ACTIVE_BINDING_FILE,
+                MAX_ACTIVE_BINDING_BYTES,
+                serde_json::json!({
+                    "version": env!("CARGO_PKG_VERSION"), "generation": Uuid::new_v4(),
+                    "request_id": Uuid::new_v4(), "instance_id": Uuid::new_v4(), "report_endpoint": config.endpoint
+                }),
+                |config| {
+                    load_active_binding(config, &StateReader::open(&config.state_dir)?)
+                        .map(|value| assert!(value.is_some()))
+                },
+            ),
+            (
+                AUTH_STATE_FILE,
+                MAX_AUTH_STATE_BYTES,
+                serde_json::json!({
+                    "version": env!("CARGO_PKG_VERSION"), "status": "authorized", "reason": "paired", "changed_at": Utc::now()
+                }),
+                |config| local_auth_state(config).map(|value| assert!(value.is_some())),
+            ),
+        ];
+        for (name, max_bytes, value, read) in cases {
+            let path = directory.join(name);
+            let mut bytes = serde_json::to_vec(&value).unwrap();
+            bytes.resize(max_bytes, b' ');
+            write_private_fixture(&path, &bytes).unwrap();
+            read(&config).unwrap();
+            bytes.push(b' ');
+            write_private_fixture(&path, &bytes).unwrap();
+            assert!(format!("{:#}", read(&config).unwrap_err()).contains("budget"));
+            assert_eq!(fs::read(&path).unwrap(), bytes);
+            fs::remove_file(&path).unwrap();
+            let victim = directory.join("victim");
+            write_private_fixture(&victim, serde_json::to_vec(&value).unwrap()).unwrap();
+            symlink(&victim, &path).unwrap();
+            assert!(read(&config).is_err());
+            fs::remove_file(&path).unwrap();
+            fs::hard_link(&victim, &path).unwrap();
+            assert!(read(&config).is_err());
+            fs::remove_file(&path).unwrap();
+            fs::remove_file(victim).unwrap();
+        }
+        assert_eq!(
+            fs::read_dir(&directory).unwrap().count(),
+            0,
+            "readers must not create locks or state files"
+        );
+        fs::remove_dir_all(directory).unwrap();
     }
 
     #[test]
@@ -57,8 +230,7 @@ mod tests {
     #[test]
     fn persisted_pairing_endpoints_are_revalidated_before_network_use() {
         let request_id = Uuid::new_v4();
-        let remote_plaintext =
-            "http://192.0.2.10/api/v2/host-monitor/pairing-requests";
+        let remote_plaintext = "http://192.0.2.10/api/v2/host-monitor/pairing-requests";
         assert!(pairing_status_endpoint(remote_plaintext, request_id).is_err());
         assert!(activation_endpoint(remote_plaintext).is_err());
     }
@@ -68,15 +240,13 @@ mod tests {
         let state = StoredPairingState::Creating {
             version: PAIRING_STATE_VERSION,
             generation: Uuid::new_v4(),
-            pairing_endpoint:
-                "http://192.0.2.10/api/v2/host-monitor/pairing-requests".into(),
+            pairing_endpoint: "http://192.0.2.10/api/v2/host-monitor/pairing-requests".into(),
             report_endpoint: "http://192.0.2.10/api/v2/host-monitor/report".into(),
             host: test_host(),
             bearer_secret: random_secret(),
             polling_secret: random_secret(),
         };
         let config = AgentConfig {
-            allow_insecure_http: true,
             ..AgentConfig::default()
         };
 
@@ -86,123 +256,8 @@ mod tests {
         assert!(format!("{error:#}").contains("browser pairing requires HTTPS"));
     }
 
-    #[tokio::test]
-    async fn transient_plaintext_override_cannot_resume_durable_pairing_stages() {
-        let directory = std::env::temp_dir().join(format!(
-            "host-monitoring-pairing-durable-http-policy-{}",
-            Uuid::new_v4()
-        ));
-        fs::create_dir_all(&directory).unwrap();
-        let pairing_endpoint =
-            "http://127.0.0.1:1/api/v2/host-monitor/pairing-requests".to_string();
-        let report_endpoint =
-            "http://192.0.2.10:1/api/v2/host-monitor/report".to_string();
-        let config = AgentConfig {
-            endpoint: report_endpoint.clone(),
-            pairing_endpoint: Some(pairing_endpoint.clone()),
-            state_dir: directory.clone(),
-            allow_insecure_http: true,
-            persisted_allow_insecure_http: false,
-            request_timeout_seconds: 1,
-            ..AgentConfig::default()
-        };
-        let generation = Uuid::new_v4();
-        let request_id = Uuid::new_v4();
-        let activation_url =
-            format!("http://127.0.0.1:1/activate/{request_id}");
-
-        let creating = StoredPairingState::Creating {
-            version: PAIRING_STATE_VERSION,
-            generation,
-            pairing_endpoint: pairing_endpoint.clone(),
-            report_endpoint: report_endpoint.clone(),
-            host: test_host(),
-            bearer_secret: random_secret(),
-            polling_secret: random_secret(),
-        };
-        let create_error = finish_create_request(&config, creating)
-            .await
-            .expect_err("a transient override must not resume durable Creating state");
-        assert!(
-            format!("{create_error:#}")
-                .contains("requires allow_insecure_http=true in the existing persistent config")
-        );
-
-        let pending = StoredPairingState::Pending {
-            version: PAIRING_STATE_VERSION,
-            generation,
-            request_id,
-            activation_url: activation_url.clone(),
-            expires_at: Utc::now() + TimeDelta::minutes(10),
-            poll_interval: 1,
-            pairing_endpoint: pairing_endpoint.clone(),
-            report_endpoint: report_endpoint.clone(),
-            bearer_secret: random_secret(),
-            polling_secret: random_secret(),
-        };
-        persist_state(&config, &pending).unwrap();
-        let activation_error = activate_pending_with_code(
-            &config,
-            generation,
-            request_id,
-            "uci_test_authorization_key",
-        )
-        .await
-        .expect_err("a transient override must not activate durable Pending state");
-        assert!(
-            format!("{activation_error:#}")
-                .contains("requires allow_insecure_http=true in the existing persistent config")
-        );
-        let polling_error = poll_existing(&config)
-            .await
-            .expect_err("a transient override must not poll durable Pending state");
-        assert!(
-            format!("{polling_error:#}")
-                .contains("requires allow_insecure_http=true in the existing persistent config")
-        );
-
-        let instance_id = Uuid::new_v4();
-        let activating = StoredPairingState::Activating {
-            version: PAIRING_STATE_VERSION,
-            generation,
-            request_id,
-            activation_url,
-            expires_at: Utc::now() + TimeDelta::minutes(10),
-            poll_interval: 1,
-            instance_id,
-            pairing_endpoint,
-            report_endpoint: report_endpoint.clone(),
-            bearer_secret: random_secret(),
-        };
-        let commit_error = finish_activating_unlocked(&config, activating)
-            .expect_err("a transient override must not commit durable Activating state");
-        assert!(
-            format!("{commit_error:#}")
-                .contains("requires allow_insecure_http=true in the existing persistent config")
-        );
-        assert!(!directory.join("agent-token").exists());
-        assert!(!directory.join("host-id").exists());
-        assert!(!active_binding_path(&config).exists());
-
-        let binding = ActiveBinding {
-            version: PAIRING_STATE_VERSION,
-            generation,
-            request_id,
-            instance_id,
-            report_endpoint,
-        };
-        assert!(validate_active_binding(&config, &binding).is_err());
-        let mut durable_config = config.clone();
-        durable_config.persisted_allow_insecure_http = true;
-        validate_active_binding(&durable_config, &binding).unwrap();
-
-        fs::remove_dir_all(directory).unwrap();
-    }
-
     fn one_shot_pairing_server() -> (String, thread::JoinHandle<()>) {
-        one_shot_pairing_server_with_activation_url(|request_id| {
-            format!("/activate/{request_id}")
-        })
+        one_shot_pairing_server_with_activation_url(|request_id| format!("/activate/{request_id}"))
     }
 
     fn one_shot_pairing_server_with_activation_url(
@@ -248,15 +303,13 @@ mod tests {
             "host-monitoring-pairing-untrusted-activation-{}",
             Uuid::new_v4()
         ));
-        fs::create_dir_all(&directory).unwrap();
+        crate::private_fs::ensure_private_directory(&directory).unwrap();
         let (server, server_thread) = one_shot_pairing_server_with_activation_url(|request_id| {
             format!("https://attacker.example/activate/{request_id}")
         });
         let config = AgentConfig {
             endpoint: format!("{server}/api/v2/host-monitor/report"),
-            pairing_endpoint: Some(format!(
-                "{server}/api/v2/host-monitor/pairing-requests"
-            )),
+            pairing_endpoint: Some(format!("{server}/api/v2/host-monitor/pairing-requests")),
             state_dir: directory.clone(),
             ..AgentConfig::default()
         };
@@ -266,7 +319,7 @@ mod tests {
             .expect_err("an untrusted browser destination must fail during request creation");
         assert!(error.to_string().contains("does not match"));
         assert!(matches!(
-            load_state(&config).unwrap(),
+            load_state(&StateReader::open(&config.state_dir).unwrap()).unwrap(),
             Some(StoredPairingState::Creating { .. })
         ));
 
@@ -367,10 +420,90 @@ mod tests {
     #[test]
     fn generated_secrets_have_256_bits_and_hash_the_transmitted_form() {
         let secret = random_secret();
-        assert_eq!(secret.len(), 64);
-        assert!(secret.bytes().all(|byte| byte.is_ascii_hexdigit()));
+        assert_eq!(secret.expose().len(), 64);
+        assert!(secret.expose().bytes().all(|byte| byte.is_ascii_hexdigit()));
         assert_eq!(sha256_hex(&secret).len(), 64);
-        assert_ne!(secret, sha256_hex(&secret));
+        assert_ne!(secret.expose(), sha256_hex(&secret));
+    }
+
+    #[test]
+    fn polling_authorization_is_explicit_sensitive_and_redacts_errors() {
+        use sarmg_agent_secret::SecretString;
+        let secret = SecretString::new("private-polling-credential".into());
+        let header = pairing_authorization(&secret).unwrap();
+        assert_eq!(
+            header.to_str().unwrap(),
+            "Pairing private-polling-credential"
+        );
+        assert!(header.is_sensitive());
+        assert!(!format!("{header:?}/{secret:?}/{secret}").contains(secret.expose()));
+        let bad = SecretString::new("private-polling-credential\r\nextra".into());
+        let error = pairing_authorization(&bad).unwrap_err();
+        assert!(!format!("{error:#}").contains("private-polling-credential"));
+    }
+
+    #[test]
+    fn journal_secret_snapshots_share_ownership_and_serialization_is_bounded() {
+        let directory =
+            std::env::temp_dir().join(format!("host-secret-journal-{}", Uuid::new_v4()));
+        let config = test_config(directory.clone());
+        let secret = random_secret();
+        let mut state = StoredPairingState::Creating {
+            version: PAIRING_STATE_VERSION,
+            generation: Uuid::new_v4(),
+            pairing_endpoint: config.pairing_endpoint(),
+            report_endpoint: config.endpoint.clone(),
+            host: test_host(),
+            bearer_secret: secret.clone(),
+            polling_secret: random_secret(),
+        };
+        let StoredPairingState::Creating {
+            bearer_secret: cloned,
+            ..
+        } = state.clone()
+        else {
+            unreachable!()
+        };
+        assert!(std::sync::Arc::ptr_eq(&secret, &cloned));
+        assert!(!format!("{cloned:?}").contains(secret.expose()));
+        persist_state(&config, &state).unwrap();
+        let original = fs::read(state_path(&config)).unwrap();
+        // Only the explicitly opted-in private journal exposes the plaintext.
+        assert!(
+            std::str::from_utf8(&original)
+                .unwrap()
+                .contains(secret.expose())
+        );
+        if let StoredPairingState::Creating {
+            report_endpoint, ..
+        } = &mut state
+        {
+            *report_endpoint = "x".repeat(MAX_PAIRING_STATE_BYTES);
+        }
+        assert!(persist_state(&config, &state).is_err());
+        assert_eq!(fs::read(state_path(&config)).unwrap(), original);
+        assert_eq!(fs::read_dir(&directory).unwrap().count(), 2); // stable lock + journal
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn malformed_private_journal_does_not_quote_secret_in_error_chain() {
+        let directory = std::env::temp_dir().join(format!("host-secret-errors-{}", Uuid::new_v4()));
+        let config = test_config(directory.clone());
+        let transaction = lock_state(&config).unwrap();
+        let malformed = format!(
+            r#"{{"phase":"private-secret-as-invalid-phase","version":"{}"}}"#,
+            env!("CARGO_PKG_VERSION")
+        );
+        transaction.write(StateFile::Pairing, &malformed).unwrap();
+        let error = load_state(&transaction)
+            .err()
+            .expect("invalid journal must fail");
+        assert!(!format!("{error:#}").contains("private-secret"));
+        assert!(!format!("{error:?}").contains("private-secret"));
+        assert_eq!(fs::read_to_string(state_path(&config)).unwrap(), malformed);
+        drop(transaction);
+        fs::remove_dir_all(directory).unwrap();
     }
 
     #[test]
@@ -397,8 +530,8 @@ mod tests {
         assert_eq!(object["token_hash"], sha256_hex(&bearer_secret));
         assert_eq!(object["polling_secret_hash"], sha256_hex(&polling_secret));
         let serialized = serde_json::to_string(&value).unwrap();
-        assert!(!serialized.contains(&bearer_secret));
-        assert!(!serialized.contains(&polling_secret));
+        assert!(!serialized.contains(bearer_secret.expose()));
+        assert!(!serialized.contains(polling_secret.expose()));
     }
 
     #[test]
@@ -553,11 +686,25 @@ mod tests {
 
     #[test]
     fn pairing_operations_accept_only_their_current_http_statuses() {
+        for status in [
+            StatusCode::UNAUTHORIZED,
+            StatusCode::FORBIDDEN,
+            StatusCode::BAD_GATEWAY,
+        ] {
+            let response = sarmg_agent_secure_http::BoundedResponse {
+                status,
+                headers: Default::default(),
+                body: b"reflected-pairing-secret".to_vec(),
+            };
+            let error =
+                ensure_pairing_status(response.status, &[StatusCode::OK], "poll pairing status")
+                    .unwrap_err();
+            assert!(!format!("{error:#}/{error:?}").contains("reflected-pairing-secret"));
+        }
         assert!(
             ensure_pairing_status(
                 StatusCode::OK,
                 &[StatusCode::OK, StatusCode::CREATED],
-                b"",
                 "create pairing request"
             )
             .is_ok()
@@ -566,7 +713,6 @@ mod tests {
             ensure_pairing_status(
                 StatusCode::CREATED,
                 &[StatusCode::OK, StatusCode::CREATED],
-                b"",
                 "create pairing request"
             )
             .is_ok()
@@ -575,11 +721,9 @@ mod tests {
             "poll pairing status",
             "submit the one-time authorization key",
         ] {
+            assert!(ensure_pairing_status(StatusCode::OK, &[StatusCode::OK], operation).is_ok());
             assert!(
-                ensure_pairing_status(StatusCode::OK, &[StatusCode::OK], b"", operation).is_ok()
-            );
-            assert!(
-                ensure_pairing_status(StatusCode::NO_CONTENT, &[StatusCode::OK], b"", operation)
+                ensure_pairing_status(StatusCode::NO_CONTENT, &[StatusCode::OK], operation)
                     .is_err()
             );
         }
@@ -661,9 +805,11 @@ mod tests {
     fn activation_endpoint_and_public_url_stay_bound_to_the_pairing_origin() {
         let request_id = Uuid::new_v4();
         assert_eq!(
-            activation_endpoint("https://host-monitoring.example/prefix/api/v2/host-monitor/pairing-requests")
-                .unwrap()
-                .as_str(),
+            activation_endpoint(
+                "https://host-monitoring.example/prefix/api/v2/host-monitor/pairing-requests"
+            )
+            .unwrap()
+            .as_str(),
             "https://host-monitoring.example/prefix/api/v2/host-monitor/activate"
         );
         validate_activation_url_request(
@@ -684,9 +830,11 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn service_activation_commit_wins_the_post_response_race_idempotently() {
-        let directory =
-            std::env::temp_dir().join(format!("host-monitoring-activation-race-{}", Uuid::new_v4()));
-        fs::create_dir_all(&directory).unwrap();
+        let directory = std::env::temp_dir().join(format!(
+            "host-monitoring-activation-race-{}",
+            Uuid::new_v4()
+        ));
+        crate::private_fs::ensure_private_directory(&directory).unwrap();
         let instance_id = Uuid::new_v4();
         let (server, request_seen, release_response, server_thread) =
             delayed_activation_server(instance_id);
@@ -694,11 +842,8 @@ mod tests {
         let request_id = Uuid::new_v4();
         let config = AgentConfig {
             endpoint: format!("{server}/api/v2/host-monitor/report"),
-            pairing_endpoint: Some(format!(
-                "{server}/api/v2/host-monitor/pairing-requests"
-            )),
+            pairing_endpoint: Some(format!("{server}/api/v2/host-monitor/pairing-requests")),
             state_dir: directory.clone(),
-            allow_insecure_http: true,
             ..AgentConfig::default()
         };
         persist_state(
@@ -752,7 +897,8 @@ mod tests {
 
     #[test]
     fn pending_state_round_trips_privately() {
-        let directory = std::env::temp_dir().join(format!("host-monitoring-pairing-{}", Uuid::new_v4()));
+        let directory =
+            std::env::temp_dir().join(format!("host-monitoring-pairing-{}", Uuid::new_v4()));
         let config = test_config(directory.clone());
         let state = StoredPairingState::Pending {
             version: PAIRING_STATE_VERSION,
@@ -768,7 +914,7 @@ mod tests {
         };
         persist_state(&config, &state).unwrap();
         assert!(matches!(
-            load_state(&config).unwrap(),
+            load_state(&StateReader::open(&config.state_dir).unwrap()).unwrap(),
             Some(StoredPairingState::Pending { .. })
         ));
         #[cfg(unix)]
@@ -788,7 +934,8 @@ mod tests {
 
     #[test]
     fn creating_state_round_trips_the_same_secrets_for_idempotent_retry() {
-        let directory = std::env::temp_dir().join(format!("host-monitoring-creating-{}", Uuid::new_v4()));
+        let directory =
+            std::env::temp_dir().join(format!("host-monitoring-creating-{}", Uuid::new_v4()));
         let config = test_config(directory.clone());
         let bearer_secret = random_secret();
         let polling_secret = random_secret();
@@ -814,12 +961,12 @@ mod tests {
         assert!(serde_json::from_value::<StoredPairingState>(encoded).is_err());
         persist_state(&config, &state).unwrap();
         assert!(matches!(
-            load_state(&config).unwrap(),
+            load_state(&StateReader::open(&config.state_dir).unwrap()).unwrap(),
             Some(StoredPairingState::Creating {
                 bearer_secret: saved_bearer,
                 polling_secret: saved_polling,
                 ..
-            }) if saved_bearer == bearer_secret && saved_polling == polling_secret
+            }) if saved_bearer.expose() == bearer_secret.expose() && saved_polling.expose() == polling_secret.expose()
         ));
         fs::remove_dir_all(directory).unwrap();
     }
@@ -829,12 +976,12 @@ mod tests {
         let directory =
             std::env::temp_dir().join(format!("host-monitoring-pending-origin-{}", Uuid::new_v4()));
         let mut config = test_config(directory.clone());
-        fs::create_dir_all(&directory).unwrap();
+        crate::private_fs::ensure_private_directory(&directory).unwrap();
         let config_path = directory.join("config.json");
         config.config_path = Some(config_path.clone());
         let old_config = serde_json::to_vec(&config).unwrap();
-        fs::write(&config_path, &old_config).unwrap();
-        fs::write(directory.join("agent-token"), "existing-long-lived-token").unwrap();
+        write_private_fixture(&config_path, &old_config).unwrap();
+        write_private_fixture(directory.join("agent-token"), "existing-long-lived-token").unwrap();
         let state = StoredPairingState::Pending {
             version: PAIRING_STATE_VERSION,
             generation: Uuid::new_v4(),
@@ -842,10 +989,8 @@ mod tests {
             activation_url: "https://old.example/agent/activate/test".into(),
             expires_at: Utc::now() + TimeDelta::minutes(10),
             poll_interval: 5,
-            pairing_endpoint:
-                "https://old.example/api/v2/host-monitor/pairing-requests".into(),
-            report_endpoint: "https://old.example/api/v2/host-monitor/report"
-                .into(),
+            pairing_endpoint: "https://old.example/api/v2/host-monitor/pairing-requests".into(),
+            report_endpoint: "https://old.example/api/v2/host-monitor/report".into(),
             bearer_secret: random_secret(),
             polling_secret: random_secret(),
         };
@@ -854,9 +999,13 @@ mod tests {
         let error = start_or_resume(&config, &test_host())
             .await
             .expect_err("a live request must stay bound to its original server");
-        assert!(error.to_string().contains("different Host Monitoring server"));
+        assert!(
+            error
+                .to_string()
+                .contains("different Host Monitoring server")
+        );
         assert!(matches!(
-            load_state(&config).unwrap(),
+            load_state(&StateReader::open(&config.state_dir).unwrap()).unwrap(),
             Some(StoredPairingState::Pending { pairing_endpoint, .. })
                 if pairing_endpoint.starts_with("https://old.example/")
         ));
@@ -870,16 +1019,16 @@ mod tests {
 
     #[tokio::test]
     async fn interrupted_create_cannot_be_silently_moved_to_another_server() {
-        let directory =
-            std::env::temp_dir().join(format!("host-monitoring-creating-origin-{}", Uuid::new_v4()));
+        let directory = std::env::temp_dir().join(format!(
+            "host-monitoring-creating-origin-{}",
+            Uuid::new_v4()
+        ));
         let mut config = test_config(directory.clone());
         let state = StoredPairingState::Creating {
             version: PAIRING_STATE_VERSION,
             generation: Uuid::new_v4(),
-            pairing_endpoint:
-                "https://old.example/api/v2/host-monitor/pairing-requests".into(),
-            report_endpoint: "https://old.example/api/v2/host-monitor/report"
-                .into(),
+            pairing_endpoint: "https://old.example/api/v2/host-monitor/pairing-requests".into(),
+            report_endpoint: "https://old.example/api/v2/host-monitor/report".into(),
             host: test_host(),
             bearer_secret: random_secret(),
             polling_secret: random_secret(),
@@ -889,9 +1038,13 @@ mod tests {
         let error = start_or_resume(&config, &test_host())
             .await
             .expect_err("an interrupted create must stay bound to its original server");
-        assert!(error.to_string().contains("different Host Monitoring server"));
+        assert!(
+            error
+                .to_string()
+                .contains("different Host Monitoring server")
+        );
         assert!(matches!(
-            load_state(&config).unwrap(),
+            load_state(&StateReader::open(&config.state_dir).unwrap()).unwrap(),
             Some(StoredPairingState::Creating { pairing_endpoint, .. })
                 if pairing_endpoint.starts_with("https://old.example/")
         ));
@@ -925,7 +1078,9 @@ mod tests {
                     version: PAIRING_STATE_VERSION,
                     generation: old_generation,
                     request_id,
-                    activation_url: format!("https://host-monitoring.example/agent/activate/{request_id}"),
+                    activation_url: format!(
+                        "https://host-monitoring.example/agent/activate/{request_id}"
+                    ),
                     expires_at: Utc::now() - TimeDelta::minutes(1),
                     poll_interval: 5,
                     pairing_endpoint: config.pairing_endpoint(),
@@ -945,8 +1100,8 @@ mod tests {
                         ..
                     } => {
                         assert_eq!(generation, old_generation);
-                        assert_eq!(bearer_secret, old_bearer);
-                        assert_eq!(polling_secret, old_polling);
+                        assert_eq!(bearer_secret.expose(), old_bearer.expose());
+                        assert_eq!(polling_secret.expose(), old_polling.expose());
                     }
                     _ => panic!("creating state was not resumed"),
                 },
@@ -971,18 +1126,18 @@ mod tests {
                 panic!("explicit replacement did not persist a creating state");
             };
             assert_ne!(new_generation, old_generation);
-            assert_ne!(new_bearer, old_bearer);
-            assert_ne!(new_polling, old_polling);
+            assert_ne!(new_bearer.expose(), old_bearer.expose());
+            assert_ne!(new_polling.expose(), old_polling.expose());
             assert!(matches!(
-                load_state(&config).unwrap(),
+                load_state(&StateReader::open(&config.state_dir).unwrap()).unwrap(),
                 Some(StoredPairingState::Creating {
                     generation,
                     bearer_secret,
                     polling_secret,
                     ..
                 }) if generation == new_generation
-                    && bearer_secret == new_bearer
-                    && polling_secret == new_polling
+                    && bearer_secret.expose() == new_bearer.expose()
+                    && polling_secret.expose() == new_polling.expose()
             ));
             fs::remove_dir_all(directory).unwrap();
         }
@@ -1002,18 +1157,15 @@ mod tests {
                 replace_pending_pairing: true,
                 ..AgentConfig::default()
             };
-            config.pairing_endpoint = Some(format!(
-                "{server}/api/v2/host-monitor/pairing-requests"
-            ));
+            config.pairing_endpoint =
+                Some(format!("{server}/api/v2/host-monitor/pairing-requests"));
             let state = if old_state == "creating" {
                 StoredPairingState::Creating {
                     version: PAIRING_STATE_VERSION,
                     generation: Uuid::new_v4(),
-                    pairing_endpoint:
-                        "https://old.example/api/v2/host-monitor/pairing-requests"
-                            .into(),
-                    report_endpoint:
-                        "https://old.example/api/v2/host-monitor/report".into(),
+                    pairing_endpoint: "https://old.example/api/v2/host-monitor/pairing-requests"
+                        .into(),
+                    report_endpoint: "https://old.example/api/v2/host-monitor/report".into(),
                     host: test_host(),
                     bearer_secret: random_secret(),
                     polling_secret: random_secret(),
@@ -1026,11 +1178,9 @@ mod tests {
                     activation_url: "https://old.example/agent/activate/test".into(),
                     expires_at: Utc::now() + TimeDelta::minutes(10),
                     poll_interval: 5,
-                    pairing_endpoint:
-                        "https://old.example/api/v2/host-monitor/pairing-requests"
-                            .into(),
-                    report_endpoint:
-                        "https://old.example/api/v2/host-monitor/report".into(),
+                    pairing_endpoint: "https://old.example/api/v2/host-monitor/pairing-requests"
+                        .into(),
+                    report_endpoint: "https://old.example/api/v2/host-monitor/report".into(),
                     bearer_secret: random_secret(),
                     polling_secret: random_secret(),
                 }
@@ -1041,7 +1191,7 @@ mod tests {
                 .expect("the explicitly confirmed new origin should replace incomplete state");
             assert!(session.activation_url.starts_with(&server));
             assert!(matches!(
-                load_state(&config).unwrap(),
+                load_state(&StateReader::open(&config.state_dir).unwrap()).unwrap(),
                 Some(StoredPairingState::Pending { pairing_endpoint, .. })
                     if pairing_endpoint == format!("{server}/api/v2/host-monitor/pairing-requests")
             ));
@@ -1054,15 +1204,13 @@ mod tests {
     async fn delayed_old_activation_cannot_overwrite_a_replacement_generation() {
         let directory =
             std::env::temp_dir().join(format!("host-monitoring-delayed-active-{}", Uuid::new_v4()));
-        fs::create_dir_all(&directory).unwrap();
+        crate::private_fs::ensure_private_directory(&directory).unwrap();
         let old_instance_id = Uuid::new_v4();
         let (old_server, request_seen, release_response, old_thread) =
             delayed_active_server(old_instance_id);
         let old_config_path = directory.join("config.json");
-        let old_pairing_endpoint =
-            format!("{old_server}/api/v2/host-monitor/pairing-requests");
-        let old_report_endpoint =
-            format!("{old_server}/api/v2/host-monitor/report");
+        let old_pairing_endpoint = format!("{old_server}/api/v2/host-monitor/pairing-requests");
+        let old_report_endpoint = format!("{old_server}/api/v2/host-monitor/report");
         let old_config = AgentConfig {
             endpoint: old_report_endpoint.clone(),
             pairing_endpoint: Some(old_pairing_endpoint.clone()),
@@ -1071,10 +1219,10 @@ mod tests {
             ..AgentConfig::default()
         };
         let old_config_bytes = serde_json::to_vec(&old_config).unwrap();
-        fs::write(&old_config_path, &old_config_bytes).unwrap();
-        fs::write(directory.join("agent-token"), "old-long-lived-token").unwrap();
+        write_private_fixture(&old_config_path, &old_config_bytes).unwrap();
+        write_private_fixture(directory.join("agent-token"), "old-long-lived-token").unwrap();
         let old_host_id = Uuid::new_v4();
-        fs::write(directory.join("host-id"), old_host_id.to_string()).unwrap();
+        write_private_fixture(directory.join("host-id"), old_host_id.to_string()).unwrap();
         let generation = Uuid::new_v4();
         let request_id = Uuid::new_v4();
         let old_state = StoredPairingState::Pending {
@@ -1097,17 +1245,14 @@ mod tests {
             .unwrap();
 
         let (new_server, new_thread) = one_shot_pairing_server();
-        let mut new_config = AgentConfig {
+        let new_config = AgentConfig {
             endpoint: format!("{new_server}/api/v2/host-monitor/report"),
-            pairing_endpoint: Some(format!(
-                "{new_server}/api/v2/host-monitor/pairing-requests"
-            )),
+            pairing_endpoint: Some(format!("{new_server}/api/v2/host-monitor/pairing-requests")),
             state_dir: directory.clone(),
             config_path: Some(old_config_path.clone()),
             replace_pending_pairing: true,
             ..AgentConfig::default()
         };
-        new_config.allow_insecure_http = true;
         let new_session = start_or_resume(&new_config, &test_host()).await.unwrap();
         release_response.send(()).unwrap();
         let stale_error = stale_poll
@@ -1116,7 +1261,7 @@ mod tests {
             .expect_err("the delayed old Active response must lose its generation CAS");
         assert!(stale_error.is::<PairingSuperseded>());
         assert!(matches!(
-            load_state(&new_config).unwrap(),
+            load_state(&StateReader::open(&new_config.state_dir).unwrap()).unwrap(),
             Some(StoredPairingState::Pending {
                 generation: saved_generation,
                 pairing_endpoint,
@@ -1145,7 +1290,7 @@ mod tests {
                 "host-monitoring-activating-recovery-{preexisting}-{}",
                 Uuid::new_v4()
             ));
-            fs::create_dir_all(&directory).unwrap();
+            crate::private_fs::ensure_private_directory(&directory).unwrap();
             // Model an administrator-owned system config that the service cannot replace. A
             // directory is deterministic even when this test happens to run as root.
             let config_path = directory.join("operator-config");
@@ -1157,8 +1302,9 @@ mod tests {
                 ..AgentConfig::default()
             };
             if preexisting {
-                fs::write(directory.join("agent-token"), "old-token").unwrap();
-                fs::write(directory.join("host-id"), Uuid::new_v4().to_string()).unwrap();
+                write_private_fixture(directory.join("agent-token"), "old-token").unwrap();
+                write_private_fixture(directory.join("host-id"), Uuid::new_v4().to_string())
+                    .unwrap();
             }
             let generation = Uuid::new_v4();
             let request_id = Uuid::new_v4();
@@ -1174,11 +1320,9 @@ mod tests {
                     expires_at: Utc::now() + TimeDelta::minutes(10),
                     poll_interval: 1,
                     instance_id,
-                    pairing_endpoint:
-                        "https://new.example/api/v2/host-monitor/pairing-requests"
-                            .into(),
-                    report_endpoint:
-                        "https://new.example/api/v2/host-monitor/report".into(),
+                    pairing_endpoint: "https://new.example/api/v2/host-monitor/pairing-requests"
+                        .into(),
+                    report_endpoint: "https://new.example/api/v2/host-monitor/report".into(),
                     bearer_secret: new_token.clone(),
                 },
             )
@@ -1198,21 +1342,21 @@ mod tests {
             ));
             assert_eq!(
                 fs::read_to_string(directory.join("agent-token")).unwrap(),
-                new_token
+                new_token.expose()
             );
             assert_eq!(
                 fs::read_to_string(directory.join("host-id")).unwrap(),
                 instance_id.to_string()
             );
             assert_eq!(
-                load_active_binding(&config).unwrap(),
+                load_active_binding(&config, &StateReader::open(&config.state_dir).unwrap())
+                    .unwrap(),
                 Some(ActiveBinding {
                     version: PAIRING_STATE_VERSION,
                     generation,
                     request_id,
                     instance_id,
-                    report_endpoint:
-                        "https://new.example/api/v2/host-monitor/report".into(),
+                    report_endpoint: "https://new.example/api/v2/host-monitor/report".into(),
                 })
             );
             let binding_before_status = fs::read(active_binding_path(&config)).unwrap();
@@ -1227,7 +1371,7 @@ mod tests {
             );
             assert!(config_path.is_dir());
             assert!(matches!(
-                load_state(&config).unwrap(),
+                load_state(&StateReader::open(&config.state_dir).unwrap()).unwrap(),
                 Some(StoredPairingState::Active {
                     generation: saved_generation,
                     ..
@@ -1266,17 +1410,17 @@ mod tests {
             Uuid::new_v4()
         ));
         let config = test_config(directory.clone());
-        fs::create_dir_all(&directory).unwrap();
+        crate::private_fs::ensure_private_directory(&directory).unwrap();
         let generation = Uuid::new_v4();
         let request_id = Uuid::new_v4();
         let instance_id = Uuid::new_v4();
-        fs::write(directory.join("agent-token"), "current-token").unwrap();
-        fs::write(directory.join("host-id"), instance_id.to_string()).unwrap();
+        write_private_fixture(directory.join("agent-token"), "current-token").unwrap();
+        write_private_fixture(directory.join("host-id"), instance_id.to_string()).unwrap();
         persist_auth_state(
             &config,
             &LocalAuthState {
                 version: PAIRING_STATE_VERSION,
-                status: "authorized".into(),
+                status: CredentialAuthorization::Authorized,
                 reason: "existing installation".into(),
                 changed_at: Utc::now(),
             },
@@ -1297,7 +1441,12 @@ mod tests {
         .unwrap();
 
         assert!(!active_binding_path(&config).exists());
-        assert!(local_status(&config).unwrap_err().to_string().contains("missing"));
+        assert!(
+            local_status(&config)
+                .unwrap_err()
+                .to_string()
+                .contains("missing")
+        );
         let error = reporter_for_current_active_state(&config)
             .err()
             .expect("missing binding must fail");
@@ -1308,20 +1457,22 @@ mod tests {
 
     #[test]
     fn mismatched_active_binding_is_never_silently_replaced() {
-        let directory =
-            std::env::temp_dir().join(format!("host-monitoring-binding-mismatch-{}", Uuid::new_v4()));
+        let directory = std::env::temp_dir().join(format!(
+            "host-monitoring-binding-mismatch-{}",
+            Uuid::new_v4()
+        ));
         let mut config = test_config(directory.clone());
-        fs::create_dir_all(&directory).unwrap();
+        crate::private_fs::ensure_private_directory(&directory).unwrap();
         let generation = Uuid::new_v4();
         let request_id = Uuid::new_v4();
         let instance_id = Uuid::new_v4();
-        fs::write(directory.join("agent-token"), "current-token").unwrap();
-        fs::write(directory.join("host-id"), instance_id.to_string()).unwrap();
+        write_private_fixture(directory.join("agent-token"), "current-token").unwrap();
+        write_private_fixture(directory.join("host-id"), instance_id.to_string()).unwrap();
         persist_auth_state(
             &config,
             &LocalAuthState {
                 version: PAIRING_STATE_VERSION,
-                status: "authorized".into(),
+                status: CredentialAuthorization::Authorized,
                 reason: "test".into(),
                 changed_at: Utc::now(),
             },
@@ -1347,7 +1498,8 @@ mod tests {
             instance_id,
             report_endpoint: config.endpoint.clone(),
         };
-        persist_active_binding_unlocked(&config, &mismatched).unwrap();
+        persist_active_binding_unlocked(&config, &lock_state(&config).unwrap(), &mismatched)
+            .unwrap();
 
         let status_error =
             local_status(&config).expect_err("status must reject a mismatched binding");
@@ -1366,14 +1518,19 @@ mod tests {
         )
         .expect_err("config synchronization must not replace a mismatched binding");
         assert!(config_error.to_string().contains("does not match"));
-        assert_eq!(load_active_binding(&config).unwrap(), Some(mismatched));
+        assert_eq!(
+            load_active_binding(&config, &StateReader::open(&config.state_dir).unwrap()).unwrap(),
+            Some(mismatched)
+        );
         fs::remove_dir_all(directory).unwrap();
     }
 
     #[test]
     fn replacing_current_active_state_preserves_its_endpoint_binding() {
-        let directory =
-            std::env::temp_dir().join(format!("host-monitoring-binding-before-create-{}", Uuid::new_v4()));
+        let directory = std::env::temp_dir().join(format!(
+            "host-monitoring-binding-before-create-{}",
+            Uuid::new_v4()
+        ));
         let mut config = test_config(directory.clone());
         let old_generation = Uuid::new_v4();
         let old_request_id = Uuid::new_v4();
@@ -1394,6 +1551,7 @@ mod tests {
         .unwrap();
         persist_active_binding_unlocked(
             &config,
+            &lock_state(&config).unwrap(),
             &ActiveBinding {
                 version: PAIRING_STATE_VERSION,
                 generation: old_generation,
@@ -1404,9 +1562,8 @@ mod tests {
         )
         .unwrap();
         config.endpoint = "https://new.example/api/v2/host-monitor/report".into();
-        config.pairing_endpoint = Some(
-            "https://new.example/api/v2/host-monitor/pairing-requests".into(),
-        );
+        config.pairing_endpoint =
+            Some("https://new.example/api/v2/host-monitor/pairing-requests".into());
 
         let PairingStart::Create(creating) = prepare_start(&config, &test_host()).unwrap() else {
             panic!("an Active state must allow a new explicitly requested pairing generation");
@@ -1417,7 +1574,7 @@ mod tests {
                 if report_endpoint == "https://new.example/api/v2/host-monitor/report"
         ));
         assert_eq!(
-            load_active_binding(&config).unwrap(),
+            load_active_binding(&config, &StateReader::open(&config.state_dir).unwrap()).unwrap(),
             Some(ActiveBinding {
                 version: PAIRING_STATE_VERSION,
                 generation: old_generation,
@@ -1431,21 +1588,20 @@ mod tests {
 
     #[test]
     fn run_keeps_the_current_credential_during_an_incomplete_pairing_attempt() {
-        let directory =
-            std::env::temp_dir().join(format!("host-monitoring-current-reporter-{}", Uuid::new_v4()));
+        let directory = std::env::temp_dir().join(format!(
+            "host-monitoring-current-reporter-{}",
+            Uuid::new_v4()
+        ));
         let config = test_config(directory.clone());
-        fs::create_dir_all(&directory).unwrap();
-        fs::write(directory.join("agent-token"), "current-long-lived-token").unwrap();
+        crate::private_fs::ensure_private_directory(&directory).unwrap();
+        write_private_fixture(directory.join("agent-token"), "current-long-lived-token").unwrap();
         let active_generation = Uuid::new_v4();
         let active_request_id = Uuid::new_v4();
         let active_instance_id = Uuid::new_v4();
-        fs::write(
-            directory.join("host-id"),
-            active_instance_id.to_string(),
-        )
-        .unwrap();
+        write_private_fixture(directory.join("host-id"), active_instance_id.to_string()).unwrap();
         persist_active_binding_unlocked(
             &config,
+            &lock_state(&config).unwrap(),
             &ActiveBinding {
                 version: PAIRING_STATE_VERSION,
                 generation: active_generation,
@@ -1489,7 +1645,7 @@ mod tests {
             &config,
             &LocalAuthState {
                 version: PAIRING_STATE_VERSION,
-                status: "authorized".into(),
+                status: CredentialAuthorization::Authorized,
                 reason: "current pairing completed".into(),
                 changed_at: Utc::now(),
             },
@@ -1543,7 +1699,7 @@ mod tests {
             "a raw token without current package-version pairing state must be rejected"
         );
 
-        fs::write(directory.join("agent-token"), "active-token").unwrap();
+        write_private_fixture(directory.join("agent-token"), "active-token").unwrap();
         persist_state(
             &config,
             &StoredPairingState::Active {
@@ -1562,107 +1718,11 @@ mod tests {
     }
 
     #[test]
-    fn stale_delivery_cannot_block_a_new_active_generation() {
-        let directory = std::env::temp_dir().join(format!("host-monitoring-reauth-cas-{}", Uuid::new_v4()));
-        let config = test_config(directory.clone());
-        let old_generation = Uuid::new_v4();
-        let old_request = Uuid::new_v4();
-        let active = |generation, request_id| StoredPairingState::Active {
-            version: PAIRING_STATE_VERSION,
-            generation,
-            request_id,
-            activation_url: "https://host-monitoring.example/agent/activate/test".into(),
-            instance_id: Uuid::new_v4(),
-            report_endpoint: config.endpoint.clone(),
-            completed_at: Utc::now(),
-        };
-        persist_state(&config, &active(old_generation, old_request)).unwrap();
-        assert!(
-            mark_reauth_required_if_current(
-                &config,
-                Some((old_generation, old_request)),
-                "current 401",
-            )
-            .unwrap()
-        );
-
-        persist_state(&config, &active(Uuid::new_v4(), Uuid::new_v4())).unwrap();
-        assert!(
-            !mark_reauth_required_if_current(
-                &config,
-                Some((old_generation, old_request)),
-                "stale 403",
-            )
-            .unwrap()
-        );
-
-        persist_state(
-            &config,
-            &StoredPairingState::Pending {
-                version: PAIRING_STATE_VERSION,
-                generation: Uuid::new_v4(),
-                request_id: Uuid::new_v4(),
-                activation_url: "https://host-monitoring.example/agent/activate/test".into(),
-                expires_at: Utc::now() + TimeDelta::minutes(10),
-                poll_interval: 5,
-                pairing_endpoint: config.pairing_endpoint(),
-                report_endpoint: config.endpoint.clone(),
-                bearer_secret: random_secret(),
-                polling_secret: random_secret(),
-            },
-        )
-        .unwrap();
-        assert!(
-            mark_reauth_required_if_current(
-                &config,
-                Some((old_generation, old_request)),
-                "old reporter rejected during pending pairing",
-            )
-            .unwrap()
-        );
-
-        persist_state(
-            &config,
-            &StoredPairingState::Activating {
-                version: PAIRING_STATE_VERSION,
-                generation: Uuid::new_v4(),
-                request_id: Uuid::new_v4(),
-                activation_url: "https://host-monitoring.example/agent/activate/test".into(),
-                expires_at: Utc::now() + TimeDelta::minutes(10),
-                poll_interval: 5,
-                instance_id: Uuid::new_v4(),
-                pairing_endpoint: config.pairing_endpoint(),
-                report_endpoint: config.endpoint.clone(),
-                bearer_secret: random_secret(),
-            },
-        )
-        .unwrap();
-        assert!(
-            !mark_reauth_required_if_current(
-                &config,
-                Some((old_generation, old_request)),
-                "stale while new activation commits",
-            )
-            .unwrap()
-        );
-        fs::remove_dir_all(directory).unwrap();
-    }
-
-    #[test]
-    fn rejected_authorization_state_is_explicit() {
-        let directory = std::env::temp_dir().join(format!("host-monitoring-rejected-{}", Uuid::new_v4()));
-        let config = test_config(directory.clone());
-        mark_reauth_required(&config, "HTTP 401 unauthorized").unwrap();
-        let state = local_auth_state(&config).unwrap().unwrap();
-        assert_eq!(state.status, "reauth_required");
-        assert!(state.reason.contains("401"));
-        fs::remove_dir_all(directory).unwrap();
-    }
-
-    #[test]
     fn local_inspection_does_not_create_a_lock_or_state_directory() {
-        let directory =
-            std::env::temp_dir().join(format!("host-monitoring-read-only-status-{}", Uuid::new_v4()));
+        let directory = std::env::temp_dir().join(format!(
+            "host-monitoring-read-only-status-{}",
+            Uuid::new_v4()
+        ));
         let config = test_config(directory.clone());
 
         assert!(local_progress(&config).unwrap().is_none());
@@ -1675,8 +1735,10 @@ mod tests {
 
     #[test]
     fn local_inspection_does_not_publish_an_activating_credential() {
-        let directory =
-            std::env::temp_dir().join(format!("host-monitoring-read-only-activating-{}", Uuid::new_v4()));
+        let directory = std::env::temp_dir().join(format!(
+            "host-monitoring-read-only-activating-{}",
+            Uuid::new_v4()
+        ));
         let config = test_config(directory.clone());
         let state = StoredPairingState::Activating {
             version: PAIRING_STATE_VERSION,
@@ -1709,11 +1771,12 @@ mod tests {
 
     #[test]
     fn activation_atomically_commits_server_identity_and_token() {
-        let directory = std::env::temp_dir().join(format!("host-monitoring-activation-{}", Uuid::new_v4()));
+        let directory =
+            std::env::temp_dir().join(format!("host-monitoring-activation-{}", Uuid::new_v4()));
         let config = test_config(directory.clone());
-        fs::create_dir_all(&directory).unwrap();
-        fs::write(directory.join("host-id"), Uuid::new_v4().to_string()).unwrap();
-        fs::write(directory.join("agent-token"), "old-token").unwrap();
+        crate::private_fs::ensure_private_directory(&directory).unwrap();
+        write_private_fixture(directory.join("host-id"), Uuid::new_v4().to_string()).unwrap();
+        write_private_fixture(directory.join("agent-token"), "old-token").unwrap();
         let instance_id = Uuid::new_v4();
         let bearer_secret = random_secret();
         let polling_secret = random_secret();
@@ -1737,8 +1800,14 @@ mod tests {
         )
         .unwrap();
 
-        persist_active_credentials(&config, load_state(&config).unwrap().unwrap(), instance_id)
-            .unwrap();
+        persist_active_credentials(
+            &config,
+            load_state(&StateReader::open(&config.state_dir).unwrap())
+                .unwrap()
+                .unwrap(),
+            instance_id,
+        )
+        .unwrap();
 
         assert_eq!(
             fs::read_to_string(directory.join("host-id")).unwrap(),
@@ -1746,7 +1815,7 @@ mod tests {
         );
         assert_eq!(
             fs::read_to_string(directory.join("agent-token")).unwrap(),
-            bearer_secret
+            bearer_secret.expose()
         );
         let binding: ActiveBinding =
             serde_json::from_slice(&fs::read(directory.join(ACTIVE_BINDING_FILE)).unwrap())
@@ -1762,7 +1831,7 @@ mod tests {
             }
         );
         assert!(matches!(
-            load_state(&config).unwrap(),
+            load_state(&StateReader::open(&config.state_dir).unwrap()).unwrap(),
             Some(StoredPairingState::Active {
                 instance_id: saved,
                 ..
@@ -1770,7 +1839,7 @@ mod tests {
         ));
         assert_eq!(
             local_auth_state(&config).unwrap().unwrap().status,
-            "authorized"
+            CredentialAuthorization::Authorized
         );
         fs::remove_dir_all(directory).unwrap();
     }

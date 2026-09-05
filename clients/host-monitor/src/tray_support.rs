@@ -1,4 +1,4 @@
-//! Pure helpers for the Windows tray companion.
+//! Cross-platform helpers and health adapter for the Windows tray companion.
 //!
 //! The actual notification-area and elevation code is Windows-only, while
 //! argument, URL, form and HTTP parsing stays here so it is exercised by the
@@ -7,6 +7,8 @@
 use std::{collections::BTreeMap, net::IpAddr, time::Instant};
 
 use anyhow::{Context, bail, ensure};
+
+pub mod server_health;
 
 pub const MAX_LOCAL_HTTP_HEAD_BYTES: usize = 16 * 1024;
 pub const MAX_LOCAL_HTTP_BODY_BYTES: usize = 16 * 1024;
@@ -149,7 +151,7 @@ pub fn validate_server_base(value: &str) -> anyhow::Result<String> {
     let value = value.trim();
     ensure!(!value.is_empty(), "server URL is required");
     ensure!(value.len() <= 2048, "server URL is too long");
-    let url = reqwest::Url::parse(value).context("invalid server URL")?;
+    let url = sarmg_agent_secure_http::Url::parse(value).context("invalid server URL")?;
     ensure!(!url.cannot_be_a_base(), "server URL must be hierarchical");
     ensure!(url.host_str().is_some(), "server URL must contain a host");
     ensure!(url.port() != Some(0), "server URL must not use port zero");
@@ -165,12 +167,8 @@ pub fn validate_server_base(value: &str) -> anyhow::Result<String> {
         url.path() == "/",
         "server URL must be a complete management-console origin without a path; include only the scheme, host, and optional port"
     );
-    match url.scheme() {
-        "https" => {}
-        "http" if is_loopback_host(url.host_str()) => {}
-        "http" => bail!("remote servers must use HTTPS"),
-        scheme => bail!("unsupported server URL scheme: {scheme}"),
-    }
+    sarmg_agent_secure_http::agent_network_policy(&url)
+        .context("server violates Agent network policy")?;
     Ok(url.as_str().trim_end_matches('/').to_string())
 }
 
@@ -181,7 +179,7 @@ pub fn validate_browser_url(value: &str) -> anyhow::Result<String> {
     let value = value.trim();
     ensure!(!value.is_empty(), "browser URL is empty");
     ensure!(value.len() <= 4096, "browser URL is too long");
-    let url = reqwest::Url::parse(value).context("invalid browser URL")?;
+    let url = sarmg_agent_secure_http::Url::parse(value).context("invalid browser URL")?;
     ensure!(url.host_str().is_some(), "browser URL must contain a host");
     ensure!(url.port() != Some(0), "browser URL must not use port zero");
     ensure!(
@@ -198,10 +196,10 @@ pub fn validate_browser_url(value: &str) -> anyhow::Result<String> {
 }
 
 pub fn browser_url_matches_server_origin(browser_url: &str, server: &str) -> bool {
-    let Ok(browser_url) = reqwest::Url::parse(browser_url) else {
+    let Ok(browser_url) = sarmg_agent_secure_http::Url::parse(browser_url) else {
         return false;
     };
-    let Ok(server) = reqwest::Url::parse(server) else {
+    let Ok(server) = sarmg_agent_secure_http::Url::parse(server) else {
         return false;
     };
     browser_url.scheme() == server.scheme()

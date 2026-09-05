@@ -14,13 +14,14 @@ $workspaceRoot = Split-Path -Parent (Split-Path -Parent $agentRoot)
 $workspacePath = Join-Path $workspaceRoot "Cargo.toml"
 $helperPath = Join-Path $agentRoot "src\bin\host-monitor-maintenance.rs"
 $trayPath = Join-Path $agentRoot "src\bin\host-monitor-tray.rs"
+$healthPath = Join-Path $agentRoot "src\tray_support\server_health.rs"
 $mainPath = Join-Path $agentRoot "src\main.rs"
 $helperSourceRoot = Join-Path $agentRoot "src\windows\maintenance"
 $traySourceRoot = Join-Path $agentRoot "src\windows\tray"
 
 foreach ($required in @(
     $packagePath, $projectPath, $buildPath, $workspacePath,
-    $helperPath, $trayPath, $mainPath
+    $helperPath, $trayPath, $healthPath, $mainPath
 )) {
     if (-not (Test-Path -LiteralPath $required -PathType Leaf)) {
         throw "Required WiX packaging file is missing: $required"
@@ -122,12 +123,16 @@ Assert-Contains $trayText 'id=check-connection' `
     "The local Agent page must expose an explicit Server connection check."
 Assert-Contains $trayText '"/connection" => server_connection_response' `
     "The local-control router must provide the authenticated connection-check endpoint."
-Assert-Contains $trayText 'fn probe_server_connection' `
-    "The tray must implement a bounded Server health probe."
-Assert-Contains $trayText '.redirect(reqwest::redirect::Policy::none())' `
-    "The Server health probe must reject redirects."
-Assert-Contains $trayText 'MAX_SERVER_HEALTH_BODY_BYTES' `
+$healthText = Get-Content -LiteralPath $healthPath -Raw
+Assert-Contains $trayText 'server_health::probe_server_connection' `
+    "The tray must use the cross-platform Server health adapter."
+Assert-Contains $healthText 'client.get_agent_blocking(' `
+    "The Server health probe must use the Foundation bounded execution policy."
+Assert-Contains $healthText 'max_body_bytes: MAX_SERVER_HEALTH_BODY_BYTES' `
     "The Server health response must be bounded before JSON parsing."
+if ($healthText -match 'reqwest::|Client::builder') {
+    throw "The health adapter must not rebuild a product-local HTTP client."
+}
 if ($trayText -notmatch "(?s)codeInput\.value='';\s*void startOperation\('/pair'.*?activation_code:activationCode") {
     throw "The local page must clear the authorization-key input before starting the asynchronous request."
 }

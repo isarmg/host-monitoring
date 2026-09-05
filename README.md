@@ -1,16 +1,16 @@
 # Host Monitoring 主机监控
 
-Host Monitoring `0.7.0` 是一个独立的主机遥测产品，仓库同时包含本地 Web 状态页、共享网络协议和
+Host Monitoring `0.8.0` 是一个独立的主机遥测产品，仓库同时包含本地 Web 状态页、共享网络协议和
 跨平台 `host-monitor`。服务端使用本地管理员用户名/密码和 SQLite；Agent 只读采集主机状态，通过配对
 取得凭据，并默认经 HTTPS 发送有界报告。只有持久 Agent 配置显式启用高风险
-`allow_insecure_http=true` 时，report/OTLP 才可使用远程明文 HTTP；配对仍只允许 HTTPS 或 loopback。
+正式 report/OTLP 与配对都要求 HTTPS；明文 HTTP 仅在 debug 构建允许 loopback 开发地址，release 构建拒绝。
 
 跨平台范围只属于 Agent。`host-monitoring-server` 的正式构建、发行与运行唯一支持
 `x86_64-unknown-linux-gnu`；不提供 ARM Linux、musl、Windows 或 macOS Server。非目标编译在
 `build.rs` 失败，发行脚本和进程启动还会分别复核构建宿主、target 与运行内核/机器架构。Windows
 `x86_64-pc-windows-msvc` Agent 仍是受支持目标。
 
-项目依赖 `sarmg-foundation 0.3.0` 的严格登录/Session/ErrorEnvelope 合同、管理员用户名规范化、当前
+项目依赖 `sarmg-foundation-server 0.3.0` 的严格登录/Session/ErrorEnvelope 合同、管理员用户名规范化、当前
 Argon2id/Token/same-origin 原语、React Session 状态机、React/Vite 构建基线、SQLite 连接基线和 Schema
 identity 算法。Host Monitoring 仍独立拥有账户记录、登录准入、Session/CSRF 持久生命周期、Cookie、
 产品页面/响应 guard、产品 DDL、文件安全、数据库初始化/锁、Agent 配对与投递状态机。管理角色只有
@@ -21,7 +21,7 @@ identity 算法。Host Monitoring 仍独立拥有账户记录、登录准入、S
 按 Foundation 规则 trim ASCII whitespace、转 ASCII 小写后，只接受 3..64 字节、首尾为字母或数字、
 字符仅为 `[a-z0-9._-]` 的 canonical username，并明确禁止 `@`。仓库不保留 email 字段或别名。
 
-产品只接受当前 `0.7.0` 配置、协议、SQLite Schema 和发行身份。服务端与 Agent 不解释任何非当前
+产品只接受当前 `0.8.0` 配置、协议、SQLite Schema 和发行身份。服务端与 Agent 不解释任何非当前
 状态或路由，也不执行迁移、备份或恢复；这些能力只有在 `sarmg-upgrade` 建立明确转换边后才成立。
 
 ## 仓库组成

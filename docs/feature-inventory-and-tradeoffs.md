@@ -14,7 +14,7 @@
 | HOST-003 | 编译期可选的 NVIDIA/NVML GPU 指标 | `clients/host-monitor/src/collectors/nvidia.rs`、`nvidia` feature、Linux GPU drop-in | 可选 | 高 | 非 NVIDIA 主机无影响；NVIDIA 温度/负载/显存/功耗/时钟/PCIe 指标消失，AMD/Intel sysfs 与 Windows 路径不受影响 | 无 NVML/驱动、权限、GPU lost 后重试初始化、部分设备失败、单位 |
 | HOST-004 | Windows PDH/GPU 采集与 recovery | PDH buffer、Windows collector | 可选 | 高 | Windows 基础指标可保留但 GPU/特定计数器缺失 | counter 重建、缓冲增长、locale |
 | HOST-005 | 周期采集和结构化 report contract | monitor runtime、`protocol/` | 核心 | 高 | Agent 无法形成 Server 可接受的报告 | 版本、时间戳、重复/缺字段 |
-| HOST-006 | 报告/OTLP 默认 HTTPS；loopback HTTP 自动允许，远程 HTTP 仅由持久 `allow_insecure_http=true` 显式放行；配对始终只允许 HTTPS/loopback | `clients/host-monitor/src/config.rs::validate_endpoint/validate_pairing_endpoint`、`transport.rs` | 保障 | 高 | 删除 HTTPS 默认会暴露设备 credential/遥测；删除显式明文开关会让隔离网明文部署失效但缩小攻击面 | 默认远程 HTTP 拒绝、持久开关、CLI 临时开关不能授权 durable pairing、错 CA/主机名、loopback |
+| HOST-006 | 报告、OTLP、配对正式环境固定 HTTPS；HTTP 仅允许 loopback 开发 | `clients/host-monitor/src/config.rs::validate_endpoint/validate_pairing_endpoint`、`transport.rs` | 保障 | 高 | 放宽会暴露设备 credential 和遥测 | 远程 HTTP 无条件拒绝、错 CA/主机名、loopback |
 | HOST-007 | 有界磁盘 spool | `clients/host-monitor/src/spool.rs`、`private_fs.rs`、`atomic_file.rs` | 保障 | 高 | Server 短暂不可达时丢数据；无界实现会写满磁盘 | 满额、重启、损坏/隔离条目、FIFO、链接/权限 |
 | HOST-008 | delivery retry/backoff、jitter 与严格错误机器码分类 | `monitor_app/delivery/{runtime,spool}.rs`、`transport.rs::classify_host_monitoring_response` | 保障 | 高 | 瞬时错误造成持续丢数或请求风暴；错误凭据可能无界重试 | 401 `unauthorized`、403 `agent_host_mismatch`、429/5xx/网络错误 |
 | HOST-009 | at-least-once 投递和基于全局 report ID 的 Server 去重 | report ID、spool、`agent_metric_reports.report_id` 主键 | 保障 | 高 | 重试会重复写入或错误丢弃；当前同 Host 重放不比较正文 fingerprint | 同 Host 重放 `accepted=false`、跨 Host 409、乱序、响应丢失 |
@@ -157,7 +157,7 @@
 | macOS | 系统指标、LaunchDaemon、pkg、newsyslog | 账户和卸载遵循平台安全检查 |
 | Android/iOS/iPadOS | 宿主提供快照的 Rust contract library | 无 App 外壳、签名、权限或 APK/IPA |
 | 可靠性 | 单实例状态锁、原子凭据、64 MiB 默认 spool | 有界队列会在持续故障时施加容量压力 |
-| 网络 | 默认 HTTPS、可选 mTLS 材料、自定义 CA、可选 OTLP | pairing 只允许 HTTPS/loopback；持久 `allow_insecure_http=true` 可让 report/OTLP 远程明文，属于高风险显式取舍而非关闭证书校验 |
+| 网络 | 正式环境固定 HTTPS、可选 mTLS 材料、自定义 CA、可选 OTLP | pairing/report/OTLP 只允许 HTTPS 或 loopback HTTP，不存在远程明文开关 |
 | 操作 | run/once/probe/pair/status/doctor | Agent 不提供远程命令执行 |
 
 ## 3. 关键架构取舍
@@ -176,7 +176,7 @@
 
 ## 4. 当前版本与明确不做
 
-- 只接受 `0.7.0` 配置、状态与数据库；不包含转换器或平行 alias。
+- 只接受 `0.8.0` 配置、状态与数据库；不包含转换器或平行 alias。
 - 服务端只初始化不存在的当前库，拒绝 metadata-free、非当前 identity 和 Schema drift。
 - 产品不包含 migration、backup、restore；`sarmg-upgrade` 当前也没有 Host 转换边，所以这些操作暂不受支持。
 - Agent 不执行远程 Shell、配置修改、补丁管理或自动修复。

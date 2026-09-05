@@ -14,8 +14,8 @@ Restart=on-failure
 RestartSec=10s
 
 # StateDirectory 存放当前配对状态、per-host token 与 spool，必须 0700。
-# 不显式声明时 systemd 用 0755，且**每次启动都会重设**——Agent 运行时虽然会
-# chmod 0700，但那要等到第一次写凭据，中间存在窗口。与 host-monitoring-server.service 保持一致。
+# 不显式声明时 systemd 用 0755，且每次启动都会重设。Agent 只接受安全的现有
+# 私有目录，不会在运行时 chmod 修复权限。与 host-monitoring-server.service 保持一致。
 StateDirectory=host-monitor
 StateDirectoryMode=0700
 ConfigurationDirectory=host-monitor

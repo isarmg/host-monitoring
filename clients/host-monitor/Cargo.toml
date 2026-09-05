@@ -19,8 +19,11 @@ default = ["desktop", "nvidia"]
 desktop = [
     "dep:libc",
     "dep:rand",
-    "dep:reqwest",
-    "dep:sarmg-error",
+    "dep:sarmg-agent-error",
+    "dep:sarmg-agent-runtime",
+    "dep:sarmg-agent-secret",
+    "dep:sarmg-agent-fs-safety",
+    "dep:sarmg-agent-secure-http",
     "dep:sha1",
     "dep:sha2",
     "dep:sysinfo",
@@ -42,10 +45,13 @@ flate2 = { version = "1", optional = true }
 nvml-wrapper = { version = "0.12", optional = true }
 prost = { version = "0.14", optional = true }
 rand = { version = "0.9", optional = true }
-reqwest = { version = "0.13", default-features = false, features = ["json", "http2"], optional = true }
 serde.workspace = true
 serde_json.workspace = true
-sarmg-error = { workspace = true, optional = true }
+sarmg-agent-error = { workspace = true, optional = true }
+sarmg-agent-runtime = { workspace = true, optional = true }
+sarmg-agent-secret = { workspace = true, optional = true }
+sarmg-agent-fs-safety = { workspace = true, optional = true }
+sarmg-agent-secure-http = { workspace = true, optional = true }
 sha2 = { version = "0.10", optional = true }
 sysinfo = { version = "0.39", default-features = false, features = ["system", "disk", "network", "component"], optional = true }
 thiserror.workspace = true
@@ -56,7 +62,6 @@ host-protocol.workspace = true
 uuid.workspace = true
 
 [target.'cfg(windows)'.dependencies]
-reqwest = { version = "0.13", default-features = false, features = ["native-tls", "blocking"], optional = true }
 sha1 = { version = "0.10", optional = true }
 windows = { version = "0.62", optional = true, features = [
     "Win32_Graphics_Gdi",
@@ -87,12 +92,6 @@ windows-sys = { version = "0.61", optional = true, features = [
     "Win32_Storage_FileSystem",
     "Win32_System_Memory",
 ] }
-
-[target.'cfg(target_os = "macos")'.dependencies]
-reqwest = { version = "0.13", default-features = false, features = ["native-tls"], optional = true }
-
-[target.'cfg(all(not(windows), not(target_os = "macos")))'.dependencies]
-reqwest = { version = "0.13", default-features = false, features = ["rustls"], optional = true }
 
 [target.'cfg(unix)'.dependencies]
 libc = { version = "0.2", optional = true }

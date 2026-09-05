@@ -1,0 +1,18 @@
+format = 1
+product_id = "host-monitoring"
+source_roots = ["clients/host-monitor"]
+
+# Development workspace identity; not an immutable release pin.
+[foundation]
+platform_generation = 1
+version = "0.6.0"
+
+[[components]]
+id = "agent"
+profile = "desktop-agent"
+capabilities = ["private-state", "bounded-spool", "https-delivery", "doctor", "local-web-management"]
+
+[components.agent_limits]
+max_record_bytes = 524288
+max_spool_bytes = 268435456
+max_spool_entries = 4096

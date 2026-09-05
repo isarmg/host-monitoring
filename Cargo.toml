@@ -7,7 +7,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.7.0"
+version = "0.8.0"
 edition = "2024"
 rust-version = "1.98"
 authors = ["sarmg <isarmg@163.com>"]
@@ -23,15 +23,37 @@ thiserror = "2"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 host-protocol = { path = "protocol" }
-sarmg-admin-auth = { version = "=0.3.0", git = "https://github.com/isarmg/sarmg-foundation.git", rev = "1fe326081cfd896f05ff502e80f99504797c14c6" }
-sarmg-contracts = { version = "=0.3.0", git = "https://github.com/isarmg/sarmg-foundation.git", rev = "1fe326081cfd896f05ff502e80f99504797c14c6" }
-sarmg-error = { version = "=0.3.0", git = "https://github.com/isarmg/sarmg-foundation.git", rev = "1fe326081cfd896f05ff502e80f99504797c14c6" }
-sarmg-schema-identity = { version = "=0.3.0", git = "https://github.com/isarmg/sarmg-foundation.git", rev = "1fe326081cfd896f05ff502e80f99504797c14c6" }
-sarmg-server-target = { version = "=0.3.0", git = "https://github.com/isarmg/sarmg-foundation.git", rev = "1fe326081cfd896f05ff502e80f99504797c14c6" }
-sarmg-sqlite = { version = "=0.3.0", git = "https://github.com/isarmg/sarmg-foundation.git", rev = "1fe326081cfd896f05ff502e80f99504797c14c6" }
+sarmg-admin-auth = { git = "https://github.com/isarmg/sarmg-foundation-server.git", rev = "1e889d08fa69fcf2b5fffe45e8cc42b68218f4f1", version = "=0.6.0" }
+sarmg-admin-core = { git = "https://github.com/isarmg/sarmg-foundation-server.git", rev = "1e889d08fa69fcf2b5fffe45e8cc42b68218f4f1", version = "=0.6.0" }
+sarmg-admin-axum = { git = "https://github.com/isarmg/sarmg-foundation-server.git", rev = "1e889d08fa69fcf2b5fffe45e8cc42b68218f4f1", version = "=0.6.0" }
+sarmg-admin-sqlite = { git = "https://github.com/isarmg/sarmg-foundation-server.git", rev = "1e889d08fa69fcf2b5fffe45e8cc42b68218f4f1", version = "=0.6.0" }
+sarmg-contracts = { git = "https://github.com/isarmg/sarmg-foundation-server.git", rev = "1e889d08fa69fcf2b5fffe45e8cc42b68218f4f1", version = "=0.6.0" }
+sarmg-error = { git = "https://github.com/isarmg/sarmg-foundation-server.git", rev = "1e889d08fa69fcf2b5fffe45e8cc42b68218f4f1", version = "=0.6.0" }
+sarmg-agent-runtime = { git = "https://github.com/isarmg/sarmg-foundation-agent.git", rev = "a5b3158aa62af8189dd909500758cee649898e5c", version = "=0.6.0" }
+sarmg-agent-secret = { git = "https://github.com/isarmg/sarmg-foundation-agent.git", rev = "a5b3158aa62af8189dd909500758cee649898e5c", version = "=0.6.0" }
+sarmg-fs-safety = { git = "https://github.com/isarmg/sarmg-foundation-server.git", rev = "1e889d08fa69fcf2b5fffe45e8cc42b68218f4f1", version = "=0.6.0" }
+sarmg-secure-http = { git = "https://github.com/isarmg/sarmg-foundation-server.git", rev = "1e889d08fa69fcf2b5fffe45e8cc42b68218f4f1", version = "=0.6.0" }
+sarmg-schema-identity = { git = "https://github.com/isarmg/sarmg-foundation-server.git", rev = "1e889d08fa69fcf2b5fffe45e8cc42b68218f4f1", version = "=0.6.0" }
+sarmg-server-runtime = { git = "https://github.com/isarmg/sarmg-foundation-server.git", rev = "1e889d08fa69fcf2b5fffe45e8cc42b68218f4f1", version = "=0.6.0" }
+sarmg-server-target = { git = "https://github.com/isarmg/sarmg-foundation-server.git", rev = "1e889d08fa69fcf2b5fffe45e8cc42b68218f4f1", version = "=0.6.0" }
+sarmg-sqlite = { git = "https://github.com/isarmg/sarmg-foundation-server.git", rev = "1e889d08fa69fcf2b5fffe45e8cc42b68218f4f1", version = "=0.6.0" }
 uuid = { version = "1", features = ["serde", "v4"] }
 
 [profile.release]
 codegen-units = 1
 lto = "thin"
 strip = "symbols"
+[workspace.dependencies.sarmg-agent-error]
+git = "https://github.com/isarmg/sarmg-foundation-agent.git"
+rev = "a5b3158aa62af8189dd909500758cee649898e5c"
+version = "=0.6.0"
+
+[workspace.dependencies.sarmg-agent-fs-safety]
+git = "https://github.com/isarmg/sarmg-foundation-agent.git"
+rev = "a5b3158aa62af8189dd909500758cee649898e5c"
+version = "=0.6.0"
+
+[workspace.dependencies.sarmg-agent-secure-http]
+git = "https://github.com/isarmg/sarmg-foundation-agent.git"
+rev = "a5b3158aa62af8189dd909500758cee649898e5c"
+version = "=0.6.0"

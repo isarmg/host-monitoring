@@ -38,48 +38,44 @@ struct HostInspection {
 fn inspect_host_identity(config: &AgentConfig) -> HostInspection {
     let started = Instant::now();
     let path = config.state_dir.join("host-id");
-    match fs::read_to_string(&path) {
-        Ok(value) => {
-            let value = value.trim();
-            match Uuid::parse_str(value) {
-                Ok(id) if id.to_string() == value => HostInspection {
-                    id: Some(id.to_string()),
-                    check: DiagnosticCheck::new(
-                        "identity",
-                        "ok",
-                        None,
-                        "host identity is readable and valid",
-                        None::<String>,
-                        started,
-                    ),
-                },
-                _ => HostInspection {
-                    id: None,
-                    check: DiagnosticCheck::new(
-                        "identity",
-                        "error",
-                        Some("identity_invalid"),
-                        format!(
-                            "{} does not contain a canonical lowercase, hyphenated UUID",
-                            path.display()
-                        ),
-                        Some("repair the state directory or pair this host again"),
-                        started,
-                    ),
-                },
-            }
-        }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => HostInspection {
-            id: None,
+    match host_monitor::agent_identity::load(&config.state_dir) {
+        Ok(identity) => HostInspection {
+            id: Some(identity.instance_id().to_owned()),
             check: DiagnosticCheck::new(
                 "identity",
-                "missing",
-                Some("identity_missing"),
-                "host identity has not been created yet",
-                Some("pair this host before expecting authenticated reports"),
+                "ok",
+                None,
+                "host identity is readable and valid",
+                None::<String>,
                 started,
             ),
         },
+        Err(host_monitor::agent_identity::IdentityLoadError::Invalid) => HostInspection {
+            id: None,
+            check: DiagnosticCheck::new(
+                "identity",
+                "error",
+                Some("identity_invalid"),
+                "host identity is not valid current identity data",
+                Some("repair the state directory or pair this host again"),
+                started,
+            ),
+        },
+        Err(host_monitor::agent_identity::IdentityLoadError::State(error))
+            if error.kind() == std::io::ErrorKind::NotFound =>
+        {
+            HostInspection {
+                id: None,
+                check: DiagnosticCheck::new(
+                    "identity",
+                    "missing",
+                    Some("identity_missing"),
+                    "host identity has not been created yet",
+                    Some("pair this host before expecting authenticated reports"),
+                    started,
+                ),
+            }
+        }
         Err(error) => HostInspection {
             id: None,
             check: DiagnosticCheck::new(
@@ -124,6 +120,30 @@ fn inspect_configuration(config: &AgentConfig, configured: bool) -> DiagnosticCh
     }
 }
 
+fn inspect_tls(config: &AgentConfig) -> DiagnosticCheck {
+    let started = Instant::now();
+    match host_monitor::transport::validate_local_tls(config) {
+        Ok(()) => DiagnosticCheck::new(
+            "tls",
+            "ok",
+            None,
+            "local TLS inputs and client construction passed; no connection or handshake was attempted",
+            None::<String>,
+            started,
+        ),
+        Err(error) => DiagnosticCheck::new(
+            "tls",
+            "error",
+            Some("tls_configuration_invalid"),
+            error.to_string(),
+            Some(
+                "check platform identity support, password, certificate contents, owner, permissions and file sizes; use doctor --delivery for an explicit delivery test",
+            ),
+            started,
+        ),
+    }
+}
+
 struct CredentialInspection {
     present: bool,
     check: DiagnosticCheck,
@@ -132,8 +152,8 @@ struct CredentialInspection {
 fn inspect_credential(config: &AgentConfig) -> CredentialInspection {
     let started = Instant::now();
     let path = config.state_dir.join("agent-token");
-    match fs::read_to_string(&path) {
-        Ok(value) if !value.trim().is_empty() => CredentialInspection {
+    match host_monitor::transport::stored_credential_is_nonempty(config) {
+        Ok(true) => CredentialInspection {
             present: true,
             check: DiagnosticCheck::new(
                 "credential",
@@ -184,93 +204,75 @@ fn inspect_credential(config: &AgentConfig) -> CredentialInspection {
 struct SpoolInspection {
     pending_batches: usize,
     invalid_batches: usize,
+    identity_mismatch_batches: usize,
     total_bytes: u64,
     #[serde(skip)]
     check: Option<DiagnosticCheck>,
 }
 
-fn inspect_spool(state_dir: &Path) -> SpoolInspection {
+fn inspect_spool(config: &AgentConfig) -> SpoolInspection {
     let started = Instant::now();
-    let path = state_dir.join("spool");
-    let entries = match fs::read_dir(&path) {
-        Ok(entries) => entries,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            return SpoolInspection {
+    let path = config.state_dir.join("spool");
+    let limits = sarmg_agent_runtime::SpoolLimits {
+        max_record_bytes: host_monitor::model::AGENT_REPORT_MAX_BODY_BYTES,
+        max_entries: sarmg_agent_runtime::MAX_SPOOL_ENTRIES,
+        max_bytes: config.spool_max_bytes,
+    };
+    match sarmg_agent_runtime::Spool::inspect_existing(&path, limits) {
+        Ok(health) => SpoolInspection {
+            pending_batches: health.spool_entries,
+            invalid_batches: health.quarantined_entries,
+            identity_mismatch_batches: health.identity_mismatch_entries,
+            total_bytes: health.spool_bytes,
+            check: Some(DiagnosticCheck::new(
+                "spool",
+                if health.healthy { "ok" } else { "error" },
+                if health.identity_mismatch_entries > 0 {
+                    Some("spool_identity_mismatch")
+                } else {
+                    (!health.healthy).then_some("spool_quarantined")
+                },
+                format!(
+                    "{} pending, {} quarantined ({} identity mismatches), {} bytes; inventory only, payloads not verified",
+                    health.spool_entries,
+                    health.quarantined_entries,
+                    health.identity_mismatch_entries,
+                    health.spool_bytes
+                ),
+                (!health.healthy)
+                    .then_some("inspect quarantined records; diagnostics do not delete evidence"),
+                started,
+            )),
+        },
+        Err(sarmg_agent_runtime::Error::Filesystem(sarmg_agent_fs_safety::Error::Io(error)))
+            if error.kind() == std::io::ErrorKind::NotFound =>
+        {
+            SpoolInspection {
                 check: Some(DiagnosticCheck::new(
                     "spool",
                     "missing",
                     None,
-                    "the spool has not been created yet",
+                    "the spool is absent or changed during inspection",
                     None::<String>,
                     started,
                 )),
                 ..Default::default()
-            };
-        }
-        Err(error) => {
-            return SpoolInspection {
-                check: Some(DiagnosticCheck::new(
-                    "spool",
-                    "error",
-                    Some("spool_unreadable"),
-                    format!("failed to read {}: {error}", path.display()),
-                    Some("check the state-directory owner, permissions, and disk health"),
-                    started,
-                )),
-                ..Default::default()
-            };
-        }
-    };
-    let mut result = SpoolInspection::default();
-    for entry in entries {
-        let entry = match entry {
-            Ok(entry) => entry,
-            Err(error) => {
-                result.check = Some(DiagnosticCheck::new(
-                    "spool",
-                    "error",
-                    Some("spool_unreadable"),
-                    format!("failed to enumerate {}: {error}", path.display()),
-                    Some("check the state-directory owner, permissions, and disk health"),
-                    started,
-                ));
-                return result;
-            }
-        };
-        let entry_path = entry.path();
-        let extension = entry_path.extension().and_then(|value| value.to_str());
-        match extension {
-            Some("json") => result.pending_batches += 1,
-            Some("invalid") => result.invalid_batches += 1,
-            _ => continue,
-        }
-        match entry.metadata() {
-            Ok(metadata) => result.total_bytes = result.total_bytes.saturating_add(metadata.len()),
-            Err(error) => {
-                result.check = Some(DiagnosticCheck::new(
-                    "spool",
-                    "error",
-                    Some("spool_unreadable"),
-                    format!("failed to inspect {}: {error}", entry_path.display()),
-                    Some("check the state-directory owner, permissions, and disk health"),
-                    started,
-                ));
-                return result;
             }
         }
+        Err(error) => SpoolInspection {
+            check: Some(DiagnosticCheck::new(
+                "spool",
+                "error",
+                Some("spool_unreadable"),
+                format!("failed to inspect {}: {error}", path.display()),
+                Some(
+                    "retry if the agent is writing; otherwise check private directory safety, capacity, and disk health",
+                ),
+                started,
+            )),
+            ..Default::default()
+        },
     }
-    result.check = Some(DiagnosticCheck::new(
-        "spool",
-        "ok",
-        None,
-        format!(
-            "{} pending, {} invalid, {} bytes",
-            result.pending_batches, result.invalid_batches, result.total_bytes
-        ),
-        None::<String>,
-        started,
-    ));
-    result
 }
 
 pub(super) fn print_local_status(config: &AgentConfig) -> anyhow::Result<()> {
@@ -279,9 +281,10 @@ pub(super) fn print_local_status(config: &AgentConfig) -> anyhow::Result<()> {
         .as_ref()
         .is_some_and(|path| path.is_file());
     let config_check = inspect_configuration(config, configured);
+    let tls_check = inspect_tls(config);
     let host = inspect_host_identity(config);
     let credential = inspect_credential(config);
-    let mut spool = inspect_spool(&config.state_dir);
+    let mut spool = inspect_spool(config);
     let spool_check = spool
         .check
         .take()
@@ -302,9 +305,9 @@ pub(super) fn print_local_status(config: &AgentConfig) -> anyhow::Result<()> {
         .is_none()
         .then(|| active_endpoint.unwrap_or(config.endpoint.as_str()));
     let authorization = authorization_result.ok().flatten();
-    let reauth_required = authorization
-        .as_ref()
-        .is_some_and(|state| state.status == "reauth_required");
+    let reauth_required = authorization.as_ref().is_some_and(|state| {
+        state.status == sarmg_agent_runtime::CredentialAuthorization::ReauthorizationRequired
+    });
     let pairing_pending = pairing.as_ref().is_some_and(|progress| {
         matches!(
             progress,
@@ -313,6 +316,7 @@ pub(super) fn print_local_status(config: &AgentConfig) -> anyhow::Result<()> {
     });
     let has_error = [
         config_check.status,
+        tls_check.status,
         host.check.status,
         credential.check.status,
         spool_check.status,
@@ -332,6 +336,7 @@ pub(super) fn print_local_status(config: &AgentConfig) -> anyhow::Result<()> {
         "unconfigured"
     };
     let config_status = config_check.status;
+    let tls_status = tls_check.status;
     let (binding_status, binding_code, binding_message) = if let Some(error) = &pairing_error {
         (
             "error",
@@ -362,6 +367,7 @@ pub(super) fn print_local_status(config: &AgentConfig) -> anyhow::Result<()> {
     };
     let checks = serde_json::json!({
         "configuration": config_check,
+        "tls": tls_check,
         "identity": host.check,
         "credential": credential.check,
         "spool": spool_check,
@@ -393,6 +399,7 @@ pub(super) fn print_local_status(config: &AgentConfig) -> anyhow::Result<()> {
         "credential_present": credential.present,
         "spool_pending_batches": spool.pending_batches,
         "spool_invalid_batches": spool.invalid_batches,
+        "spool_identity_mismatch_batches": spool.identity_mismatch_batches,
         "spool_bytes": spool.total_bytes,
         "pairing": pairing,
         "authorization": authorization,
@@ -404,6 +411,7 @@ pub(super) fn print_local_status(config: &AgentConfig) -> anyhow::Result<()> {
         OutputMode::Human => {
             println!("host-monitor: {overall_state}");
             println!("  Configuration: {config_status}");
+            println!("  TLS (local inputs only): {tls_status}");
             println!(
                 "  Identity: {}",
                 snapshot["host_id"].as_str().unwrap_or("not available")
@@ -418,8 +426,11 @@ pub(super) fn print_local_status(config: &AgentConfig) -> anyhow::Result<()> {
             );
             println!("  Endpoint: {}", status_endpoint.unwrap_or("not available"));
             println!(
-                "  Spool: {} pending, {} invalid, {} bytes",
-                spool.pending_batches, spool.invalid_batches, spool.total_bytes
+                "  Spool: {} pending, {} quarantined ({} identity mismatches), {} bytes",
+                spool.pending_batches,
+                spool.invalid_batches,
+                spool.identity_mismatch_batches,
+                spool.total_bytes
             );
             println!("  Next: {next_action}");
         }
@@ -429,6 +440,7 @@ pub(super) fn print_local_status(config: &AgentConfig) -> anyhow::Result<()> {
 
 pub(super) async fn run_read_only_doctor(config: &AgentConfig) -> anyhow::Result<()> {
     let mut checks = Vec::new();
+    checks.push(inspect_tls(config));
 
     let started = Instant::now();
     checks.push(match config.validate_for_diagnostics() {
@@ -494,7 +506,7 @@ pub(super) async fn run_read_only_doctor(config: &AgentConfig) -> anyhow::Result
         .unwrap_or_else(Uuid::new_v4);
     checks.push(host.check);
     checks.push(inspect_credential(config).check);
-    let mut spool = inspect_spool(&config.state_dir);
+    let mut spool = inspect_spool(config);
     checks.push(
         spool
             .check
@@ -582,17 +594,100 @@ mod tests {
     use super::*;
 
     #[test]
+    fn spool_inspection_does_not_create_state_or_remove_quarantines() {
+        let directory =
+            std::env::temp_dir().join(format!("host-spool-diagnostics-{}", Uuid::new_v4()));
+        fs::create_dir(&directory).unwrap();
+        let mut config = AgentConfig::default();
+        config.state_dir = directory.join("state");
+        let absent = inspect_spool(&config);
+        assert_eq!(absent.check.unwrap().status, "missing");
+        assert!(!config.state_dir.exists());
+        sarmg_agent_fs_safety::PrivateDirectory::create(&config.state_dir).unwrap();
+        let path = config.state_dir.join("spool");
+        let spool = sarmg_agent_runtime::Spool::open(
+            &path,
+            sarmg_agent_runtime::SpoolLimits {
+                max_record_bytes: host_monitor::model::AGENT_REPORT_MAX_BODY_BYTES,
+                max_entries: sarmg_agent_runtime::MAX_SPOOL_ENTRIES,
+                max_bytes: config.spool_max_bytes,
+            },
+        )
+        .unwrap();
+        let id = spool
+            .enqueue(
+                sarmg_agent_runtime::ContractId::new("example.current").unwrap(),
+                1,
+                sarmg_agent_runtime::BoundedBytes::new(vec![1], 1).unwrap(),
+            )
+            .unwrap();
+        spool
+            .quarantine(&id, sarmg_agent_runtime::QuarantineReason::Corrupt)
+            .unwrap();
+        let inspection = inspect_spool(&config);
+        assert_eq!(inspection.pending_batches, 0);
+        assert_eq!(inspection.invalid_batches, 1);
+        assert!(inspection.total_bytes > 1);
+        assert_eq!(inspection.check.unwrap().code, Some("spool_quarantined"));
+        assert_eq!(spool.doctor().unwrap().quarantined_entries, 1);
+        let id = spool
+            .enqueue(
+                sarmg_agent_runtime::ContractId::new("example.current").unwrap(),
+                2,
+                sarmg_agent_runtime::BoundedBytes::new(vec![2], 1).unwrap(),
+            )
+            .unwrap();
+        spool
+            .quarantine(&id, sarmg_agent_runtime::QuarantineReason::IdentityMismatch)
+            .unwrap();
+        let snapshot = || {
+            let mut entries = fs::read_dir(&path)
+                .unwrap()
+                .map(|entry| {
+                    let entry = entry.unwrap();
+                    (entry.file_name(), fs::read(entry.path()).unwrap())
+                })
+                .collect::<Vec<_>>();
+            entries.sort();
+            entries
+        };
+        let before = snapshot();
+        let inspection = inspect_spool(&config);
+        assert_eq!(inspection.pending_batches, 0);
+        assert_eq!(inspection.invalid_batches, 2);
+        assert_eq!(inspection.identity_mismatch_batches, 1);
+        assert_eq!(
+            inspection.check.unwrap().code,
+            Some("spool_identity_mismatch")
+        );
+        assert_eq!(snapshot(), before);
+        drop(spool);
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
     fn host_inspection_rejects_noncanonical_uuid_text() {
         let directory = std::env::temp_dir().join(format!(
             "host-monitoring-diagnostic-host-{}",
             Uuid::new_v4()
         ));
         fs::create_dir_all(&directory).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&directory, fs::Permissions::from_mode(0o700)).unwrap();
+        }
         fs::write(
             directory.join("host-id"),
             "BBBBBBBB-BBBB-4BBB-8BBB-BBBBBBBBBBBB",
         )
         .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(directory.join("host-id"), fs::Permissions::from_mode(0o600))
+                .unwrap();
+        }
         let mut config = AgentConfig::default();
         config.state_dir = directory.clone();
 
@@ -602,6 +697,57 @@ mod tests {
         assert!(inspection.id.is_none());
         assert_eq!(inspection.check.status, "error");
         assert_eq!(inspection.check.code, Some("identity_invalid"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn identity_diagnostics_reject_unsafe_state_without_creating_or_repairing_it() {
+        use std::os::unix::fs::{PermissionsExt, symlink};
+        let directory =
+            std::env::temp_dir().join(format!("host-identity-safety-{}", Uuid::new_v4()));
+        let mut config = AgentConfig::default();
+        config.state_dir = directory.clone();
+        assert_eq!(
+            inspect_host_identity(&config).check.code,
+            Some("identity_missing")
+        );
+        assert!(!directory.exists());
+        let root = sarmg_agent_fs_safety::PrivateDirectory::create(&directory).unwrap();
+        let identity = Uuid::new_v4().to_string();
+        let name = sarmg_agent_fs_safety::EntryName::new("host-id").unwrap();
+        sarmg_agent_fs_safety::AtomicFile::replace(&root, &name.as_relative(), identity.as_bytes())
+            .unwrap();
+        assert_eq!(
+            inspect_host_identity(&config).id.as_deref(),
+            Some(identity.as_str())
+        );
+        let path = directory.join("host-id");
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+        assert_eq!(
+            inspect_host_identity(&config).check.code,
+            Some("identity_unreadable")
+        );
+        assert_eq!(
+            fs::metadata(&path).unwrap().permissions().mode() & 0o7777,
+            0o644
+        );
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+        let oversized = format!("{identity}{}", " ".repeat(129));
+        fs::write(&path, &oversized).unwrap();
+        assert_eq!(
+            inspect_host_identity(&config).check.code,
+            Some("identity_unreadable")
+        );
+        assert_eq!(fs::read_to_string(&path).unwrap(), oversized);
+        fs::rename(&path, directory.join("victim")).unwrap();
+        symlink(directory.join("victim"), &path).unwrap();
+        assert_eq!(
+            inspect_host_identity(&config).check.code,
+            Some("identity_unreadable")
+        );
+        assert_eq!(fs::read_dir(&directory).unwrap().count(), 2);
+        drop(root);
+        fs::remove_dir_all(directory).unwrap();
     }
 
     #[test]

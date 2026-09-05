@@ -20,7 +20,7 @@ from typing import NoReturn
 
 
 APPLICATION = "host-monitoring-server"
-VERSION = "0.7.0"
+VERSION = "0.8.0"
 TARGET = "x86_64-unknown-linux-gnu"
 TAG = f"v{VERSION}"
 RELEASE_README = Path("docs/server-release-readme.md")

@@ -1,3 +1,6 @@
+use sarmg_agent_secret::SecretString;
+use std::sync::Arc;
+
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error as _};
 use uuid::Uuid;
@@ -5,12 +8,15 @@ use uuid::Uuid;
 use crate::model::HostIdentity;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) struct PairingStateVersion;
+pub(crate) struct PairingStateVersion;
 
 pub(super) const PAIRING_STATE_VERSION: PairingStateVersion = PairingStateVersion;
-pub(super) const PAIRING_STATE_FILE: &str = "pairing-state.json";
-pub(super) const AUTH_STATE_FILE: &str = "auth-state.json";
-pub(super) const ACTIVE_BINDING_FILE: &str = "active-binding.json";
+#[cfg(test)]
+pub(super) const PAIRING_STATE_FILE: &str = crate::state_store::StateFile::Pairing.name();
+#[cfg(test)]
+pub(super) const AUTH_STATE_FILE: &str = crate::state_store::StateFile::Authorization.name();
+#[cfg(test)]
+pub(super) const ACTIVE_BINDING_FILE: &str = crate::state_store::StateFile::Binding.name();
 
 impl Serialize for PairingStateVersion {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
@@ -40,15 +46,17 @@ impl<'de> Deserialize<'de> for PairingStateVersion {
 
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(tag = "phase", rename_all = "snake_case", deny_unknown_fields)]
-pub(super) enum StoredPairingState {
+pub(crate) enum StoredPairingState {
     Creating {
         version: PairingStateVersion,
         generation: Uuid,
         pairing_endpoint: String,
         report_endpoint: String,
         host: HostIdentity,
-        bearer_secret: String,
-        polling_secret: String,
+        #[serde(with = "crate::secret_io")]
+        bearer_secret: Arc<SecretString>,
+        #[serde(with = "crate::secret_io")]
+        polling_secret: Arc<SecretString>,
     },
     Pending {
         version: PairingStateVersion,
@@ -59,8 +67,10 @@ pub(super) enum StoredPairingState {
         poll_interval: u64,
         pairing_endpoint: String,
         report_endpoint: String,
-        bearer_secret: String,
-        polling_secret: String,
+        #[serde(with = "crate::secret_io")]
+        bearer_secret: Arc<SecretString>,
+        #[serde(with = "crate::secret_io")]
+        polling_secret: Arc<SecretString>,
     },
     /// Durable local commit journal. Once this phase exists, no network I/O is
     /// allowed; startup idempotently completes the token/identity/endpoint binding
@@ -75,7 +85,8 @@ pub(super) enum StoredPairingState {
         instance_id: Uuid,
         pairing_endpoint: String,
         report_endpoint: String,
-        bearer_secret: String,
+        #[serde(with = "crate::secret_io")]
+        bearer_secret: Arc<SecretString>,
     },
     Active {
         version: PairingStateVersion,
@@ -162,7 +173,7 @@ pub struct LocalPairingStatus {
 #[serde(deny_unknown_fields)]
 pub struct LocalAuthState {
     pub(super) version: PairingStateVersion,
-    pub status: String,
+    pub status: sarmg_agent_runtime::CredentialAuthorization,
     pub reason: String,
     pub changed_at: DateTime<Utc>,
 }

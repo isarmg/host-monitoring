@@ -6,15 +6,12 @@
 /// 读、写和补传各持有一个实例，避免“读取成功”掩盖“持续不可写”。
 #[derive(Default)]
 struct SpoolHealth {
-    consecutive_failures: u32,
+    failures: sarmg_agent_runtime::QueueFailureStreak,
 }
 
 impl SpoolHealth {
-    /// 连续失败多少次后放弃。按 10 秒采集间隔算约合 15 分钟持续故障。
-    const MAX_CONSECUTIVE_FAILURES: u32 = 100;
-
     fn record_success(&mut self) {
-        self.consecutive_failures = 0;
+        self.failures.record_success();
     }
 
     /// 记录一次失败。仅当连续失败达到阈值时才返回 `Err`（从而终止主循环）。
@@ -23,18 +20,12 @@ impl SpoolHealth {
         operation: &str,
         error: &dyn std::fmt::Display,
     ) -> anyhow::Result<()> {
-        self.consecutive_failures += 1;
+        let outcome = self.failures.record_failure();
         warn!(
-            consecutive_failures = self.consecutive_failures,
+            consecutive_failures = self.failures.consecutive_failures(),
             "{operation}失败，已降级继续运行：{error}"
         );
-        if self.consecutive_failures >= Self::MAX_CONSECUTIVE_FAILURES {
-            anyhow::bail!(
-                "spool 连续 {} 次操作失败，判定为持续性故障；退出并交由服务管理器处理",
-                self.consecutive_failures
-            );
-        }
-        Ok(())
+        outcome.context("spool 持续性故障；退出并交由服务管理器处理")
     }
 
     /// 尝试把报文写入 spool。写不进去时丢弃该报文并继续，而不是终止进程。
@@ -53,14 +44,46 @@ impl SpoolHealth {
     }
 }
 
-/// 补传 spool 中积压的报文。
-///
-/// 返回值区分四种结局：队列排空、32 条批次额度用尽、保留具体性质的网络失败，以及
-/// spool 自身的磁盘 I/O 故障。批次边界会主动让出调度，但下一批无需等待采样 ticker。
-enum FlushOutcome {
-    Drained,
-    BatchComplete,
-    Failed(host_monitor::transport::SendError),
+type FlushOutcome = sarmg_agent_runtime::BatchOutcome<host_monitor::transport::SendError>;
+
+struct HostDeliveryAdapter<'a> {
+    reporter: &'a Reporter,
+    otlp_queue: Option<&'a OtlpQueue>,
+}
+
+impl sarmg_agent_runtime::DeliveryAdapter<host_monitor::spool::PendingReport>
+    for HostDeliveryAdapter<'_>
+{
+    type Error = host_monitor::transport::SendError;
+
+    async fn send(&self, pending: &host_monitor::spool::PendingReport) -> Result<(), Self::Error> {
+        self.reporter.send_host_monitoring(&pending.report).await
+    }
+
+    fn disposition(&self, error: &Self::Error) -> sarmg_agent_runtime::FailureDisposition {
+        use sarmg_agent_runtime::{FailureDisposition, QuarantineReason};
+        match error {
+            host_monitor::transport::SendError::IdentityMismatch => FailureDisposition::Quarantine(QuarantineReason::IdentityMismatch),
+            error if error.is_permanent() => FailureDisposition::Discard,
+            _ => FailureDisposition::Retain,
+        }
+    }
+
+    fn acknowledged(&self, pending: &host_monitor::spool::PendingReport) {
+        if let Some(queue) = self.otlp_queue {
+            queue.try_export(&pending.report);
+        }
+    }
+
+    fn discarded(&self, pending: &host_monitor::spool::PendingReport, error: &Self::Error) {
+        error!(
+            report_id = %pending.report.report_id,
+            "spool 中的报文被永久拒绝，已丢弃：{error}"
+        );
+    }
+    fn quarantined(&self, _pending: &host_monitor::spool::PendingReport, reason: sarmg_agent_runtime::QuarantineReason) {
+        warn!(?reason, "spool record isolated with original bytes preserved; inspect status/doctor");
+    }
 }
 
 async fn flush_spool(
@@ -68,44 +91,12 @@ async fn flush_spool(
     reporter: &Reporter,
     otlp_queue: Option<&OtlpQueue>,
 ) -> anyhow::Result<FlushOutcome> {
-    // 每轮最多补传 32 个批次，避免长时间断线恢复后独占网络和采样线程。
-    for _ in 0..32 {
-        let Some(pending) = spool.oldest()? else {
-            return Ok(FlushOutcome::Drained);
-        };
-        match reporter.send_host_monitoring(&pending.report).await {
-            Ok(()) => {
-                // 顺序很重要：**先确认出队，再导出 OTLP**。
-                //
-                // 反过来的话，一旦 acknowledge 失败（文件已被删、权限变更等），
-                // 报文会留在 spool 里，下一轮重新读取并再次导出，在 Collector
-                // 侧产生重复数据点。先出队则最坏只是漏导一次——OTLP 本就是
-                // 尽力而为的次要输出，漏一个点远好过重复计数。
-                let report = pending.report.clone();
-                spool.acknowledge(pending)?;
-                if let Some(queue) = otlp_queue {
-                    queue.try_export(&report);
-                }
-            }
-            // 永久拒绝：确认出队并丢弃，否则队首这条会永远阻塞后面所有报文的补传。
-            Err(error) if error.is_permanent() => {
-                error!(
-                    report_id = %pending.report.report_id,
-                    "spool 中的报文被永久拒绝，已丢弃：{error}"
-                );
-                spool.acknowledge(pending)?;
-            }
-            Err(error) => return Ok(FlushOutcome::Failed(error)),
-        }
-    }
-    Ok(FlushOutcome::BatchComplete)
-}
-
-pub(super) fn jitter(base: Duration, percent: u8) -> Duration {
-    if percent == 0 {
-        return base;
-    }
-    let range = percent as f64 / 100.0;
-    let factor = (1.0 - range) + random::<f64>() * range * 2.0;
-    Duration::from_secs_f64((base.as_secs_f64() * factor).max(0.05))
+    sarmg_agent_runtime::deliver_batch(
+        spool,
+        &HostDeliveryAdapter {
+            reporter,
+            otlp_queue,
+        },
+    )
+    .await
 }

@@ -3,7 +3,9 @@ fn elevated_pair(server: String, callback_nonce: String) -> anyhow::Result<()> {
     let _pair_mutex = create_single_instance_mutex(PRIVILEGED_OPERATION_MUTEX, true)?
         .context("another host-monitor pairing operation is already running")?;
     let server = validate_server_base(&server)?;
-    let origin = reqwest::Url::parse(&server)?.origin().ascii_serialization();
+    let origin = sarmg_agent_secure_http::Url::parse(&server)?
+        .origin()
+        .ascii_serialization();
     let confirmation = format!(
         "即将把此 Windows 设备配对到：\n\n{origin}\n\n配对成功会替换当前本地绑定，并在 Server 中创建新的主机实例。只有确认该地址属于你的 Host Monitoring 服务器时才继续。",
     );
@@ -501,7 +503,7 @@ fn validate_pair_ipc_message(message: &PairIpcMessage, server: &str) -> anyhow::
         "Agent pairing endpoint origin differs from the confirmed server"
     );
     let activation_url = validate_browser_url(&message.activation_url)?;
-    let activation = reqwest::Url::parse(&activation_url)?;
+    let activation = sarmg_agent_secure_http::Url::parse(&activation_url)?;
     ensure!(
         browser_url_matches_server_origin(&activation_url, &pairing_endpoint),
         "Agent activation URL origin differs from its pairing endpoint"

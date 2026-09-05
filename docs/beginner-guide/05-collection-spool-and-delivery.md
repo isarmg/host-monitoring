@@ -23,9 +23,18 @@ spool 是磁盘上的有界待投递队列，不是无限历史库。报告在�
 ## 5.5 投递轮次
 
 投递器按文件名 FIFO 从 spool 每次取一条，每轮最多连续处理 32 条；HTTP report API 本身不是多报告
-batch。默认使用当前 credential 与 HTTPS；loopback 可用 HTTP，持久配置的高风险开关还可显式允许远程
-明文 report/OTLP，但 pairing 仍要求 HTTPS/loopback。连接失败、429、503 等可重试结果保留队首并施加
-退避；严格合同确认的 400/409/413 或 Host mismatch 才丢当前报告，严格 401 才进入重新授权。
+batch。使用绑定了 Agent identity 的 credential 快照与 HTTPS；只有 debug 构建允许 loopback HTTP，
+正式构建不接受该策略，也没有持久配置开关可启用远程明文 report/OTLP。连接失败、429、503 等可重试
+结果保留队首并施加退避；严格合同确认的永久内容拒绝才丢当前报告，严格 401 才进入重新授权。
+
+报告身份与当前快照不匹配时，在联网前拒绝，由 Foundation 将原容器无覆盖地隔离为 `.identity`，
+然后继续处理本轮其他记录；隔离也计入每轮 32 条投递项上限。它不是 ACK，不发送 OTLP、不使新凭据
+失效，也不重写旧报告的 Host ID。若目标冲突或磁盘操作失败，则保留原记录和已有证据，停止本轮。
+
+`status --output json` 的 `spool_identity_mismatch_batches` 是身份错配隔离数量，
+`spool_invalid_batches` 包含全部隔离项。`status` 和只读 `doctor` 用 `spool_identity_mismatch` 提示
+这类问题，且不修改状态或回显载荷。这是有界清单检查，不等于验证了所有内容。隔离文件重启后保留，
+仍占用容量；请先核对配对和证据归属，不要改名后用当前实例凭据重放，也不要期待自动清空证据。
 
 ## 5.6 优雅停机
 

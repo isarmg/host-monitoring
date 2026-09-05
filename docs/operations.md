@@ -6,7 +6,7 @@ Server 的唯一正式平台/target 是 x86_64 glibc Linux / `x86_64-unknown-lin
 Windows 和 macOS 只可能属于 Agent 交付，不得部署 `host-monitoring-server`。
 
 ```text
-/opt/isarmg/host-monitoring/releases/0.7.0/   root 持有、只读发行树
+/opt/isarmg/host-monitoring/releases/0.8.0/   root 持有、只读发行树
 /etc/isarmg/host-monitoring.env              0600 生产配置
 /var/lib/isarmg/host-monitoring/db/host-monitoring.sqlite3    SQLite 当前数据库
 /run/isarmg/host-monitoring/                 systemd runtime
@@ -15,8 +15,8 @@ Windows 和 macOS 只可能属于 Agent 交付，不得部署 `host-monitoring-s
 systemd 以 `isarmg-host` 运行：
 
 ```text
-ExecStart=/opt/isarmg/host-monitoring/releases/0.7.0/bin/host-monitoring-server \
-  serve-release --root /opt/isarmg/host-monitoring/releases/0.7.0
+ExecStart=/opt/isarmg/host-monitoring/releases/0.8.0/bin/host-monitoring-server \
+  serve-release --root /opt/isarmg/host-monitoring/releases/0.8.0
 ```
 
 不创建 `current` 或 `latest`。发行树不能由服务账户、group 或 world 写入，也不能包含 symlink、特殊
@@ -24,7 +24,7 @@ ExecStart=/opt/isarmg/host-monitoring/releases/0.7.0/bin/host-monitoring-server 
 
 ## 2. 构建 Server 发行物
 
-在 x86_64 glibc Linux 上，从干净、annotated `v0.7.0` 精确指向 HEAD 的 checkout，向仓库外已存在目录
+在 x86_64 glibc Linux 上，从干净、annotated `v0.8.0` 精确指向 HEAD 的 checkout，向仓库外已存在目录
 构建：
 
 ```bash
@@ -36,20 +36,18 @@ manifest、生成 deterministic archive/checksum，随后解包、重定位、�
 篡改拒绝。已有归档或 checksum 不会被覆盖。`build.rs` 还会拒绝非目标编译，二进制在读取配置、打开
 SQLite 或监听端口前通过 `uname` 再确认 Linux/x86_64；三层检查均为 fail-closed。
 
-构建依赖 Foundation `0.3.0`：Rust 使用 `sarmg-admin-auth`、`sarmg-contracts`、`sarmg-error`、
-`sarmg-sqlite`、`sarmg-schema-identity` 与 `sarmg-server-target`，Web 使用 `@sarmg/admin-web`、
-`@sarmg/contracts`、`@sarmg/design-tokens` 与 `@sarmg/http-client`。
-`@sarmg/admin-web` 同时锁定 React/Vite/TypeScript 精确版本和共享配置。Rust 六个 crate 均从
-`https://github.com/isarmg/sarmg-foundation.git` 取得，并同时固定版本 `=0.3.0` 与完整 revision
-`1fe326081cfd896f05ff502e80f99504797c14c6`；不得改回同级目录 `path`。四个 Web 包分别固定到
-Foundation GitHub Release `v0.3.0` 下的 `sarmg-admin-web-0.3.0.tgz`、`sarmg-contracts-0.3.0.tgz`、
-`sarmg-design-tokens-0.3.0.tgz` 与 `sarmg-http-client-0.3.0.tgz`。`package-lock.json` 还必须记录相同 URL
-和每个归档的 `sha512` integrity。这样独立 checkout/CI 只依赖声明的不可变上游，不读取共同父目录。
+当前工作区通过本地路径联调 Foundation Rust 和八个 Web 包（contracts、http-client、admin-web、admin-ui、
+admin-shell、design-tokens、web-fonts、web-toolchain）。尚未满足独立发行条件，不能标记为已发布版本。
+React/Vite/TypeScript 基线与配置由 web-toolchain 维护；登录、Session、退出、诊断、主题和全局错误由共享 Shell 维护。
+P13 正式发行必须发布新的不可变 Foundation revision，不改写既有 tag；统一 Rust 精确来源、npm tarball URL
+及 SHA-512 integrity，并更新 gate 后在无 sibling Foundation 的干净 checkout 验收。
 Foundation 变更必须显式发布新版本并替换当前合同，同时通过 Host 的 Rust 全矩阵、Web clean build、
 SQLite reopen 与 Router→Agent 合同测试；不保留旧版本 fallback。
 
-当前 React 工件是最小状态页：管理员登录、Session 恢复、登出和 Host 列表 JSON。它不提供邀请/激活、
-详情/历史、备注、删除或 audit 查询界面。上述受保护 API 即使存在，也不能据此宣称已有完整 Web 运维台。
+当前 React 业务页提供主机列表、分页、CPU/内存摘要和可展开的完整采集字段。它不提供邀请/激活、
+历史图表、备注、删除或 audit 查询界面，不能据此宣称已有完整 Web 运维台。
+`cd clients/web && npm run test:browser` 对实际生产构建执行 Chromium/Firefox 分页、指标详情、移动主题与 WCAG AA 验收；
+首次运行需 `npx playwright install --with-deps chromium firefox`。该测试的 API 全部由本机测试数据拦截，不访问真实 Agent。
 
 ## 3. Server 配置
 
@@ -61,8 +59,8 @@ SQLite reopen 与 Router→Agent 合同测试；不保留旧版本 fallback。
 | `BIND` | `127.0.0.1:18105` | 非开发模式必须保持安全部署边界 |
 | `STATIC_DIR` | 必填 | 正式环境必须精确等于发行树 `web/` |
 | `DEVELOPMENT` | `false` | 仅本机开发可开启 |
-| `BOOTSTRAP_ADMIN_USERNAME` | `admin` | 仅在空 `auth_users` 创建首个管理员；按 Foundation 规则规范化，不是 email，也没有旧变量别名 |
-| `BOOTSTRAP_ADMIN_PASSWORD` | 空 `auth_users` 时必填 | 12..1024 字节且无 ASCII control；创建后保存 Foundation 当前 Argon2id hash，不保存明文 |
+| `BOOTSTRAP_ADMIN_USERNAME` | `admin` | 仅在空 `_sarmg_administrators` 创建首个管理员；按 Foundation 规则规范化，不是 email，也没有旧变量别名 |
+| `BOOTSTRAP_ADMIN_PASSWORD` | 空 `_sarmg_administrators` 时必填 | 12..1024 字节且无 ASCII control；创建后保存 Foundation 当前 Argon2id hash，不保存明文 |
 | `SESSION_IDLE_TTL_SECONDS` | 1800 | 会话空闲期限；必须大于 0，且不得大于 absolute TTL |
 | `SESSION_ABSOLUTE_TTL_SECONDS` | 43200 | 会话绝对期限；必须大于 0，任何 idle 刷新都不能越过它 |
 | `TELEMETRY_QUEUE_CAPACITY` | 256，最大 1024 | 内存报告队列 |
@@ -99,9 +97,10 @@ Server 自身只监听 HTTP socket；正式 HTTPS、证书与外部连接限制�
 
 | 路径与方法 | 当前调用方/身份 | 请求边界 | 成功结果与当前限制 |
 |---|---|---|---|
-| `GET /health/live` | 公开 | 无业务正文 | `200 {"status":"ok"}`；只证明进程路由可响应 |
-| `GET /health/ready` | 公开 | 无业务正文 | `200/503`，精确给出 `status/database/retention_schema/telemetry_writer`；不验证管理员内容、磁盘余量或外部代理 |
-| `POST /api/v2/auth/login` | 浏览器公开入口 | 4 KiB；exact `{username,password}`；同源；TCP peer 与规范 username 双重限流 | `200` + exact Session；设置 Cookie；不知道账户时仍做 dummy Argon2；成功响应 `no-store` |
+| `GET /healthz` | 公开 | 空响应体 | 存活 204，不健康 503 |
+| `GET /readyz` | 公开 | 仅最小就绪事实 | `200/503`，精确 `{"ready":bool}`；任务与数据库详情仅在受保护诊断中提供 |
+| `GET /api/v2/platform/diagnostics` | 管理员 Session | 不返回凭据或内部错误 | 当前产品/Schema、checks、tasks、积压与 Request ID；`no-store` |
+| `POST /api/v2/auth/login` | 浏览器公开入口 | 16 KiB；exact `{username,password}`；同源；TCP peer 与规范 username 双重限流 | `200` + exact Session；设置 Cookie；不知道账户时仍做 dummy Argon2；成功响应 `no-store` |
 | `GET /api/v2/auth/session` | 管理员 Session Cookie | 不接受业务正文；不要求 CSRF | 轮换一个 CSRF token 并返回 exact Session；成功响应 `no-store` |
 | `POST /api/v2/auth/logout` | 管理员 Session + CSRF + 同源 | 无业务正文 | 撤销当前 Session、删除其 CSRF 摘要、清除 Cookie；成功响应 `204 no-store` |
 | `GET /api/v2/monitoring/hosts` | 管理员 Session | query 只有 `limit/offset`；服务端钳到 1..1000，默认 200 | 分页 Host summary；当前 React 页只调用这一条业务 API |
@@ -118,11 +117,11 @@ Server 自身只监听 HTTP socket；正式 HTTPS、证书与外部连接限制�
 | `POST /api/v2/host-monitor/report` | `Bearer <agent credential>` | 512 KiB；单份 strict report；每 Host 速率桶 | 持久事务提交后才返回 `202`；同 Host 同 ID 重放 `accepted=false` |
 
 登录与管理写操作的同源裁决会把所有原始 `Origin`、`Host`/HTTP/2 authority、`Sec-Fetch-Site` 值交给
-Foundation；重复、冲突或非当前形状 fail closed。生产 Cookie 名是 `__Host-host_session`，带
-`Path=/; Secure; HttpOnly; SameSite=Strict` 且没有 Domain；开发模式改用非 Secure 的 `host_session`，但
+Foundation；重复、冲突或非当前形状 fail closed。生产 Cookie 名是 `__Host-sarmg-host-monitoring-session`，带
+`Path=/; Secure; HttpOnly; SameSite=Strict` 且没有 Domain；开发模式改用非 Secure 的 `sarmg-host-monitoring-session`，但
 配置层强制监听 loopback。Session token 和 CSRF token 都是 32-byte 随机值，只以 SHA-256 摘要入库；
-Session 同时受 idle/absolute TTL、账户 active 与 `session_version` 约束，每个 Session 只保留最近 8 个
-CSRF 摘要。
+Session 同时受 idle/absolute TTL、账户 active 与 `session_version` 约束，每个 Session 只保留当前
+CSRF 摘要；恢复会话时轮换，不保留旧 token 的兼容窗口。
 
 所有 `/api` 的 4xx/5xx（包括 JSON extractor、body 过大、方法错误与未知 API 路径）都会规范为
 Foundation `ErrorEnvelope`；健康端点和静态文件不在这个 envelope 范围。当前仅部分敏感成功响应显式
@@ -148,7 +147,7 @@ Foundation `ErrorEnvelope`；健康端点和静态文件不在这个 envelope �
 
 ```bash
 host-monitoring-server identity
-host-monitoring-server verify-release --root /opt/isarmg/host-monitoring/releases/0.7.0
+host-monitoring-server verify-release --root /opt/isarmg/host-monitoring/releases/0.8.0
 host-monitoring-server doctor
 host-monitoring-server admin-create --database-url sqlite:///path/app.db
 host-monitoring-server admin-reset-password --database-url sqlite:///path/app.db \
@@ -163,15 +162,20 @@ Argon2id hash；Schema trigger 同时提升 `session_version`、撤销该账户�
 当前 reset CLI 的密码是 argv 参数，不支持 stdin/文件 Secret provider；这是明确的运维限制。不要把真实
 密码字面量写进可持久 Shell history、脚本、工单或日志，并限制同机进程列表与维护终端的访问。首次创建
 完成后从长期环境文件移除 bootstrap 明文密码。项目没有管理员创建/列表/禁用 Web API；不要把
-`auth_users` 表可容纳多行误写成完整账户管理功能。
+`_sarmg_administrators` 表可容纳多行误写成完整账户管理功能。
 
 ## 5. Agent 配置与诊断
 
-`config/host-monitor.json.example` 是当前完整字段样例；`application_version` 必须等于 `0.7.0`。默认采集
-10 秒、慢速采集 30 秒、请求超时 10 秒、jitter 10%、spool 64 MiB。配对端点只接受 HTTPS 或 loopback
-HTTP。报告/OTLP 默认也要求 HTTPS，但代码仍允许管理员在持久配置中显式设置
-`allow_insecure_http=true` 后使用远程明文 HTTP；这是高风险可选策略，不等于关闭 TLS 证书校验，生产
-基线应保持 `false`。自定义 CA 和客户端身份仍会执行正常证书、主机名与有效期验证。
+`config/host-monitor.json.example` 是当前完整字段样例；`application_version` 必须等于 `0.8.0`。默认采集
+10 秒、慢速采集 30 秒、请求超时 10 秒、jitter 10%、spool 64 MiB。配对端点只接受 HTTPS；仅 debug
+构建另允许 loopback HTTP，release 拒绝。远程明文 HTTP 已删除；正式投递固定使用 HTTPS。自定义 CA 和客户端身份仍会执行正常证书、
+主机名与有效期验证。
+
+Spool 使用 Foundation 唯一当前二进制容器，不读取旧队列格式。单条 Host payload 上限 512 KiB，
+队列上限 4096 条，`spool_max_bytes` 必须在 1–256 MiB；物理容器元数据和隔离记录均计入容量。
+采样和网络重试 jitter 由 Foundation 实现，网络最终延迟不超过 5 分钟。
+`status` 和只读 `doctor` 使用有界目录清单，不创建队列、不获取写锁、不清理临时文件、不删除隔离记录。
+清单不是 payload 校验和检查；运行中写入引起的临时检查错误可重试，隔离记录会明确报告为异常。
 
 ```bash
 host-monitor probe --config /etc/host-monitor/config.json
@@ -202,7 +206,7 @@ WiX 4 MSI 同时安装 Windows Service、Tray 和维护 helper。Tray 是用户�
 主体；两者通过受保护本机控制通道通信。构建/验收使用：
 
 ```powershell
-clients\host-monitor\packaging\windows\wix\build-msi.cmd 0.7.0 `
+clients\host-monitor\packaging\windows\wix\build-msi.cmd 0.8.0 `
   target\x86_64-pc-windows-msvc\release\host-monitor.exe `
   target\x86_64-pc-windows-msvc\release\host-monitor-maintenance.exe `
   target\x86_64-pc-windows-msvc\release\host-monitor-tray.exe
@@ -244,10 +248,10 @@ notarization/stapling，并保存签名者、时间戳、摘要和验证结果�
 
 ## 9. 数据库身份与当前不支持的数据操作
 
-Server 只创建当前库。`product_metadata` 必须精确绑定 application `host-monitoring`、version `0.7.0`、
-schema revision `1` 与 SHA-256
-`12dd1e61426b6b99df3d429b8c36ee3a5b22d1da776d98fc960b45b4f58c8e05`；现场 `sqlite_schema` 重新计算也
-必须一致。当前 DDL 中管理员列是 `auth_users.username`，没有 `email` 或 role 列；DDL 自身约束 canonical
+Server 只创建当前库。`product_metadata` 必须精确绑定 application `host-monitoring`、version `0.8.0`、
+schema revision `2` 与 SHA-256
+`11f6078a4a4f560c4e41e6617f8bbd9a446c310bd618dbb823f60f04e99ad18f`；现场 `sqlite_schema` 重新计算也
+必须一致。当前 DDL 中管理员列是 `_sarmg_administrators.username`，没有 `email` 或 role 列；DDL 自身约束 canonical
 username、非空 password hash、`active IN (0,1)`，`serve`/`admin-create` 加载已有行时再用 Foundation
 primitive 验证 username 和完整 current Argon2id 参数；DDL 还要求 `session_version > 0`，形成存储形状与
 密码策略双层 fail-closed。数据库/
@@ -268,8 +272,84 @@ pending/旧 denied 的有界清理和删除 Host 时的定向清理。长期实�
 
 ## 10. 监控与故障处理
 
+Run、Once 和 `doctor --delivery` 在加载身份或初始化采样器前获取 Foundation 运行会话锁。
+同一状态目录已有投递进程时，新进程直接失败；Spool 及其克隆保留该锁直到退出。
+Status、只读 Doctor、Probe 与 Pair 不获取投递会话锁，可以与运行服务并行；配对写入仍须
+自己的短事务锁。不要删除 `agent.instance.lock` 或 Spool 锁文件来强行启动第二个进程，
+锁文件在进程结束后保留是正常行为；应先正常停止原实例。
+
+Unix Agent 状态目录必须由当前服务账户拥有、权限为 0700，路径及祖先不能是符号链接。
+配对事务锁必须为同 UID/GID 的 0600 普通单链接文件。管理员以 root 配对时，新凭据和锁
+继承服务状态目录的 UID/GID；程序拒绝不安全的现有目录或锁，不自动 chmod/chown 修复。
+安装器/systemd 负责建立当前部署权限；权限异常时先停止并检查部署及现场，不把重新配对
+当作修复权限或覆盖异常文件的手段。配置文件仍保留安装器定义的服务可读权限（如 0640）。
+Unix 配置目录只接受 0700/0750/0755，配置文件只接受普通单链接的 0600/0640；读写使用
+Foundation 持有目录句柄，拒绝符号链接和硬链接。替换保留原 UID/GID/mode；新文件默认
+0600，不会创建缺失的父目录。配置大小上限为 64 KiB（含末尾换行），`status` 只报告配置
+错误而不修复文件。安装器负责建立供服务读取的组与权限，不通过放开 world-read 绕过检查。
+身份、令牌、配对 journal、授权状态与 active binding 的读取也检查普通单链接文件、0600 和
+所属 UID/GID；读取失败不会被当作未配对或触发权限修复。文件读取上限分别为 128 字节、
+4 KiB、64 KiB、16 KiB、16 KiB，包含文件中的空白。只读诊断沿用这些边界，不创建锁或状态。
+
+配对 journal 中的 bearer/polling 秘密在内存中使用共享清零秘密类型，克隆状态共享所有权。
+私有 journal 仍按当前协议保存明文，必须保护整个状态目录，不能上传到公开日志或 issue。
+序列化直接进入 64 KiB 有界清零缓冲区，超限保留原文件；损坏 journal 的错误不回显原值。
+轮询 Authorization 头标记为敏感。此边界不等于磁盘加密，也不保证 serde/HTTP 内部副本全部
+清零。配置中的 OTLP Token/TLS 身份密码也使用共享秘密类型，克隆配置与 Reporter 不复制
+Token 明文；保存直接进入有界清零缓冲区（含换行），超限保留原文件。配置仍是受权限保护
+的明文 JSON，不是加密存储；进程环境、解析器内部副本和 TLS 身份文件读取器不在完整清零
+保证内。损坏配置只报告错误位置、不回显输入值。凭据加载、轮换/恢复及失效已接入共享事务接口，
+Reporter 自带凭据代际；新配对 Pending 期间仍按 active binding 核对旧响应，不因 journal
+不再是 Active 而放过代际检查。无效轮换身份先于 token 写入拒绝，未知授权状态直接报错，
+不自动覆盖修复。当前配对 wire 保持不变，不保留无条件授权/失效的生产接口。
+
+服务使用同一事务中捕获的 Reporter、Host 身份和报告端点完整快照，构造失败不部分修改
+运行配置。若服务错过 B 的 Active、下一轮 C 已进入 Pending，会先加载仍有效的本地 B
+凭据，再继续 C 的轮询，不被 C 的网络等待阻塞；旧状态响应不作为回退快照的依据。
+切换同时通知采样器更新 Host 身份，并停止持有旧 Reporter 的可选 OTLP 工作线程。
+OTLP 始终为主报告持久确认后的尽力导出，旧工作线程取消时不承诺补发其队列。
+
+Host/OTLP 失败诊断不记录远端正文或 ErrorEnvelope 的任意 message/request_id，防止
+凭据被响应反射进日志；保留 HTTP 状态与本地已识别的固定机器码标签。确认正文解析错误
+只保留位置，身份不匹配不回显远端 ID；传输/读取错误移除 reqwest 附带的 URL。
+
+TLS identity/CA 每个文件上限 1 MiB，空文件拒绝。Unix 使用 Foundation 的受保护输入
+目录句柄与单文件名，拒绝符号链接、硬链接、特殊文件、不可信属主和 group/other 写权限。
+身份文件可用 0400/0440/0600/0640（允许配置的服务组读取）；CA 还允许 0444/0644。
+不要把系统证书符号链接直接作为配置输入；提供受保护的普通文件。CA 文件须解析出至少
+一张证书，未知文本不能静默当作空 CA 集合。Windows 当前只保证读取预算，原生句柄/ACL
+及 PKCS#12 验收仍未完成。Linux 测试需 OpenSSL CLI 和带 TLS 1.3 支持的 Python `ssl`；
+证书/私钥在临时私有目录生成，不提交私钥。除输入构造检查，还用独立 OpenSSL 回环服务
+验证实际 Reporter 的 TLS 1.2/1.3 投递、Authorization 和匹配 ACK；两种协议都覆盖未知
+CA、主机名不匹配、过期服务端证书、缺失/不受信任的客户端证书，失败不被分类为报告永久
+拒绝。可选 OTLP 另验证 TLS 1.3 mTLS、Bearer 与 gzip 请求，以及缺失客户端证书的拒绝。
+测试进程有握手/读取/退出期限，并由父测试负责终止和回收。这是 Linux 本机真实握手证据，
+不是 Windows/macOS PKCS#12、真实 Collector、生产代理或部署环境验收。
+
+可单独运行握手回归：`cargo test --locked -p host-monitor --lib --all-features transport::tls_tests`。
+
+Report、OTLP 和创建/轮询/激活配对共用 Agent Foundation HTTP 工厂，不再保留产品本地
+响应读取循环。请求总超时覆盖 DNS 到响应体读完，连接超时为总超时与 10 秒的较小值；
+每次请求最多接受 16 个解析地址，验证后绑定实际连接。响应 Header/Body 各限 64 KiB，
+拒绝超限 Content-Length 和分块响应。系统/环境代理及重定向禁用；依赖环境代理的部署
+不能绕过这一规则，需使用可直接访问的 HTTPS 端点。明文 loopback HTTP 只允许 debug
+构建，release 连 localhost 也拒绝。配对失败不再回显任意响应正文。Windows 托盘健康
+探测也通过同一工厂的同步适配器：只发无凭据的 `GET /health/live`，不读取 ProgramData
+状态或服务身份，Header/Body 各限 16 KiB，要求当前版本且不回显远端不匹配版本字符串。
+解析和实际 HTTP 路径已纳入跨平台测试，不代表 Windows 原生 UI/安装器验收完成。
+同步适配器持有并回收工作线程与运行时；系统 DNS 解析本身不可强制取消，可能延迟
+运行时退出，因此当前不能把 4 秒 HTTP 预算写成所有故障下严格的 4 秒调用返回保证。
+
+`status` 和默认只读 `doctor` 的 `tls` 检查复用实际投递客户端构造：检查平台身份格式、
+密码配置、受保护的有界文件读取和证书解析，不读取投递凭据、不获取事务/投递锁、不创建
+状态目录，也不做 DNS、连接或握手。失败返回固定 `tls_configuration_invalid`，不会附带
+底层解析错误链、证书内容或密码；Status 总体变为 `degraded`，Doctor 为 `unhealthy` 并
+返回失败退出码。`ok` 仅说明本地输入和构造通过，不证明证书在远端有效、服务可达或 mTLS
+授权成功。只读凭据检查使用同一 StateReader 的 4 KiB 上限与文件安全规则，拒绝特殊文件，
+不会因 FIFO 等待写入者；检查可读且非空不等于当前凭据已获 Server 授权。
+
 1. 检查 Server 的 systemd，以及 Agent 所在平台的 systemd/Windows Service/LaunchDaemon 状态和最近日志。
-2. Server 检查 liveness、`/health/ready`；writer 停止时 readiness 必须失败。
+2. Server 检查 `/healthz`、`/readyz`；writer 停止时 readiness 必须失败。
 3. 查看 429/503 与 `Retry-After`，区分准入限流、队列饱和和 writer 故障。
 4. 查看严格错误 `code`：`unauthorized` 表示当前 credential 已失效并需显式重新配对；
    `agent_host_mismatch` 表示该报告 Host 与 credential 绑定不一致，只丢弃该报告。不能按 `message` 分支。

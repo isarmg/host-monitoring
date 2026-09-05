@@ -2,35 +2,6 @@
 mod tests {
     use super::*;
 
-    fn probe_health_body(body: &str) -> ServerConnectionStatus {
-        probe_health_response("200 OK", Some("application/json"), body)
-    }
-
-    fn probe_health_response(
-        status: &str,
-        content_type: Option<&str>,
-        body: &str,
-    ) -> ServerConnectionStatus {
-        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
-        let address = listener.local_addr().unwrap();
-        let content_type = content_type
-            .map(|value| format!("Content-Type: {value}\r\n"))
-            .unwrap_or_default();
-        let response = format!(
-            "HTTP/1.1 {status}\r\n{content_type}Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
-            body.len()
-        );
-        let worker = thread::spawn(move || {
-            let (mut stream, _) = listener.accept().unwrap();
-            let mut request = [0_u8; 2048];
-            let _ = stream.read(&mut request).unwrap();
-            stream.write_all(response.as_bytes()).unwrap();
-        });
-        let result = probe_server_connection(&format!("http://{address}"));
-        worker.join().unwrap();
-        result
-    }
-
     #[test]
     fn serde_dtos_accept_only_the_current_wire_shape() {
         let current_preferences = format!(
@@ -107,30 +78,14 @@ mod tests {
             serde_json::from_str::<PairEvent>(r#"{"event":"pairing_cancelled","version":"0.0.0"}"#)
                 .is_err()
         );
-
-        let health_response = format!(
-            r#"{{"status":"ok","version":"{}","uptime_seconds":1}}"#,
-            env!("CARGO_PKG_VERSION")
-        );
-        assert!(serde_json::from_str::<ServerHealthResponse>(&health_response).is_ok());
-        assert!(
-            serde_json::from_str::<ServerHealthResponse>(r#"{"status":"ok","uptime_seconds":1}"#)
-                .is_err()
-        );
-        let health_response_with_unknown_field = format!(
-            r#"{{"status":"ok","version":"{}","uptime_seconds":1,"unknown_extension":true}}"#,
-            env!("CARGO_PKG_VERSION")
-        );
-        assert!(
-            serde_json::from_str::<ServerHealthResponse>(&health_response_with_unknown_field)
-                .is_err()
-        );
     }
 
     #[test]
     fn existing_preferences_can_be_atomically_replaced() {
-        let directory =
-            std::env::temp_dir().join(format!("host-monitoring-tray-preferences-{}", random_secret()));
+        let directory = std::env::temp_dir().join(format!(
+            "host-monitoring-tray-preferences-{}",
+            random_secret()
+        ));
         let path = directory.join("tray.json");
         let first = TrayPreferences {
             application_version: CurrentPackageVersion,
@@ -156,9 +111,7 @@ mod tests {
             generation: generation.clone(),
             request_id: request_id.clone(),
             activation_url: format!("{server}/activate/{request_id}"),
-            pairing_endpoint: format!(
-                "{server}/api/v2/host-monitor/pairing-requests"
-            ),
+            pairing_endpoint: format!("{server}/api/v2/host-monitor/pairing-requests"),
         };
         validate_pair_ipc_message(&message, server).unwrap();
 
@@ -198,68 +151,5 @@ mod tests {
         release.send(()).unwrap();
         worker.join().unwrap();
         assert!(claim_pairing_slot(&state).is_ok());
-    }
-
-    #[test]
-    fn connection_probe_distinguishes_unconfigured_and_healthy_server() {
-        let unconfigured = probe_server_connection("");
-        assert_eq!(unconfigured.status, "unconfigured");
-        assert!(unconfigured.version.is_none());
-
-        let healthy = probe_health_body(&format!(
-            r#"{{"status":"ok","version":"{}","uptime_seconds":1}}"#,
-            env!("CARGO_PKG_VERSION")
-        ));
-        assert_eq!(healthy.status, "online");
-        assert_eq!(healthy.version.as_deref(), Some(env!("CARGO_PKG_VERSION")));
-        assert!(healthy.latency_ms.is_some());
-    }
-
-    #[test]
-    fn connection_probe_rejects_missing_or_mismatched_server_version() {
-        let missing = probe_health_body(r#"{"status":"ok","uptime_seconds":1}"#);
-        assert_eq!(missing.status, "offline");
-        assert!(missing.version.is_none());
-        assert_eq!(
-            missing.message,
-            "Server 未返回可用的 Host Monitoring 健康状态（格式或版本信息无效）"
-        );
-
-        let mismatched = probe_health_body(
-            r#"{"status":"ok","version":"incompatible-test-version","uptime_seconds":1}"#,
-        );
-        assert_eq!(mismatched.status, "offline");
-        assert_eq!(
-            mismatched.version.as_deref(),
-            Some("incompatible-test-version")
-        );
-        assert!(mismatched.message.contains("版本不匹配"));
-        assert!(mismatched.message.contains(env!("CARGO_PKG_VERSION")));
-    }
-
-    #[test]
-    fn connection_probe_rejects_non_host_monitoring_success_response() {
-        let invalid = probe_health_body("<html>not Host Monitoring</html>");
-        assert_eq!(invalid.status, "offline");
-        assert!(invalid.message.contains("Host Monitoring"));
-
-        let current_body = format!(
-            r#"{{"status":"ok","version":"{}","uptime_seconds":1}}"#,
-            env!("CARGO_PKG_VERSION")
-        );
-        let wrong_status =
-            probe_health_response("204 No Content", Some("application/json"), &current_body);
-        assert_eq!(wrong_status.status, "offline");
-        assert!(wrong_status.message.contains("204"));
-
-        for content_type in [
-            None,
-            Some("text/plain"),
-            Some("application/vnd.host-monitoring+json"),
-        ] {
-            let wrong_type = probe_health_response("200 OK", content_type, &current_body);
-            assert_eq!(wrong_type.status, "offline");
-            assert!(wrong_type.message.contains("Content-Type"));
-        }
     }
 }

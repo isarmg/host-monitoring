@@ -17,10 +17,10 @@ use std::os::unix::fs::OpenOptionsExt;
 
 pub const APPLICATION: &str = "host-monitoring";
 pub const APPLICATION_VERSION: &str = env!("CARGO_PKG_VERSION");
-pub const SCHEMA_REVISION: i64 = 1;
-pub const SCHEMA_SHA256: &str = "12dd1e61426b6b99df3d429b8c36ee3a5b22d1da776d98fc960b45b4f58c8e05";
+pub const SCHEMA_REVISION: i64 = 2;
+pub const SCHEMA_SHA256: &str = "11f6078a4a4f560c4e41e6617f8bbd9a446c310bd618dbb823f60f04e99ad18f";
 
-const CURRENT_SCHEMA_SQL: &str = include_str!("../schema.sql");
+const CURRENT_SCHEMA_SQL: &str = include_str!("../../schema/generated/current_schema.sql");
 
 pub async fn open_or_initialize(database_url: &str) -> anyhow::Result<SqlitePool> {
     let path = database_path(database_url)?;
@@ -117,9 +117,6 @@ pub async fn initialize_empty(pool: &SqlitePool) -> anyhow::Result<()> {
         existing == 0,
         "database is not empty; product schema upgrades require the external upgrade tool"
     );
-    sqlx::raw_sql(PRODUCT_METADATA_DDL)
-        .execute(&mut *transaction)
-        .await?;
     sqlx::raw_sql(CURRENT_SCHEMA_SQL)
         .execute(&mut *transaction)
         .await?;
@@ -151,7 +148,7 @@ pub async fn validate_pool(pool: &SqlitePool) -> anyhow::Result<()> {
     .await?;
     ensure!(
         metadata_sql.as_deref() == Some(PRODUCT_METADATA_DDL),
-        "database product_metadata schema is not the exact current contract"
+        "database product_metadata schema is not the exact current contract: actual={metadata_sql:?} expected={PRODUCT_METADATA_DDL:?}"
     );
     sarmg_sqlite::require_pool_current_schema(pool, &expected_identity()?)
         .await
@@ -204,7 +201,7 @@ fn validate_connection_contract(connection: &Connection) -> anyhow::Result<()> {
         .optional()?;
     ensure!(
         metadata_sql.as_deref() == Some(PRODUCT_METADATA_DDL),
-        "database product_metadata schema is not the exact current contract"
+        "database product_metadata schema is not the exact current contract: actual={metadata_sql:?} expected={PRODUCT_METADATA_DDL:?}"
     );
     let metadata = {
         let mut statement = connection.prepare(
@@ -239,7 +236,7 @@ fn validate_connection_contract(connection: &Connection) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn expected_identity() -> anyhow::Result<SchemaIdentity> {
+pub fn expected_identity() -> anyhow::Result<SchemaIdentity> {
     SchemaIdentity::new(
         APPLICATION,
         APPLICATION_VERSION,

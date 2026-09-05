@@ -24,8 +24,12 @@ impl Fixture {
             Some("https://192.0.2.10:1/api/v2/host-monitor/pairing-requests".into());
         config.request_timeout_seconds = 1;
         config.state_dir = state_dir.clone();
-        config.allow_insecure_http = false;
         fs::write(&config_path, serde_json::to_vec_pretty(&config).unwrap()).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&config_path, fs::Permissions::from_mode(0o640)).unwrap();
+        }
         Self {
             root,
             state_dir,
@@ -33,16 +37,11 @@ impl Fixture {
         }
     }
 
-    fn pair(&self, cli_override: bool, environment_override: bool) -> std::process::Output {
+    fn pair(&self, arguments: &[&str]) -> std::process::Output {
         let mut command = Command::new(env!("CARGO_BIN_EXE_host-monitor"));
         command.args(["pair", "--config", self.config_path.to_str().unwrap()]);
-        if cli_override {
-            command.arg("--allow-insecure-http");
-        }
+        command.args(arguments);
         command.env_remove("HOST_MONITOR_ALLOW_INSECURE_HTTP");
-        if environment_override {
-            command.env("HOST_MONITOR_ALLOW_INSECURE_HTTP", "true");
-        }
         command.output().unwrap()
     }
 }
@@ -53,13 +52,18 @@ impl Drop for Fixture {
     }
 }
 
-fn assert_temporary_override_is_rejected(cli_override: bool, environment_override: bool) {
+fn assert_remote_http_is_rejected(arguments: &[&str]) {
     let fixture = Fixture::new();
-    let output = fixture.pair(cli_override, environment_override);
+    let output = fixture.pair(arguments);
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
+    let expected = if arguments.is_empty() {
+        "telemetry endpoint violates Foundation network policy"
+    } else {
+        "unknown argument: --allow-insecure-http"
+    };
     assert!(
-        stderr.contains("requires allow_insecure_http=true in the existing persistent config"),
+        stderr.contains(expected),
         "unexpected pairing error: {stderr}"
     );
     assert!(
@@ -69,11 +73,11 @@ fn assert_temporary_override_is_rejected(cli_override: bool, environment_overrid
 }
 
 #[test]
-fn cli_override_cannot_authorize_a_durable_remote_http_binding() {
-    assert_temporary_override_is_rejected(true, false);
+fn remote_http_is_unconditionally_rejected() {
+    assert_remote_http_is_rejected(&[]);
 }
 
 #[test]
-fn environment_override_cannot_authorize_a_durable_remote_http_binding() {
-    assert_temporary_override_is_rejected(false, true);
+fn removed_cli_override_is_not_accepted() {
+    assert_remote_http_is_rejected(&["--allow-insecure-http"]);
 }

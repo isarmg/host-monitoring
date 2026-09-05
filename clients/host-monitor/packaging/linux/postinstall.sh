@@ -5,7 +5,7 @@ PATH=/usr/sbin:/usr/bin:/sbin:/bin
 export PATH
 
 service_name=host-monitor.service
-package_version=0.7.0
+package_version=0.8.0
 agent_binary=/usr/bin/host-monitor
 account_state_dir=/var/lib/host-monitor-package
 state_dir=/var/lib/host-monitor
@@ -469,7 +469,7 @@ else
 fi
 
 # Refuse to run the service under an unexpected pre-existing identity. An
-# existing account is accepted only when the current 0.7.0 marker binds its
+# existing account is accepted only when the current 0.8.0 marker binds its
 # exact numeric identity.
 user_uid=$(printf '%s\n' "$user_entry" | cut -d: -f3)
 user_gid=$(printf '%s\n' "$user_entry" | cut -d: -f4)

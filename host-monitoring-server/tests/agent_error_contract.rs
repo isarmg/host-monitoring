@@ -1,4 +1,4 @@
-use std::{path::PathBuf, time::Duration};
+use std::path::PathBuf;
 
 use axum::{
     Router,
@@ -8,7 +8,6 @@ use axum::{
 use chrono::Utc;
 use host_monitor::transport::{SendError, classify_host_monitoring_response};
 use host_monitoring_server::{
-    auth::{Auth, CookieMode},
     http::{AppState, router},
     store,
     telemetry::{TelemetryWriterConfig, TelemetryWriterTask},
@@ -38,16 +37,14 @@ async fn fixture() -> Fixture {
     store::initialize_empty(&pool)
         .await
         .expect("initialize current test schema");
-    let auth = Auth::new(
-        Duration::from_secs(60),
-        Duration::from_secs(600),
-        CookieMode::LoopbackDevelopment,
-    )
-    .expect("build development auth");
-    let (state, telemetry_writer) =
-        AppState::with_telemetry_config(pool.clone(), auth, TelemetryWriterConfig::production());
+    let (state, telemetry_writer) = AppState::with_telemetry_config(
+        pool.clone(),
+        sarmg_admin_auth::AdministratorOriginMode::LoopbackDevelopmentHttp,
+        TelemetryWriterConfig::production(),
+    );
     Fixture {
-        app: router(state, PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("web")),
+        app: router(state, PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("web"))
+            .expect("compose platform router"),
         pool,
         _telemetry_writer: telemetry_writer,
     }

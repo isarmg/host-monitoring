@@ -2,15 +2,168 @@
 mod tests {
     use super::*;
 
-    #[test]
-    fn zero_jitter_is_exact() {
-        assert_eq!(jitter(Duration::from_secs(10), 0), Duration::from_secs(10));
+    /// Exercises the real coordinator, Reporter HTTP request and durable Spool,
+    /// not a look-alike select loop. Wake edges must not cancel a slow response.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn sampling_wakes_do_not_cancel_an_in_flight_http_batch() {
+        use std::os::unix::fs::PermissionsExt;
+        struct Directory(std::path::PathBuf);
+        impl Drop for Directory {
+            fn drop(&mut self) {
+                let _ = fs::remove_dir_all(&self.0);
+            }
+        }
+        let directory = Directory(
+            std::env::temp_dir().join(format!("host-delivery-flight-{}", Uuid::new_v4())),
+        );
+        fs::create_dir(&directory.0).unwrap();
+        fs::set_permissions(&directory.0, fs::Permissions::from_mode(0o700)).unwrap();
+        let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let origin = format!("http://{}", listener.local_addr().unwrap());
+        let endpoint = format!("{origin}/api/v2/host-monitor/report");
+        let generation = Uuid::new_v4();
+        let request_id = Uuid::new_v4();
+        let instance_id = Uuid::new_v4();
+        let write_private = |name: &str, body: &[u8]| {
+            let path = directory.0.join(name);
+            fs::write(&path, body).unwrap();
+            fs::set_permissions(path, fs::Permissions::from_mode(0o600)).unwrap();
+        };
+        write_private("host-id", instance_id.to_string().as_bytes());
+        write_private("agent-token", "a".repeat(64).as_bytes());
+        write_private(
+            "auth-state.json",
+            &serde_json::to_vec(&serde_json::json!({
+                "version": env!("CARGO_PKG_VERSION"), "status": "authorized",
+                "reason": "fixture", "changed_at": chrono::Utc::now(),
+            }))
+            .unwrap(),
+        );
+        write_private(
+            "pairing-state.json",
+            &serde_json::to_vec(&serde_json::json!({
+                "phase": "active", "version": env!("CARGO_PKG_VERSION"),
+                "generation": generation, "request_id": request_id,
+                "activation_url": format!("{origin}/activate/test"),
+                "instance_id": instance_id, "report_endpoint": endpoint,
+                "completed_at": chrono::Utc::now(),
+            }))
+            .unwrap(),
+        );
+        write_private(
+            "active-binding.json",
+            &serde_json::to_vec(&serde_json::json!({
+                "version": env!("CARGO_PKG_VERSION"), "generation": generation,
+                "request_id": request_id, "instance_id": instance_id, "report_endpoint": endpoint,
+            }))
+            .unwrap(),
+        );
+        let mut config = AgentConfig::default();
+        config.endpoint = endpoint;
+        config.state_dir = directory.0.clone();
+        config.jitter_percent = 0;
+        config.request_timeout_seconds = 3;
+        let reporter = Reporter::new(&config).unwrap();
+        let host = load_host_identity(&directory.0).unwrap();
+        let spool = Spool::open(&directory.0, 1024 * 1024).unwrap();
+        let report = SystemSampler::new().collect(host.clone(), 10, 0);
+        spool.enqueue(&report).unwrap();
+        let acknowledgement = serde_json::to_vec(&serde_json::json!({
+            "host_id": report.host.id, "report_id": report.report_id,
+            "accepted": true, "received_at": chrono::Utc::now(),
+        }))
+        .unwrap();
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let server = std::thread::spawn(move || {
+            listener.set_nonblocking(true).unwrap();
+            let deadline = Instant::now() + Duration::from_secs(3);
+            let mut stream = loop {
+                match listener.accept() {
+                    Ok((stream, _)) => break stream,
+                    Err(error)
+                        if error.kind() == std::io::ErrorKind::WouldBlock
+                            && Instant::now() < deadline =>
+                    {
+                        std::thread::sleep(Duration::from_millis(5));
+                    }
+                    Err(error) => panic!("fixture accept: {error}"),
+                }
+            };
+            stream
+                .set_read_timeout(Some(Duration::from_secs(3)))
+                .unwrap();
+            stream
+                .set_write_timeout(Some(Duration::from_secs(3)))
+                .unwrap();
+            let mut request = Vec::new();
+            let mut chunk = [0; 4096];
+            loop {
+                let count = stream.read(&mut chunk).unwrap();
+                assert!(count > 0 && request.len() + count <= 1024 * 1024);
+                request.extend_from_slice(&chunk[..count]);
+                if let Some(header_end) = request.windows(4).position(|bytes| bytes == b"\r\n\r\n")
+                {
+                    let length: usize = std::str::from_utf8(&request[..header_end])
+                        .unwrap()
+                        .lines()
+                        .find_map(|line| {
+                            line.to_ascii_lowercase()
+                                .strip_prefix("content-length:")
+                                .map(|value| value.trim().parse().unwrap())
+                        })
+                        .unwrap();
+                    if request.len() >= header_end + 4 + length {
+                        break;
+                    }
+                }
+            }
+            started_tx.send(()).unwrap();
+            release_rx.recv_timeout(Duration::from_secs(3)).unwrap();
+            write!(stream, "HTTP/1.1 202 Accepted\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", acknowledgement.len()).unwrap();
+            stream.write_all(&acknowledgement).unwrap();
+        });
+        let (wake, receiver) = sarmg_agent_runtime::DeliveryWake::channel();
+        let (stop, shutdown) = watch::channel(false);
+        let (host_updates, _host_receiver) = watch::channel(host.clone());
+        let driver = HostDeliveryDriver::new(config, host, spool.clone(), reporter, host_updates);
+        let task = tokio::spawn(
+            sarmg_agent_runtime::DeliveryWorker::new(driver, 0)
+                .unwrap()
+                .run(receiver, shutdown),
+        );
+        tokio::time::timeout(Duration::from_secs(3), started_rx)
+            .await
+            .unwrap()
+            .unwrap();
+        for _ in 0..10 {
+            assert!(wake.notify());
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        release_tx.send(()).unwrap();
+        let drained = tokio::time::timeout(Duration::from_secs(2), async {
+            while spool.pending_count().unwrap() != 0 {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await;
+        stop.send(true).unwrap();
+        tokio::time::timeout(Duration::from_secs(2), task)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        server.join().unwrap();
+        assert!(
+            drained.is_ok(),
+            "sampling wake cancelled the only successful HTTP response"
+        );
     }
 
     #[tokio::test(start_paused = true)]
     async fn a_full_delivery_notification_channel_does_not_shift_sampling_cadence() {
-        let (sender, _receiver) = mpsc::channel(1);
-        let trigger = DeliveryTrigger { sender };
+        let (trigger, _receiver) = sarmg_agent_runtime::DeliveryWake::channel();
         let mut cadence = SamplingCadence::starting_now();
         let start = cadence.deadline();
 
@@ -35,65 +188,6 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
-    async fn a_ready_delivery_is_not_raced_against_its_expired_retry_timer() {
-        let now = Instant::now();
-        let (ready, next_retry) = delivery_timing(false, Some(now), now);
-        assert!(ready);
-        assert_eq!(next_retry, None);
-
-        let deadline = next_retry.unwrap_or(now + Duration::from_secs(60));
-        let delivered = tokio::select! {
-            biased;
-            completed = async {
-                // A real HTTP request returns Pending while DNS/TCP/TLS makes progress.
-                tokio::task::yield_now().await;
-                true
-            }, if ready => completed,
-            _ = tokio::time::sleep_until(deadline.into()) => false,
-        };
-
-        assert!(
-            delivered,
-            "an expired retry timer cancelled a pending delivery future"
-        );
-    }
-
-    #[test]
-    fn a_future_delivery_retry_remains_a_timer_until_it_is_ready() {
-        let now = Instant::now();
-        let retry_at = now + Duration::from_secs(5);
-        let (ready, next_retry) = delivery_timing(false, Some(retry_at), now);
-
-        assert!(!ready);
-        assert_eq!(next_retry, Some(retry_at));
-    }
-
-    #[test]
-    fn authorization_blocks_both_delivery_and_its_retry_timer() {
-        let now = Instant::now();
-        let (ready, next_retry) = delivery_timing(true, Some(now), now);
-
-        assert!(!ready);
-        assert_eq!(next_retry, None);
-    }
-
-    #[test]
-    fn persistent_pairing_snapshot_failures_back_off_and_cap() {
-        let now = Instant::now();
-        let (retry_at, next_backoff, delay) =
-            pairing_failure_schedule(now, Duration::from_secs(1), 0);
-        assert_eq!(delay, Duration::from_secs(1));
-        assert_eq!(retry_at, now + Duration::from_secs(1));
-        assert_eq!(next_backoff, Duration::from_secs(2));
-
-        let (retry_at, next_backoff, delay) =
-            pairing_failure_schedule(now, Duration::from_secs(300), 0);
-        assert_eq!(delay, Duration::from_secs(300));
-        assert_eq!(retry_at, now + Duration::from_secs(300));
-        assert_eq!(next_backoff, Duration::from_secs(300));
-    }
-
-    #[tokio::test(start_paused = true)]
     async fn delivery_worker_shutdown_has_a_hard_upper_bound() {
         let worker = tokio::spawn(async {
             std::future::pending::<()>().await;
@@ -109,17 +203,11 @@ mod tests {
 
     #[tokio::test]
     async fn cancelled_one_shot_retains_the_current_report_for_idempotent_retry() {
-        let directory = std::env::temp_dir().join(format!(
-            "host-monitoring-once-shutdown-{}",
-            Uuid::new_v4()
-        ));
+        let directory =
+            std::env::temp_dir().join(format!("host-monitoring-once-shutdown-{}", Uuid::new_v4()));
         let spool = Spool::open(&directory, 1024 * 1024).unwrap();
         let mut sampler = SystemSampler::new();
-        let report = sampler.collect(
-            transient_host_identity(Uuid::new_v4()),
-            10,
-            0,
-        );
+        let report = sampler.collect(transient_host_identity(Uuid::new_v4()), 10, 0);
         let (controller, shutdown) = host_monitor::service::shutdown_channel();
         controller.request_shutdown();
 
@@ -129,7 +217,10 @@ mod tests {
             retain_once_report(&spool, &report).unwrap(),
             RunOnceOutcome::Shutdown
         );
-        let pending = spool.oldest().unwrap().expect("cancelled report is durable");
+        let pending = spool
+            .oldest()
+            .unwrap()
+            .expect("cancelled report is durable");
         assert_eq!(pending.report.report_id, report.report_id);
 
         drop(spool);
@@ -140,7 +231,7 @@ mod tests {
     #[test]
     fn transient_spool_failures_do_not_stop_the_agent() {
         let mut health = SpoolHealth::default();
-        for _ in 0..(SpoolHealth::MAX_CONSECUTIVE_FAILURES - 1) {
+        for _ in 0..(sarmg_agent_runtime::MAX_QUEUE_FAILURES - 1) {
             health
                 .record_failure("测试", &"disk full")
                 .expect("未达阈值前必须继续运行");
@@ -151,7 +242,7 @@ mod tests {
     #[test]
     fn sustained_spool_failures_eventually_stop_the_agent() {
         let mut health = SpoolHealth::default();
-        for _ in 0..(SpoolHealth::MAX_CONSECUTIVE_FAILURES - 1) {
+        for _ in 0..(sarmg_agent_runtime::MAX_QUEUE_FAILURES - 1) {
             health.record_failure("测试", &"disk full").unwrap();
         }
         let error = health
@@ -167,12 +258,12 @@ mod tests {
     #[test]
     fn a_single_success_resets_the_failure_streak() {
         let mut health = SpoolHealth::default();
-        for _ in 0..(SpoolHealth::MAX_CONSECUTIVE_FAILURES - 1) {
+        for _ in 0..(sarmg_agent_runtime::MAX_QUEUE_FAILURES - 1) {
             health.record_failure("测试", &"transient").unwrap();
         }
         health.record_success();
         // 归零后应能再撑满一整轮，说明计数确实被重置了。
-        for _ in 0..(SpoolHealth::MAX_CONSECUTIVE_FAILURES - 1) {
+        for _ in 0..(sarmg_agent_runtime::MAX_QUEUE_FAILURES - 1) {
             health
                 .record_failure("测试", &"transient")
                 .expect("成功一次后计数应归零");

@@ -8,15 +8,20 @@ fn otlp_test_config(endpoint: String) -> (AgentConfig, std::path::PathBuf) {
     let state_dir =
         std::env::temp_dir().join(format!("host-monitoring-otlp-live-{}", Uuid::new_v4()));
     std::fs::create_dir_all(&state_dir).expect("create OTLP test state directory");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&state_dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+    }
     let instance_id = Uuid::new_v4();
     let request_id = Uuid::new_v4();
     let generation = Uuid::new_v4();
     let report_endpoint = "https://host-monitoring.example/api/v2/host-monitor/report";
-    std::fs::write(state_dir.join("agent-token"), "test-only-host-token")
+    write_private_fixture(state_dir.join("agent-token"), "test-only-host-token")
         .expect("seed paired test credential");
-    std::fs::write(state_dir.join("host-id"), instance_id.to_string())
+    write_private_fixture(state_dir.join("host-id"), instance_id.to_string())
         .expect("seed paired test identity");
-    std::fs::write(
+    write_private_fixture(
         state_dir.join("auth-state.json"),
         serde_json::to_vec(&serde_json::json!({
             "version": env!("CARGO_PKG_VERSION"),
@@ -27,7 +32,7 @@ fn otlp_test_config(endpoint: String) -> (AgentConfig, std::path::PathBuf) {
         .unwrap(),
     )
     .expect("seed current authorization state");
-    std::fs::write(
+    write_private_fixture(
         state_dir.join("pairing-state.json"),
         serde_json::to_vec(&serde_json::json!({
             "phase": "active",
@@ -44,7 +49,7 @@ fn otlp_test_config(endpoint: String) -> (AgentConfig, std::path::PathBuf) {
         .unwrap(),
     )
     .expect("seed current Active pairing state");
-    std::fs::write(
+    write_private_fixture(
         state_dir.join("active-binding.json"),
         serde_json::to_vec(&serde_json::json!({
             "version": env!("CARGO_PKG_VERSION"),
@@ -271,4 +276,18 @@ async fn collector_accepts_a_fully_populated_report_with_every_device_type() {
         .await
         .expect("Collector must accept a fully populated report: 网卡/磁盘/传感器/GPU 的字段编号都在这条路径上");
     std::fs::remove_dir_all(state_dir).expect("remove OTLP test state directory");
+}
+
+fn write_private_fixture(
+    path: impl AsRef<std::path::Path>,
+    bytes: impl AsRef<[u8]>,
+) -> std::io::Result<()> {
+    let path = path.as_ref();
+    std::fs::write(path, bytes)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+    }
+    Ok(())
 }

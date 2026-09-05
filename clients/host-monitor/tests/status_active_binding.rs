@@ -17,18 +17,23 @@ impl Fixture {
         let state_dir = root.join("state");
         let config_path = root.join("config.json");
         fs::create_dir_all(&state_dir).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&state_dir, fs::Permissions::from_mode(0o700)).unwrap();
+        }
         let mut config = AgentConfig::default();
         config.endpoint = "https://old.example/api/v2/host-monitor/report".into();
         config.state_dir = state_dir.clone();
-        fs::write(&config_path, serde_json::to_vec_pretty(&config).unwrap()).unwrap();
+        write_private_fixture(&config_path, serde_json::to_vec_pretty(&config).unwrap()).unwrap();
 
         let generation = Uuid::new_v4();
         let request_id = Uuid::new_v4();
         let instance_id = Uuid::new_v4();
         let report_endpoint = "https://new.example/api/v2/host-monitor/report".to_string();
-        fs::write(state_dir.join("host-id"), instance_id.to_string()).unwrap();
-        fs::write(state_dir.join("agent-token"), "a".repeat(64)).unwrap();
-        fs::write(
+        write_private_fixture(state_dir.join("host-id"), instance_id.to_string()).unwrap();
+        write_private_fixture(state_dir.join("agent-token"), "a".repeat(64)).unwrap();
+        write_private_fixture(
             state_dir.join("auth-state.json"),
             serde_json::to_vec_pretty(&serde_json::json!({
                 "version": env!("CARGO_PKG_VERSION"),
@@ -39,7 +44,7 @@ impl Fixture {
             .unwrap(),
         )
         .unwrap();
-        fs::write(
+        write_private_fixture(
             state_dir.join("pairing-state.json"),
             serde_json::to_vec_pretty(&serde_json::json!({
                 "phase": "active",
@@ -54,7 +59,7 @@ impl Fixture {
             .unwrap(),
         )
         .unwrap();
-        fs::write(
+        write_private_fixture(
             state_dir.join("active-binding.json"),
             serde_json::to_vec_pretty(&serde_json::json!({
                 "version": env!("CARGO_PKG_VERSION"),
@@ -140,4 +145,18 @@ fn status_fails_closed_on_a_mismatched_binding_without_mutating_state() {
     assert!(status["endpoint"].is_null());
     assert_eq!(status["checks"]["active_binding"]["status"], "error");
     assert_eq!(state_files(&fixture.state_dir), before);
+}
+
+fn write_private_fixture(
+    path: impl AsRef<std::path::Path>,
+    bytes: impl AsRef<[u8]>,
+) -> std::io::Result<()> {
+    let path = path.as_ref();
+    std::fs::write(path, bytes)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+    }
+    Ok(())
 }

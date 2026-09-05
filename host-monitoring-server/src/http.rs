@@ -10,7 +10,7 @@ use axum::{
     Json, Router,
     body::Body,
     extract::{ConnectInfo, DefaultBodyLimit, Extension, Path, Query, Request, State},
-    http::{HeaderMap, HeaderValue, Method, StatusCode, Uri, header},
+    http::{HeaderMap, HeaderValue, StatusCode, header},
     middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::{any, get, post},
@@ -21,15 +21,13 @@ use host_protocol::{
     ActivatePairingStatus, AgentPairingRequest, AgentPairingResponse, AgentPairingStatusResponse,
     AgentReport, AgentReportAck,
 };
-use sarmg_contracts::{
-    ADMIN_LOGIN_PATH, ADMIN_LOGOUT_PATH, ADMIN_SESSION_PATH, AdministratorLoginRequest,
-    AdministratorSession,
-};
+use sarmg_admin_auth::AdministratorOriginMode;
+use sarmg_admin_core::AdministratorService;
+use sarmg_admin_sqlite::SqliteAdministratorStore;
 use tokio::sync::Mutex;
 use tower_http::services::ServeDir;
 
 use crate::{
-    auth::{self, Principal},
     error::{Error, FoundationErrorEnvelope, Result, database, framework_envelope},
     model::{
         CreateAgentInstanceRequest, CreatedAgentInstance, HistoryQuery, HistoryResponse,
@@ -45,64 +43,95 @@ use crate::{
 #[derive(Clone)]
 pub struct AppState {
     pub pool: sqlx::SqlitePool,
-    pub auth: crate::auth::Auth,
-    login_admission: crate::login::LoginAdmission,
+    administrator: Arc<AdministratorService<SqliteAdministratorStore>>,
+    administrator_origin: AdministratorOriginMode,
+    runtime: sarmg_server_runtime::RuntimeHandle,
     pairing_admission: crate::pairing_admission::PairingAdmission,
     report_buckets: Arc<Mutex<ReportBuckets>>,
     telemetry: TelemetryWriter,
+    #[cfg(test)]
+    _telemetry_task: Option<Arc<TelemetryWriterTask>>,
 }
 
 impl AppState {
     #[cfg(test)]
-    pub fn new(pool: sqlx::SqlitePool, auth: crate::auth::Auth) -> Self {
-        Self::with_telemetry_config(pool, auth, TelemetryWriterConfig::production()).0
+    pub fn new(pool: sqlx::SqlitePool, origin: AdministratorOriginMode) -> Self {
+        let (mut state, task) =
+            Self::with_telemetry_config(pool, origin, TelemetryWriterConfig::production());
+        state._telemetry_task = Some(Arc::new(task));
+        state
     }
 
     pub fn with_telemetry_config(
         pool: sqlx::SqlitePool,
-        auth: crate::auth::Auth,
+        origin: AdministratorOriginMode,
         config: TelemetryWriterConfig,
     ) -> (Self, TelemetryWriterTask) {
         let (telemetry, task) = TelemetryWriter::start(pool.clone(), config);
-        (Self::with_telemetry_writer(pool, auth, telemetry), task)
+        (Self::with_telemetry_writer(pool, origin, telemetry), task)
     }
 
     pub fn with_telemetry_writer(
         pool: sqlx::SqlitePool,
-        auth: crate::auth::Auth,
+        origin: AdministratorOriginMode,
         telemetry: TelemetryWriter,
     ) -> Self {
+        let runtime = sarmg_server_runtime::platform_handle(product_descriptor())
+            .expect("the compiled Host Monitoring descriptor is valid");
+        Self::with_runtime(pool, origin, telemetry, runtime)
+    }
+
+    pub fn with_runtime(
+        pool: sqlx::SqlitePool,
+        administrator_origin: AdministratorOriginMode,
+        telemetry: TelemetryWriter,
+        runtime: sarmg_server_runtime::RuntimeHandle,
+    ) -> Self {
+        let administrator = Arc::new(AdministratorService::new(SqliteAdministratorStore::new(
+            pool.clone(),
+        )));
         Self {
             pool,
-            auth,
-            login_admission: crate::login::LoginAdmission::production(),
+            administrator,
+            administrator_origin,
+            runtime,
             pairing_admission: crate::pairing_admission::PairingAdmission::production(),
             report_buckets: Arc::new(Mutex::new(ReportBuckets::production())),
             telemetry,
+            #[cfg(test)]
+            _telemetry_task: None,
         }
-    }
-
-    #[cfg(test)]
-    fn with_login_admission(
-        pool: sqlx::SqlitePool,
-        auth: crate::auth::Auth,
-        login_admission: crate::login::LoginAdmission,
-    ) -> Self {
-        let mut state = Self::new(pool, auth);
-        state.login_admission = login_admission;
-        state
     }
 
     #[cfg(test)]
     fn with_pairing_admission(
         pool: sqlx::SqlitePool,
-        auth: crate::auth::Auth,
+        origin: AdministratorOriginMode,
         pairing_admission: crate::pairing_admission::PairingAdmission,
     ) -> Self {
-        let mut state = Self::new(pool, auth);
+        let mut state = Self::new(pool, origin);
         state.pairing_admission = pairing_admission;
         state
     }
+}
+
+pub fn product_descriptor() -> sarmg_server_runtime::ProductDescriptor {
+    sarmg_server_runtime::ProductDescriptor {
+        id: "host-monitoring".into(),
+        version: env!("CARGO_PKG_VERSION").into(),
+        foundation_revision: "394c0201d85c5a331cded87db4af8fa01f6b6258".into(),
+        profile: "server-control-plane".into(),
+        capabilities: vec![
+            "admin-persistent".into(),
+            "server-runtime".into(),
+            "server-health".into(),
+        ],
+    }
+}
+
+#[derive(Clone, Debug)]
+struct Principal {
+    subject: String,
 }
 
 const REPORT_BUCKET_BURST: f64 = 64.0;
@@ -214,23 +243,16 @@ impl ReportBuckets {
     }
 }
 
-pub fn router(state: AppState, static_dir: PathBuf) -> Router {
-    let public_auth = Router::new()
-        .route(ADMIN_LOGIN_PATH, post(login))
-        .layer(DefaultBodyLimit::max(crate::login::LOGIN_BODY_LIMIT_BYTES))
-        .route_layer(middleware::from_fn_with_state(
-            state.clone(),
-            login_source_admission,
-        ));
-
-    let protected_auth = Router::new()
-        .route(ADMIN_LOGOUT_PATH, post(logout))
-        .route(ADMIN_SESSION_PATH, get(session))
-        .route_layer(middleware::from_fn_with_state(
-            state.clone(),
-            console_admission,
-        ));
-
+pub fn router(
+    state: AppState,
+    static_dir: PathBuf,
+) -> std::result::Result<Router, sarmg_admin_core::Error> {
+    let platform = sarmg_server_runtime::platform_router(
+        state.runtime.clone(),
+        "host-monitoring",
+        state.administrator_origin,
+        Arc::clone(&state.administrator),
+    )?;
     let console = Router::new()
         .route("/api/v2/monitoring/hosts", get(list_hosts))
         .route("/api/v2/monitoring/hosts/{host_id}", get(host_detail))
@@ -278,18 +300,14 @@ pub fn router(state: AppState, static_dir: PathBuf) -> Router {
             post(activate_capability),
         )
         .layer(DefaultBodyLimit::max(AGENT_REPORT_MAX_BODY_BYTES));
-    Router::new()
-        .route("/health/live", get(live))
-        .route("/health/ready", get(ready))
-        .merge(public_auth)
-        .merge(protected_auth)
-        .merge(console)
-        .merge(agent)
+    let product = console.merge(agent).with_state(state);
+    Ok(Router::new()
+        .merge(platform)
+        .merge(product)
         .route("/api", any(api_not_found))
         .route("/api/{*path}", any(api_not_found))
         .fallback_service(ServeDir::new(static_dir))
-        .layer(middleware::from_fn(normalize_api_errors))
-        .with_state(state)
+        .layer(middleware::from_fn(normalize_api_errors)))
 }
 
 async fn api_not_found() -> StatusCode {
@@ -305,6 +323,10 @@ async fn normalize_api_errors(request: Request, next: Next) -> Response {
         || response
             .extensions()
             .get::<FoundationErrorEnvelope>()
+            .is_some()
+        || response
+            .extensions()
+            .get::<sarmg_admin_axum::FoundationErrorResponse>()
             .is_some()
     {
         return response;
@@ -324,158 +346,29 @@ async fn normalize_api_errors(request: Request, next: Next) -> Response {
     Response::from_parts(parts, Body::from(body))
 }
 
-async fn login_source_admission(
-    State(state): State<AppState>,
-    request: Request,
-    next: Next,
-) -> Result<Response> {
-    // This is the transport peer installed by Axum's make-service. Forwarded
-    // headers are intentionally not trusted without an explicit proxy policy.
-    let peer_ip = request
-        .extensions()
-        .get::<ConnectInfo<SocketAddr>>()
-        .map(|connect| connect.0.ip())
-        .ok_or(Error::Forbidden)?;
-    state.login_admission.check_source(peer_ip)?;
-    Ok(next.run(request).await)
-}
-
 async fn console_admission(
     State(state): State<AppState>,
     mut request: Request,
     next: Next,
-) -> Result<Response> {
-    let principal = auth::require_console(
+) -> Response {
+    let identity = match sarmg_admin_axum::authenticate_request(
+        &state.administrator,
         request.headers(),
         request.uri(),
-        &state,
-        requires_csrf(request.method()),
+        request.method(),
+        "host-monitoring",
+        state.administrator_origin,
     )
-    .await?;
+    .await
+    {
+        Ok(identity) => identity,
+        Err(response) => return *response,
+    };
+    let principal = Principal {
+        subject: identity.administrator_id.to_string(),
+    };
     request.extensions_mut().insert(principal);
-    Ok(next.run(request).await)
-}
-
-fn requires_csrf(method: &Method) -> bool {
-    method == Method::POST
-        || method == Method::PUT
-        || method == Method::PATCH
-        || method == Method::DELETE
-}
-
-async fn login(
-    State(state): State<AppState>,
-    uri: Uri,
-    headers: HeaderMap,
-    Json(request): Json<AdministratorLoginRequest>,
-) -> Result<Response> {
-    if !state.auth.request_is_same_origin(&headers, &uri) {
-        return Err(Error::Forbidden);
-    }
-    let normalized_username = store::normalize_username(&request.username)
-        .map_err(|error| Error::BadRequest(error.to_string()))?;
-    sarmg_admin_auth::validate_password(&request.password)
-        .map_err(|error| Error::BadRequest(error.to_string()))?;
-    state.login_admission.check_account(&normalized_username)?;
-    let user = store::find_active_user_by_username(&state.pool, &normalized_username)
-        .await
-        .map_err(database)?;
-    let user = state
-        .login_admission
-        .verify_user(user, request.password)
-        .await?
-        .ok_or(Error::Unauthorized)?;
-    let issued = state.auth.issue_session(&state.pool, &user).await?;
-    let cookie = state.auth.session_cookie(&issued.token);
-    let value =
-        HeaderValue::from_str(&cookie).map_err(|error| Error::BadRequest(error.to_string()))?;
-    let mut response = (
-        StatusCode::OK,
-        [(header::SET_COOKIE, value)],
-        Json(administrator_session(
-            user.user_id,
-            user.username,
-            issued.csrf_token,
-        )?),
-    )
-        .into_response();
-    response
-        .headers_mut()
-        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
-    Ok(response)
-}
-
-async fn logout(
-    State(state): State<AppState>,
-    Extension(principal): Extension<Principal>,
-) -> Result<Response> {
-    state
-        .auth
-        .revoke_session(&state.pool, principal.session_id)
-        .await?;
-    let cookie = state.auth.expired_session_cookie();
-    let value =
-        HeaderValue::from_str(&cookie).map_err(|error| Error::BadRequest(error.to_string()))?;
-    let mut response = (StatusCode::NO_CONTENT, [(header::SET_COOKIE, value)]).into_response();
-    response
-        .headers_mut()
-        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
-    Ok(response)
-}
-
-async fn session(
-    State(state): State<AppState>,
-    Extension(principal): Extension<Principal>,
-) -> Result<Response> {
-    let csrf_token = state
-        .auth
-        .issue_csrf_token(&state.pool, principal.session_id)
-        .await?;
-    let mut response = Json(administrator_session(
-        principal.subject,
-        principal.username,
-        csrf_token,
-    )?)
-    .into_response();
-    response
-        .headers_mut()
-        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
-    Ok(response)
-}
-
-fn administrator_session(
-    user_id: String,
-    username: String,
-    csrf_token: String,
-) -> Result<AdministratorSession> {
-    AdministratorSession::new(user_id, username, csrf_token)
-        .map_err(|error| database(anyhow::Error::new(error)))
-}
-
-async fn live(State(state): State<AppState>) -> Response {
-    let _ = state;
-    Json(serde_json::json!({ "status": "ok" })).into_response()
-}
-
-async fn ready(State(state): State<AppState>) -> Response {
-    let database = store::ready(&state.pool).await;
-    let retention_schema = store::retention_ready(&state.pool).await;
-    let telemetry_writer = !state.telemetry.is_closed();
-    let ready = database && retention_schema && telemetry_writer;
-    (
-        if ready {
-            StatusCode::OK
-        } else {
-            StatusCode::SERVICE_UNAVAILABLE
-        },
-        Json(serde_json::json!({
-            "status": if ready { "ready" } else { "not-ready" },
-            "database": database,
-            "retention_schema": retention_schema,
-            "telemetry_writer": telemetry_writer
-        })),
-    )
-        .into_response()
+    next.run(request).await
 }
 
 async fn create_instance(
@@ -908,23 +801,28 @@ mod tests {
             .await
             .unwrap();
         store::initialize_empty(&pool).await.unwrap();
-        let auth = crate::auth::Auth::new(
-            std::time::Duration::from_secs(60),
-            std::time::Duration::from_secs(600),
-            crate::auth::CookieMode::LoopbackDevelopment,
+        router(
+            AppState::new(pool, AdministratorOriginMode::LoopbackDevelopmentHttp),
+            test_static_dir(),
         )
-        .unwrap();
-        router(AppState::new(pool, auth), test_static_dir())
+        .unwrap()
     }
 
     async fn app_with_admin(username: &str, password: &str) -> Router {
-        app_with_admin_and_admission(
-            username,
-            password,
-            crate::login::LoginAdmission::production(),
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        store::initialize_empty(&pool).await.unwrap();
+        store::ensure_admin_user(&pool, username, Some(password))
+            .await
+            .unwrap();
+        router(
+            AppState::new(pool, AdministratorOriginMode::LoopbackDevelopmentHttp),
+            test_static_dir(),
         )
-        .await
-        .0
+        .unwrap()
     }
 
     async fn app_with_pairing_admission(
@@ -936,45 +834,15 @@ mod tests {
             .await
             .unwrap();
         store::initialize_empty(&pool).await.unwrap();
-        let auth = crate::auth::Auth::new(
-            std::time::Duration::from_secs(60),
-            std::time::Duration::from_secs(600),
-            crate::auth::CookieMode::LoopbackDevelopment,
-        )
-        .unwrap();
         router(
-            AppState::with_pairing_admission(pool, auth, pairing_admission),
+            AppState::with_pairing_admission(
+                pool,
+                AdministratorOriginMode::LoopbackDevelopmentHttp,
+                pairing_admission,
+            ),
             test_static_dir(),
         )
-    }
-
-    async fn app_with_admin_and_admission(
-        username: &str,
-        password: &str,
-        login_admission: crate::login::LoginAdmission,
-    ) -> (Router, sqlx::SqlitePool) {
-        let pool = sqlx::sqlite::SqlitePoolOptions::new()
-            .max_connections(1)
-            .connect("sqlite::memory:")
-            .await
-            .unwrap();
-        store::initialize_empty(&pool).await.unwrap();
-        store::ensure_admin_user(&pool, username, Some(password))
-            .await
-            .unwrap();
-        let auth = crate::auth::Auth::new(
-            std::time::Duration::from_secs(60),
-            std::time::Duration::from_secs(600),
-            crate::auth::CookieMode::LoopbackDevelopment,
-        )
-        .unwrap();
-        (
-            router(
-                AppState::with_login_admission(pool.clone(), auth, login_admission),
-                test_static_dir(),
-            ),
-            pool,
-        )
+        .unwrap()
     }
 
     fn login_request(body: impl Into<Body>, peer: &str) -> Request<Body> {
@@ -1075,11 +943,11 @@ mod tests {
         assert_eq!(
             app()
                 .await
-                .oneshot(Request::get("/health/live").body(Body::empty()).unwrap())
+                .oneshot(Request::get("/healthz").body(Body::empty()).unwrap())
                 .await
                 .unwrap()
                 .status(),
-            StatusCode::OK
+            StatusCode::NO_CONTENT
         );
         assert_eq!(
             app()
@@ -1140,7 +1008,7 @@ mod tests {
     async fn login_json_body_is_bounded_before_password_work() {
         let body = format!(
             r#"{{"username":"admin","password":"{}"}}"#,
-            "x".repeat(crate::login::LOGIN_BODY_LIMIT_BYTES)
+            "x".repeat(sarmg_admin_core::ADMIN_BODY_MAX_BYTES)
         );
         let response = app()
             .await
@@ -1148,65 +1016,6 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
-    }
-
-    #[tokio::test]
-    async fn source_rate_limit_returns_retry_after() {
-        let admission =
-            crate::login::LoginAdmission::for_test(1, 8, 1, std::time::Duration::from_millis(50));
-        let (app, _) = app_with_admin_and_admission("admin", "correct-password", admission).await;
-        let first = app
-            .clone()
-            .oneshot(login_request("{", "192.0.2.30:41000"))
-            .await
-            .unwrap();
-        assert_ne!(first.status(), StatusCode::TOO_MANY_REQUESTS);
-
-        let limited = app
-            .oneshot(login_request(
-                r#"{"username":"other-admin","password":"wrong-password"}"#,
-                "192.0.2.30:41001",
-            ))
-            .await
-            .unwrap();
-        assert_eq!(limited.status(), StatusCode::TOO_MANY_REQUESTS);
-        let retry_after = limited.headers()[header::RETRY_AFTER]
-            .to_str()
-            .unwrap()
-            .parse::<u64>()
-            .unwrap();
-        assert!((1..=60).contains(&retry_after));
-    }
-
-    #[tokio::test]
-    async fn normalized_account_limit_spans_distinct_sources() {
-        let admission =
-            crate::login::LoginAdmission::for_test(8, 1, 1, std::time::Duration::from_secs(1));
-        let (app, _) = app_with_admin_and_admission("admin", "correct-password", admission).await;
-        let first = app
-            .clone()
-            .oneshot(login_request(
-                r#"{"username":" Admin ","password":"wrong-password"}"#,
-                "192.0.2.31:41000",
-            ))
-            .await
-            .unwrap();
-        assert_eq!(first.status(), StatusCode::UNAUTHORIZED);
-
-        let limited = app
-            .oneshot(login_request(
-                r#"{"username":"admin","password":"wrong-password"}"#,
-                "192.0.2.32:41000",
-            ))
-            .await
-            .unwrap();
-        assert_eq!(limited.status(), StatusCode::TOO_MANY_REQUESTS);
-        let retry_after = limited.headers()[header::RETRY_AFTER]
-            .to_str()
-            .unwrap()
-            .parse::<u64>()
-            .unwrap();
-        assert!((1..=60).contains(&retry_after));
     }
 
     #[tokio::test]
@@ -1250,70 +1059,5 @@ mod tests {
         assert_eq!(envelope.message, "pairing source rate exceeded");
         assert!(envelope.retryable);
         assert_eq!(envelope.details["retry_after_seconds"], 60);
-    }
-
-    #[tokio::test]
-    async fn unknown_wrong_and_disabled_users_share_the_unauthorized_semantics() {
-        let (app, pool) = app_with_admin_and_admission(
-            "admin",
-            "correct-password",
-            crate::login::LoginAdmission::production(),
-        )
-        .await;
-        let cases = [
-            (
-                r#"{"username":"admin","password":"wrong-password"}"#,
-                "192.0.2.40:41000",
-            ),
-            (
-                r#"{"username":"missing-admin","password":"wrong-password"}"#,
-                "192.0.2.41:41000",
-            ),
-        ];
-        for (body, peer) in cases {
-            let response = app
-                .clone()
-                .oneshot(login_request(body, peer))
-                .await
-                .unwrap();
-            assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
-            let envelope = error_envelope(response).await;
-            assert_eq!(envelope.code.as_str(), "unauthorized");
-            assert_eq!(envelope.message, "unauthorized");
-            assert!(!envelope.retryable);
-        }
-
-        sqlx::query("UPDATE auth_users SET active=false WHERE username=?")
-            .bind("admin")
-            .execute(&pool)
-            .await
-            .unwrap();
-        let disabled = app
-            .oneshot(login_request(
-                r#"{"username":"admin","password":"correct-password"}"#,
-                "192.0.2.42:41000",
-            ))
-            .await
-            .unwrap();
-        assert_eq!(disabled.status(), StatusCode::UNAUTHORIZED);
-        let envelope = error_envelope(disabled).await;
-        assert_eq!(envelope.code.as_str(), "unauthorized");
-        assert_eq!(envelope.message, "unauthorized");
-        assert!(!envelope.retryable);
-        let sessions: i64 = sqlx::query_scalar("SELECT count(*) FROM auth_sessions")
-            .fetch_one(&pool)
-            .await
-            .unwrap();
-        assert_eq!(sessions, 0);
-    }
-
-    #[test]
-    fn csrf_is_required_for_every_unsafe_console_method() {
-        for method in [Method::POST, Method::PUT, Method::PATCH, Method::DELETE] {
-            assert!(requires_csrf(&method));
-        }
-        for method in [Method::GET, Method::HEAD, Method::OPTIONS] {
-            assert!(!requires_csrf(&method));
-        }
     }
 }

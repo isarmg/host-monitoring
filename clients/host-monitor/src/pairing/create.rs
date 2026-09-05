@@ -16,8 +16,9 @@ enum PairingStart {
 /// Select or create the request generation while holding the cross-process
 /// state lock. Network I/O happens only after this function releases it.
 fn prepare_start(config: &AgentConfig, host: &HostIdentity) -> anyhow::Result<PairingStart> {
-    let _lock = lock_state(config)?;
-    match load_state(config)? {
+    let transaction = lock_state(config)?;
+    let store = &transaction;
+    match load_state(store)? {
         Some(StoredPairingState::Pending {
             generation,
             request_id,
@@ -77,7 +78,7 @@ fn prepare_start(config: &AgentConfig, host: &HostIdentity) -> anyhow::Result<Pa
                 } => pairing_endpoints_match(config, pairing_endpoint, report_endpoint),
                 _ => unreachable!(),
             };
-            finish_activating_unlocked(config, state)?;
+            finish_activating_unlocked(config, store, state)?;
             if same_requested_endpoints {
                 return Ok(PairingStart::Waiting(session));
             }
@@ -89,7 +90,7 @@ fn prepare_start(config: &AgentConfig, host: &HostIdentity) -> anyhow::Result<Pa
             // Preserve the current credential's endpoint before a new Creating state replaces the
             // journal that carried it.
             let expected = binding_from_active_state(&state)?;
-            load_current_active_binding_unlocked(config, &expected)?;
+            load_current_active_binding_unlocked(config, store, &expected)?;
         }
         _ => {}
     }
@@ -106,7 +107,7 @@ fn prepare_start(config: &AgentConfig, host: &HostIdentity) -> anyhow::Result<Pa
     // Persist both locally generated secrets and the exact host request before
     // the first POST. If the server commits but the response is lost, retrying
     // uses the same polling_secret_hash and the server returns the same request.
-    persist_state_unlocked(config, &creating)?;
+    persist_state_unlocked(store, &creating)?;
     Ok(PairingStart::Create(Box::new(creating)))
 }
 
@@ -146,22 +147,19 @@ async fn finish_create_request(
         .context("stored report endpoint is unsafe")?;
     let client = build_client(config)?;
     let response = client
-        .post(&pairing_endpoint)
-        .json(&CreatePairingRequest {
+        .post_agent(&pairing_endpoint, json_headers(), serde_json::to_vec(&CreatePairingRequest {
             host: host.clone(),
             token_hash: sha256_hex(&bearer_secret),
             polling_secret_hash: sha256_hex(&polling_secret),
-        })
-        .send()
+        })?)
         .await
         .context("failed to create a browser pairing request")?;
-    let status = response.status();
+    let status = response.status;
     let content_type = pairing_response_content_type(&response);
-    let body = read_limited(response, "pairing request").await?;
+    let body = response.body;
     ensure_pairing_status(
         status,
         &[StatusCode::OK, StatusCode::CREATED],
-        &body,
         "create pairing request",
     )?;
     let created: CreatePairingResponse =

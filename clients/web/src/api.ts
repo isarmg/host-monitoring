@@ -4,8 +4,7 @@ import { isApiClientError } from "@sarmg/http-client";
 
 export const CURRENT_API_PREFIX = "/api/v2";
 
-// Foundation owns the in-memory administrator Session/CSRF request lifecycle;
-// Host Monitoring still owns its cookie, persistence and authorization policy.
+// Foundation owns administrator Session, Cookie, persistence and CSRF policy.
 export const administratorApi = createAdministratorApiClient({
   baseUrl: globalThis.location.href,
 });

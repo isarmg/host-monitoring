@@ -1,16 +1,25 @@
 use anyhow::bail;
-use reqwest::{StatusCode, header};
+use sarmg_agent_secret::{SecretKey, SecretString};
+use sarmg_agent_secure_http::{StatusCode, header};
 use serde::de::DeserializeOwned;
 use sha2::{Digest, Sha256};
+use std::sync::Arc;
 
-const MAX_PAIRING_RESPONSE_BYTES: usize = 64 * 1024;
-
-pub(super) fn random_secret() -> String {
-    hex(&rand::random::<[u8; 32]>())
+pub(super) fn random_secret() -> Arc<SecretString> {
+    let random = SecretKey::new(rand::random::<[u8; 32]>());
+    Arc::new(SecretString::new(hex(random.expose())))
 }
 
-pub(super) fn sha256_hex(secret: &str) -> String {
-    hex(&Sha256::digest(secret.as_bytes()))
+pub(super) fn sha256_hex(secret: &SecretString) -> String {
+    hex(&Sha256::digest(secret.expose().as_bytes()))
+}
+
+pub(super) fn pairing_authorization(secret: &SecretString) -> anyhow::Result<header::HeaderValue> {
+    let value = SecretString::new(format!("Pairing {}", secret.expose()));
+    let mut header = header::HeaderValue::from_str(value.expose())
+        .map_err(|_| anyhow::anyhow!("invalid pairing authorization header"))?;
+    header.set_sensitive(true);
+    Ok(header)
 }
 
 fn hex(bytes: &[u8]) -> String {
@@ -23,30 +32,24 @@ fn hex(bytes: &[u8]) -> String {
     value
 }
 
-pub(super) async fn read_limited(
-    response: reqwest::Response,
-    target: &str,
-) -> anyhow::Result<Vec<u8>> {
-    if response
-        .content_length()
-        .is_some_and(|length| length > MAX_PAIRING_RESPONSE_BYTES as u64)
-    {
-        bail!("{target} response exceeds the 64 KiB limit");
-    }
-    let mut response = response;
-    let mut body = Vec::new();
-    while let Some(chunk) = response.chunk().await? {
-        if body.len() + chunk.len() > MAX_PAIRING_RESPONSE_BYTES {
-            bail!("{target} response exceeds the 64 KiB limit");
-        }
-        body.extend_from_slice(&chunk);
-    }
-    Ok(body)
+pub(super) fn json_headers() -> header::HeaderMap {
+    let mut headers = header::HeaderMap::new();
+    headers.insert(
+        header::CONTENT_TYPE,
+        header::HeaderValue::from_static("application/json"),
+    );
+    headers.insert(
+        header::ACCEPT,
+        header::HeaderValue::from_static("application/json"),
+    );
+    headers
 }
 
-pub(super) fn pairing_response_content_type(response: &reqwest::Response) -> String {
+pub(super) fn pairing_response_content_type(
+    response: &sarmg_agent_secure_http::BoundedResponse,
+) -> String {
     let raw = response
-        .headers()
+        .headers
         .get(header::CONTENT_TYPE)
         .and_then(|value| value.to_str().ok())
         .unwrap_or("<missing>");
@@ -71,7 +74,7 @@ pub(super) fn pairing_content_type_for_diagnostics(content_type: &str) -> String
 }
 
 pub(super) fn pairing_origin_for_diagnostics(endpoint: &str) -> String {
-    reqwest::Url::parse(endpoint)
+    sarmg_agent_secure_http::Url::parse(endpoint)
         .ok()
         .map(|url| url.origin().ascii_serialization())
         .filter(|origin| origin != "null")
@@ -100,22 +103,18 @@ pub(super) fn parse_pairing_json<T: DeserializeOwned>(
 pub(super) fn ensure_pairing_status(
     status: StatusCode,
     allowed: &[StatusCode],
-    body: &[u8],
     operation: &str,
 ) -> anyhow::Result<()> {
     if allowed.contains(&status) {
         return Ok(());
     }
-    let detail: String = String::from_utf8_lossy(body).chars().take(512).collect();
     if status.is_success() {
         bail!(
             "Host Monitoring returned an unexpected HTTP {status} while attempting to {operation}"
         );
     }
     if matches!(status, StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN) {
-        bail!(
-            "Host Monitoring refused to {operation}: HTTP {status}; start a new browser pairing ({detail})"
-        );
+        bail!("Host Monitoring refused to {operation}: HTTP {status}; start a new browser pairing");
     }
-    bail!("Host Monitoring failed to {operation}: HTTP {status}: {detail}")
+    bail!("Host Monitoring failed to {operation}: HTTP {status}")
 }

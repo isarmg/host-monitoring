@@ -3,14 +3,23 @@ pub(super) async fn prepare_reporter(
     host: &mut host_monitor::HostIdentity,
     command: AgentCommand,
     shutdown: &ShutdownSignal,
-) -> anyhow::Result<Option<(Reporter, Option<(Uuid, Uuid)>)>> {
-    let mut backoff = Duration::from_secs(1);
+) -> anyhow::Result<Option<Reporter>> {
+    let mut backoff = RetryBackoff::new(
+        Duration::from_secs(1),
+        Duration::from_secs(300),
+        config.jitter_percent,
+    )?;
+    let mut idle_backoff = RetryBackoff::new(
+        Duration::from_secs(1),
+        Duration::from_secs(60),
+        config.jitter_percent,
+    )?;
     let mut last_authorization_notice: Option<(&'static str, Option<Uuid>)> = None;
     loop {
         if command == AgentCommand::Run
-            && let Some(reporter) = pairing::existing_reporter_for_run(config)?
+            && let Some(snapshot) = pairing::existing_reporter_for_run(config)?
         {
-            return Ok(Some((reporter, None)));
+            return Ok(Some(snapshot.apply(config, host)));
         }
         let progress = tokio::select! {
             result = pairing::poll_existing(config) => result,
@@ -27,7 +36,8 @@ pub(super) async fn prepare_reporter(
                         waiting.activation_url
                     );
                 }
-                backoff = Duration::from_secs(1);
+                backoff.reset();
+                idle_backoff.reset();
                 let notice = ("pending", Some(waiting.request_id));
                 if last_authorization_notice != Some(notice) {
                     info!(
@@ -61,7 +71,7 @@ pub(super) async fn prepare_reporter(
                 .context(
                     "paired host credential could not be loaded; run `host-monitor pair` again",
                 )?;
-                return Ok(Some((reporter, Some((generation, request_id)))));
+                return Ok(Some(reporter));
             }
             Ok(Some(PairingProgress::Denied {
                 generation: _,
@@ -120,7 +130,7 @@ pub(super) async fn prepare_reporter(
                 return Err(error.context("failed to resume browser pairing"));
             }
             Err(error) => {
-                let delay = jitter(backoff, config.jitter_percent);
+                let delay = backoff.next_delay()?;
                 warn!(
                     retry_seconds = delay.as_secs_f64(),
                     "browser pairing state could not be checked; retrying: {error}"
@@ -129,7 +139,6 @@ pub(super) async fn prepare_reporter(
                     _ = tokio::time::sleep(delay) => {},
                     _ = shutdown.cancelled() => return Ok(None),
                 }
-                backoff = (backoff * 2).min(Duration::from_secs(300));
                 continue;
             }
         }
@@ -139,7 +148,7 @@ pub(super) async fn prepare_reporter(
                 "this host is not authorized; run `host-monitor pair --server <url>` first"
             );
         }
-        let delay = jitter(backoff, config.jitter_percent);
+        let delay = idle_backoff.next_delay()?;
         let notice = ("unconfigured", None);
         if last_authorization_notice != Some(notice) {
             info!(
@@ -153,6 +162,5 @@ pub(super) async fn prepare_reporter(
             _ = tokio::time::sleep(delay) => {},
             _ = shutdown.cancelled() => return Ok(None),
         }
-        backoff = (backoff * 2).min(Duration::from_secs(60));
     }
 }

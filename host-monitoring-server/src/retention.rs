@@ -268,6 +268,18 @@ impl RetentionMaintenance {
 }
 
 impl RetentionMaintenanceTask {
+    pub async fn run_until(
+        mut self,
+        mut shutdown: tokio::sync::watch::Receiver<bool>,
+    ) -> Result<(), String> {
+        tokio::select! {
+            _ = sarmg_server_runtime::wait_for_shutdown(&mut shutdown) => {
+                self.shutdown().await.map_err(|error| error.to_string())
+            }
+            result = &mut self.join => result.map_err(|error| error.to_string()),
+        }
+    }
+
     pub async fn shutdown(mut self) -> anyhow::Result<()> {
         self.shutdown.requested.store(true, Ordering::Release);
         self.shutdown.notify.notify_one();
@@ -278,10 +290,16 @@ impl RetentionMaintenanceTask {
             )),
             Err(_) => {
                 self.join.abort();
-                let _ = self.join.await;
+                let _ = (&mut self.join).await;
                 anyhow::bail!("telemetry retention maintenance did not stop before its deadline")
             }
         }
+    }
+}
+
+impl Drop for RetentionMaintenanceTask {
+    fn drop(&mut self) {
+        self.join.abort();
     }
 }
 

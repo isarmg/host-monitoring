@@ -1,14 +1,3 @@
-fn elapsed_milliseconds(started: Instant) -> u64 {
-    u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX)
-}
-
-fn is_application_json(value: &str) -> bool {
-    value
-        .split(';')
-        .next()
-        .is_some_and(|media_type| media_type.trim().eq_ignore_ascii_case("application/json"))
-}
-
 fn render_configuration() -> HttpResponse {
     response_html(
         "200 OK",

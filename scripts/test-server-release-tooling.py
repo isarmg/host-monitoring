@@ -25,7 +25,7 @@ class ReleaseToolingTests(unittest.TestCase):
         readme = repository / PACKAGE.RELEASE_README
         text = readme.read_text(encoding="utf-8")
         self.assertGreater(len(text.encode("utf-8")), 10_000)
-        self.assertIn("Host Monitoring Server 0.7.0 发行包部署手册", text)
+        self.assertIn("Host Monitoring Server 0.8.0 发行包部署手册", text)
         self.assertIn("bin/host-monitoring-server", text)
         self.assertIn("systemd/host-monitoring-server.service", text)
         self.assertIn("RELEASE-MANIFEST.json", text)

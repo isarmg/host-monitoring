@@ -142,8 +142,13 @@ fn pairing_activation_loads_the_server_assigned_identity() {
     let directory =
         std::env::temp_dir().join(format!("host-monitoring-active-host-{}", Uuid::new_v4()));
     fs::create_dir_all(&directory).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&directory, fs::Permissions::from_mode(0o700)).unwrap();
+    }
     let instance_id = Uuid::new_v4();
-    fs::write(directory.join("host-id"), instance_id.to_string()).unwrap();
+    write_private_fixture(directory.join("host-id"), instance_id.to_string()).unwrap();
     let stale_id = Uuid::new_v4();
     let mut config = AgentConfig::default();
     config.state_dir = directory.clone();
@@ -159,9 +164,9 @@ fn pairing_activation_loads_the_server_assigned_identity() {
 
     let generation = Uuid::new_v4();
     let request_id = Uuid::new_v4();
-    fs::write(directory.join("agent-token"), "paired-token").unwrap();
-    fs::write(directory.join("host-id"), instance_id.to_string()).unwrap();
-    fs::write(
+    write_private_fixture(directory.join("agent-token"), "paired-token").unwrap();
+    write_private_fixture(directory.join("host-id"), instance_id.to_string()).unwrap();
+    write_private_fixture(
         directory.join("auth-state.json"),
         serde_json::to_vec(&serde_json::json!({
             "version": env!("CARGO_PKG_VERSION"),
@@ -172,7 +177,7 @@ fn pairing_activation_loads_the_server_assigned_identity() {
         .unwrap(),
     )
     .unwrap();
-    fs::write(
+    write_private_fixture(
         directory.join("pairing-state.json"),
         serde_json::to_vec(&serde_json::json!({
             "phase": "active",
@@ -187,7 +192,7 @@ fn pairing_activation_loads_the_server_assigned_identity() {
         .unwrap(),
     )
     .unwrap();
-    fs::write(
+    write_private_fixture(
         directory.join("active-binding.json"),
         serde_json::to_vec(&serde_json::json!({
             "version": env!("CARGO_PKG_VERSION"),
@@ -216,4 +221,18 @@ fn pairing_activation_loads_the_server_assigned_identity() {
         "https://host-monitoring.example/api/v2/host-monitor/report"
     );
     fs::remove_dir_all(directory).unwrap();
+}
+
+fn write_private_fixture(
+    path: impl AsRef<std::path::Path>,
+    bytes: impl AsRef<[u8]>,
+) -> std::io::Result<()> {
+    let path = path.as_ref();
+    std::fs::write(path, bytes)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+    }
+    Ok(())
 }

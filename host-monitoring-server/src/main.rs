@@ -2,15 +2,17 @@ use clap::Parser;
 use host_monitoring_server::{
     config::{Cli, Command},
     database_lock::{ApplicationLock, MaintenanceLock},
-    http::{AppState, router},
+    http::{AppState, product_descriptor, router},
     release_bundle, release_contract,
     retention::RetentionMaintenance,
     store,
+    telemetry::TelemetryWriter,
 };
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     host_monitoring_server::release_contract::ensure_supported_runtime()?;
+    sarmg_server_runtime::install_panic_hook();
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
@@ -104,7 +106,9 @@ async fn serve(release_root: Option<&std::path::Path>) -> anyhow::Result<()> {
             "HOST_MONITORING_STATIC_DIR must equal the verified release web directory"
         );
     }
-    if config.auth.uses_insecure_development_cookie() {
+    if config.administrator_origin
+        == sarmg_admin_auth::AdministratorOriginMode::LoopbackDevelopmentHttp
+    {
         tracing::warn!(
             "HOST_MONITORING_DEVELOPMENT is enabled; using an insecure loopback-only session cookie"
         );
@@ -119,38 +123,47 @@ async fn serve(release_root: Option<&std::path::Path>) -> anyhow::Result<()> {
     .await?;
     let listener = tokio::net::TcpListener::bind(config.bind).await?;
     let (_, retention_maintenance) = RetentionMaintenance::start(pool.clone(), config.retention);
-    let (state, telemetry_writer) =
-        AppState::with_telemetry_config(pool, config.auth, config.telemetry);
+    let (telemetry, telemetry_writer) = TelemetryWriter::start(pool.clone(), config.telemetry);
+    let health_pool = pool.clone();
+    let retention_pool = pool.clone();
+    let runtime = sarmg_server_runtime::ServerRuntime::builder(product_descriptor())
+        .with_schema_identity(host_monitoring_server::database_schema::expected_identity()?)
+        .register_health_check(
+            "database",
+            sarmg_server_runtime::health_check(move || {
+                let pool = health_pool.clone();
+                async move { store::ready(&pool).await }
+            }),
+        )
+        .register_health_check(
+            "retention-schema",
+            sarmg_server_runtime::health_check(move || {
+                let pool = retention_pool.clone();
+                async move { store::retention_ready(&pool).await }
+            }),
+        )
+        .register_background_task(
+            "telemetry-writer",
+            sarmg_server_runtime::TaskCriticality::Critical,
+            move |shutdown| telemetry_writer.run_until(shutdown),
+        )
+        .register_background_task(
+            "telemetry-retention",
+            sarmg_server_runtime::TaskCriticality::Degrading,
+            move |shutdown| retention_maintenance.run_until(shutdown),
+        )
+        .build()
+        .await?;
+    let runtime_handle = runtime.handle();
+    let state = AppState::with_runtime(
+        pool,
+        config.administrator_origin,
+        telemetry,
+        runtime_handle.clone(),
+    );
     tracing::info!(bind=%config.bind, "host-monitoring server ready");
-    let server_result = axum::serve(
-        listener,
-        router(state, config.static_dir)
-            .into_make_service_with_connect_info::<std::net::SocketAddr>(),
-    )
-    .with_graceful_shutdown(shutdown())
-    .await;
-    let retention_result = retention_maintenance.shutdown().await;
-    let drain_result = telemetry_writer.shutdown().await;
-    server_result?;
-    retention_result?;
-    drain_result?;
+    runtime
+        .serve(listener, router(state, config.static_dir)?)
+        .await?;
     Ok(())
-}
-
-async fn shutdown() {
-    let ctrl_c = async {
-        tokio::signal::ctrl_c()
-            .await
-            .expect("install Ctrl-C handler")
-    };
-    #[cfg(unix)]
-    let terminate = async {
-        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-            .expect("install SIGTERM handler")
-            .recv()
-            .await;
-    };
-    #[cfg(not(unix))]
-    let terminate = std::future::pending::<()>();
-    tokio::select! { _ = ctrl_c => {}, _ = terminate => {} }
 }

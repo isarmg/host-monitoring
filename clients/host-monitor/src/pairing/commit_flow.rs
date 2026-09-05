@@ -18,9 +18,10 @@ fn persist_active_credentials(
     else {
         bail!("internal error: expected pending pairing state for activation");
     };
-    let _lock = lock_state(config)?;
+    let transaction = lock_state(config)?;
+    let store = &transaction;
     ensure_pending_is_current(
-        config,
+        store,
         generation,
         request_id,
         &pairing_endpoint,
@@ -42,8 +43,8 @@ fn persist_active_credentials(
     // Commit the journal before touching any long-lived credential. A crash
     // after this write is recovered locally and can never pair the new token
     // with the previous server endpoint.
-    persist_state_unlocked(config, &activating)?;
-    finish_activating_unlocked(config, activating)
+    persist_state_unlocked(store, &activating)?;
+    finish_activating_unlocked(config, store, activating)
 }
 
 fn session_from_activating(state: &StoredPairingState) -> anyhow::Result<PairingSession> {
@@ -79,8 +80,9 @@ fn recover_activating(
         } => (*generation, *request_id),
         _ => bail!("internal error: expected an activating pairing state"),
     };
-    let _lock = lock_state(config)?;
-    match load_state(config)? {
+    let transaction = lock_state(config)?;
+    let store = &transaction;
+    match load_state(store)? {
         Some(
             current @ StoredPairingState::Activating {
                 generation,
@@ -88,7 +90,7 @@ fn recover_activating(
                 ..
             },
         ) if generation == expected_generation && request_id == expected_request_id => {
-            finish_activating_unlocked(config, current)
+            finish_activating_unlocked(config, store, current)
         }
         Some(StoredPairingState::Active {
             generation,
@@ -108,11 +110,22 @@ fn recover_activating(
     }
 }
 
+fn finish_activating_unlocked(
+    config: &AgentConfig,
+    store: &StateTransaction,
+    state: StoredPairingState,
+) -> anyhow::Result<PairingProgress> {
+    HostCredentials::new(config, store).replace(state)?;
+    let active = load_state(store)?.context("credential rotation did not publish Active")?;
+    Ok(progress_from_terminal(active))
+}
+
 /// Complete an Activating journal while the pairing state lock is held. Every
 /// write is idempotent; Active is deliberately last so any earlier crash is
 /// recoverable without consulting the remote server.
-fn finish_activating_unlocked(
+fn commit_activating_unlocked(
     config: &AgentConfig,
+    store: &StateTransaction,
     state: StoredPairingState,
 ) -> anyhow::Result<PairingProgress> {
     let StoredPairingState::Activating {
@@ -129,40 +142,29 @@ fn finish_activating_unlocked(
         bail!("internal error: expected an activating pairing state");
     };
     validate_state_version(version)?;
-    config
-        .validate_durable_report_endpoint(&report_endpoint)
-        .context("stored report endpoint is unsafe")?;
-    persist_private_value(
-        &config.state_dir.join("agent-token"),
-        &bearer_secret,
-        "paired host token",
-    )?;
-    persist_private_value(
-        &config.state_dir.join("host-id"),
-        &instance_id.to_string(),
-        "server-assigned host identity",
-    )?;
-    persist_active_binding_unlocked(
-        config,
-        &ActiveBinding {
-            version: PAIRING_STATE_VERSION,
-            generation,
-            request_id,
-            instance_id,
-            report_endpoint: report_endpoint.clone(),
-        },
-    )?;
+    let binding = ActiveBinding {
+        version: PAIRING_STATE_VERSION,
+        generation,
+        request_id,
+        instance_id,
+        report_endpoint: report_endpoint.clone(),
+    };
+    // Validate all durable identity components before replacing any credential.
+    validate_active_binding(config, &binding)?;
+    store.write(StateFile::Credential, bearer_secret.expose())?;
+    store.write(StateFile::Identity, &instance_id.to_string())?;
+    persist_active_binding_unlocked(config, store, &binding)?;
     persist_auth_state_unlocked(
-        config,
+        store,
         &LocalAuthState {
             version: PAIRING_STATE_VERSION,
-            status: "authorized".into(),
+            status: CredentialAuthorization::Authorized,
             reason: "browser pairing completed".into(),
             changed_at: Utc::now(),
         },
     )?;
     persist_state_unlocked(
-        config,
+        store,
         &StoredPairingState::Active {
             version: PAIRING_STATE_VERSION,
             generation,

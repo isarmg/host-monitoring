@@ -71,10 +71,10 @@ jobs:
             echo 'Host components must use the authoritative workspace protocol path.' >&2
             exit 1
           fi
-          cargo pkgid --locked -p host-monitor | grep -F '#0.7.0'
+          cargo pkgid --locked -p host-monitor | grep -F '#0.8.0'
           cargo pkgid --locked -p host-monitoring-server \
-            | grep -F '#0.7.0'
-          cargo pkgid --locked -p host-protocol | grep -F '#host-protocol@0.7.0'
+            | grep -F '#0.8.0'
+          cargo pkgid --locked -p host-protocol | grep -F '#host-protocol@0.8.0'
       - name: Check Server and protocol
         run: >-
           cargo check --locked --target x86_64-unknown-linux-gnu
@@ -123,7 +123,13 @@ jobs:
           "version=$version" >> $env:GITHUB_OUTPUT
       - name: Clippy
         run: cargo clippy --locked -p host-monitor --all-targets -- -D warnings
+      - name: Check Linux TLS fixture tools
+        if: runner.os == 'Linux'
+        run: |
+          openssl version
+          python3 -c 'import ssl; assert ssl.HAS_TLSv1_3; print(ssl.OPENSSL_VERSION)'
       - name: Test
+        # Linux tests generate ephemeral keys and run a loopback Python TLS peer.
         run: cargo test --locked -p host-monitor
       - name: Check without optional features
         run: cargo check --locked -p host-monitor --no-default-features --all-targets
@@ -278,3 +284,9 @@ jobs:
       - name: Build standalone frontend
         working-directory: clients/web
         run: npm run build
+      - name: Install browser acceptance engines
+        working-directory: clients/web
+        run: npx playwright install --with-deps chromium firefox
+      - name: Verify current frontend business and accessibility contracts
+        working-directory: clients/web
+        run: npm run test:browser

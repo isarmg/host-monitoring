@@ -1,14 +1,19 @@
 use std::{
     env, fs,
+    io::Write,
     path::{Path, PathBuf},
+    sync::Arc,
     time::Duration,
 };
 
-use crate::private_fs::{self, OwnerPolicy};
+#[cfg(not(unix))]
+use crate::private_fs;
 use anyhow::{Context, bail};
+use sarmg_agent_secret::{SecretBytes, SecretString, SecretWriter};
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error as _};
 
 const DEFAULT_SERVER_ORIGIN: &str = "http://127.0.0.1:8081";
+const MAX_CONFIG_BYTES: usize = 64 * 1024;
 
 const AGENT_VERSION_OUTPUT: &str = concat!("host-monitor ", env!("CARGO_PKG_VERSION"));
 
@@ -128,7 +133,8 @@ pub struct AgentConfig {
     /// the current report endpoint.
     pub pairing_endpoint: Option<String>,
     pub otlp_endpoint: Option<String>,
-    pub otlp_token: Option<String>,
+    #[serde(default, with = "crate::secret_io::optional")]
+    pub otlp_token: Option<Arc<SecretString>>,
     pub interval_seconds: u64,
     pub slow_interval_seconds: u64,
     pub request_timeout_seconds: u64,
@@ -137,13 +143,9 @@ pub struct AgentConfig {
     pub spool_max_bytes: u64,
     pub tls_identity_pem: Option<PathBuf>,
     pub tls_identity_pkcs12: Option<PathBuf>,
-    pub tls_identity_password: Option<String>,
+    #[serde(default, with = "crate::secret_io::optional")]
+    pub tls_identity_password: Option<Arc<SecretString>>,
     pub tls_ca_pem: Option<PathBuf>,
-    pub allow_insecure_http: bool,
-    /// Exact plaintext policy loaded from the durable JSON file before any
-    /// process-local environment or command-line override is applied.
-    #[serde(skip)]
-    pub(crate) persisted_allow_insecure_http: bool,
     #[serde(skip)]
     pub config_path: Option<PathBuf>,
     #[serde(skip)]
@@ -205,8 +207,6 @@ impl Default for AgentConfig {
             tls_identity_pkcs12: None,
             tls_identity_password: None,
             tls_ca_pem: None,
-            allow_insecure_http: false,
-            persisted_allow_insecure_http: false,
             config_path: None,
             server_override: None,
             endpoint_override: None,
@@ -229,7 +229,6 @@ impl AgentConfig {
         let mut config_path = env::var_os("HOST_MONITOR_CONFIG").map(PathBuf::from);
         let mut server_override = None;
         let mut endpoint_override = None;
-        let mut allow_insecure_http = false;
         let mut tray_events = false;
         let mut tray_cancel_event = None;
         let mut tray_deadline_seconds = None;
@@ -267,7 +266,6 @@ impl AgentConfig {
                     endpoint_override =
                         Some(args.next().context("--endpoint requires a report URL")?);
                 }
-                "--allow-insecure-http" => allow_insecure_http = true,
                 "--tray-events" => {
                     if tray_events {
                         bail!("--tray-events may be specified only once");
@@ -388,9 +386,6 @@ impl AgentConfig {
         config.output_mode = output_mode;
         config.doctor_delivery = doctor_delivery;
         config.config_issue = config_issue;
-        if allow_insecure_http {
-            config.allow_insecure_http = true;
-        }
         if command == AgentCommand::Pair {
             config.apply_pair_options()?;
             config.validate_durable_report_endpoint(&config.endpoint)?;
@@ -411,7 +406,7 @@ impl AgentConfig {
         let loaded = fs::metadata(path)
             .and_then(|metadata| {
                 if metadata.is_file() {
-                    fs::read(path)
+                    read_private_config(path).map_err(std::io::Error::other)
                 } else {
                     Err(std::io::Error::new(
                         std::io::ErrorKind::InvalidInput,
@@ -420,17 +415,19 @@ impl AgentConfig {
                 }
             })
             .and_then(|bytes| {
-                serde_json::from_slice::<Self>(&bytes)
-                    .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))
+                serde_json::from_slice::<Self>(bytes.expose()).map_err(|error| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        format!(
+                            "invalid configuration at line {}, column {}",
+                            error.line(),
+                            error.column()
+                        ),
+                    )
+                })
             });
         match loaded {
-            Ok(mut config) => {
-                // Pairing commits Active before mirroring its endpoint back to
-                // this administrator-owned file. Capture the original policy
-                // so a process-local override cannot authorize durable state.
-                config.persisted_allow_insecure_http = config.allow_insecure_http;
-                Ok((config, None))
-            }
+            Ok(config) => Ok((config, None)),
             Err(error) if command == AgentCommand::Status => Ok((
                 Self::default(),
                 Some(format!("failed to load {}: {error}", path.display())),
@@ -477,7 +474,7 @@ impl AgentConfig {
             self.otlp_endpoint = non_empty(value);
         }
         if let Ok(value) = env::var("HOST_MONITOR_OTLP_TOKEN") {
-            self.otlp_token = non_empty(value);
+            self.otlp_token = crate::secret_io::trimmed(value);
         }
         if let Ok(value) = env::var("HOST_MONITOR_STATE_DIR") {
             self.state_dir = PathBuf::from(value);
@@ -495,14 +492,10 @@ impl AgentConfig {
             self.tls_identity_pkcs12 = Some(PathBuf::from(value));
         }
         if let Ok(value) = env::var("HOST_MONITOR_TLS_IDENTITY_PASSWORD") {
-            self.tls_identity_password = Some(value);
+            self.tls_identity_password = Some(Arc::new(SecretString::new(value)));
         }
         if let Ok(value) = env::var("HOST_MONITOR_TLS_CA_PEM") {
             self.tls_ca_pem = Some(PathBuf::from(value));
-        }
-        if let Ok(value) = env::var("HOST_MONITOR_ALLOW_INSECURE_HTTP") {
-            self.allow_insecure_http =
-                parse_bool(&value).context("invalid HOST_MONITOR_ALLOW_INSECURE_HTTP boolean")?;
         }
         Ok(())
     }
@@ -554,13 +547,20 @@ impl AgentConfig {
         if self.spool_max_bytes < 1024 * 1024 {
             bail!("spool_max_bytes must be at least 1 MiB");
         }
+        sarmg_agent_runtime::SpoolLimits {
+            max_record_bytes: crate::model::AGENT_REPORT_MAX_BODY_BYTES,
+            max_entries: sarmg_agent_runtime::MAX_SPOOL_ENTRIES,
+            max_bytes: self.spool_max_bytes,
+        }
+        .validate()
+        .context("spool limits exceed the Foundation desktop-agent profile")?;
         let validates_delivery = match command {
             AgentCommand::Probe => false,
             AgentCommand::Doctor => self.doctor_delivery,
             _ => true,
         };
         if validates_delivery {
-            validate_endpoint(&self.endpoint, self.allow_insecure_http)?;
+            validate_endpoint(&self.endpoint)?;
             validate_pairing_endpoint(&self.pairing_endpoint())?;
         }
         #[cfg(not(feature = "otlp"))]
@@ -572,7 +572,7 @@ impl AgentConfig {
         }
         #[cfg(feature = "otlp")]
         if validates_delivery && let Some(endpoint) = &self.otlp_endpoint {
-            validate_endpoint(endpoint, self.allow_insecure_http)?;
+            validate_endpoint(endpoint)?;
         }
         if validates_delivery
             && self.tls_identity_pem.is_some()
@@ -645,7 +645,7 @@ impl AgentConfig {
             if let Some(base) = self.endpoint.strip_suffix(host_protocol::AGENT_REPORT_PATH) {
                 return format!("{base}{}", host_protocol::AGENT_PAIRING_REQUESTS_PATH);
             }
-            let mut url = reqwest::Url::parse(&self.endpoint)
+            let mut url = sarmg_agent_secure_http::Url::parse(&self.endpoint)
                 .expect("endpoint was validated before pairing_endpoint is used");
             url.set_path(host_protocol::AGENT_PAIRING_REQUESTS_PATH);
             url.set_query(None);
@@ -654,16 +654,11 @@ impl AgentConfig {
         })
     }
 
-    /// Validate an endpoint that will outlive this process. Remote plaintext
-    /// requires both durable administrator authorization and the effective
-    /// runtime policy, so an environment or CLI override cannot revive or
-    /// create a persistent insecure binding by itself.
     pub(crate) fn validate_durable_report_endpoint(
         &self,
         report_endpoint: &str,
     ) -> anyhow::Result<()> {
-        validate_persisted_pairing_transport(report_endpoint, self.persisted_allow_insecure_http)?;
-        validate_endpoint(report_endpoint, self.allow_insecure_http)
+        validate_endpoint(report_endpoint)
     }
 
     /// Save the browser-pairing endpoint only after the pending request has
@@ -675,9 +670,6 @@ impl AgentConfig {
     fn persist_durable_config(&self) -> anyhow::Result<PathBuf> {
         let path = self.config_path.clone().unwrap_or_else(default_config_path);
         let mut persisted = self.clone();
-        // Never launder a process-local plaintext override into the durable
-        // policy while saving a successfully paired endpoint.
-        persisted.allow_insecure_http = self.persisted_allow_insecure_http;
         persisted.config_path = None;
         persisted.server_override = None;
         persisted.endpoint_override = None;
@@ -686,8 +678,11 @@ impl AgentConfig {
         persisted.tray_deadline_seconds = None;
         persisted.tray_activation_stdin = false;
         persisted.replace_pending_pairing = false;
-        let bytes = serde_json::to_vec_pretty(&persisted)?;
-        persist_private_config(&path, &bytes)?;
+        let mut output = SecretWriter::new(MAX_CONFIG_BYTES)?;
+        serde_json::to_writer_pretty(&mut output, &persisted)?;
+        output.write_all(b"\n")?;
+        let bytes = output.into_bytes();
+        publish_private_config(&path, bytes.expose())?;
         Ok(path)
     }
 }
@@ -774,57 +769,22 @@ fn non_empty(value: String) -> Option<String> {
     (!value.is_empty()).then_some(value)
 }
 
-fn parse_bool(value: &str) -> anyhow::Result<bool> {
-    match value.trim().to_ascii_lowercase().as_str() {
-        "1" | "true" | "yes" | "on" => Ok(true),
-        "0" | "false" | "no" | "off" => Ok(false),
-        _ => bail!("expected true/false, 1/0, yes/no, or on/off"),
-    }
-}
-
-pub(crate) fn validate_endpoint(endpoint: &str, allow_insecure_http: bool) -> anyhow::Result<()> {
-    let url = reqwest::Url::parse(endpoint)
+pub(crate) fn validate_endpoint(endpoint: &str) -> anyhow::Result<()> {
+    let url = sarmg_agent_secure_http::Url::parse(endpoint)
         .with_context(|| format!("invalid telemetry endpoint {endpoint}"))?;
-    if !url.username().is_empty() || url.password().is_some() {
-        bail!("telemetry endpoint must not embed credentials");
-    }
-    match url.scheme() {
-        "https" => Ok(()),
-        "http" if allow_insecure_http || crate::tray_support::is_loopback_host(url.host_str()) => {
-            Ok(())
-        }
-        "http" => bail!(
-            "plain HTTP telemetry is allowed only for loopback; use HTTPS or explicitly set \
-             allow_insecure_http for an isolated trusted network"
-        ),
-        scheme => bail!("unsupported telemetry endpoint scheme: {scheme}"),
-    }
-}
-
-fn validate_persisted_pairing_transport(
-    report_endpoint: &str,
-    persisted_allow_insecure_http: bool,
-) -> anyhow::Result<()> {
-    let url = reqwest::Url::parse(report_endpoint)
-        .with_context(|| format!("invalid telemetry endpoint {report_endpoint}"))?;
-    if url.scheme() == "http"
-        && !crate::tray_support::is_loopback_host(url.host_str())
-        && !persisted_allow_insecure_http
-    {
-        bail!(
-            "pairing a remote plaintext report endpoint requires allow_insecure_http=true in the \
-             existing persistent config; a CLI or environment override cannot safely authorize a \
-             durable binding"
-        );
-    }
-    Ok(())
+    sarmg_agent_secure_http::agent_network_policy(&url)
+        .map(|_| ())
+        .with_context(|| {
+            format!("telemetry endpoint violates Foundation network policy: {endpoint}")
+        })
 }
 
 pub(crate) fn validate_pairing_endpoint(endpoint: &str) -> anyhow::Result<()> {
-    validate_endpoint(endpoint, false).context(
+    validate_endpoint(endpoint).context(
         "browser pairing requires HTTPS except when the endpoint is on the local loopback host",
     )?;
-    let url = reqwest::Url::parse(endpoint).expect("validate_endpoint accepted the URL");
+    let url =
+        sarmg_agent_secure_http::Url::parse(endpoint).expect("validate_endpoint accepted the URL");
     if url.query().is_some() || url.fragment().is_some() {
         bail!(
             "pairing_endpoint must not contain a query or fragment because request-specific paths \
@@ -865,16 +825,59 @@ fn default_config_path() -> PathBuf {
     }
 }
 
+#[cfg(test)]
 fn persist_private_config(path: &Path, bytes: &[u8]) -> anyhow::Result<()> {
     path.parent().context("config path has no parent")?;
-    let mut content = Vec::with_capacity(bytes.len() + 1);
-    content.extend_from_slice(bytes);
-    content.push(b'\n');
+    if bytes.len() >= MAX_CONFIG_BYTES {
+        bail!("config exceeds its {MAX_CONFIG_BYTES}-byte budget including the final newline");
+    }
+    let mut output = SecretWriter::new(MAX_CONFIG_BYTES)?;
+    output.write_all(bytes)?;
+    output.write_all(b"\n")?;
+    publish_private_config(path, output.into_bytes().expose())
+}
+
+fn publish_private_config(path: &Path, content: &[u8]) -> anyhow::Result<()> {
     // pair 通常由 root 执行，而长期服务使用 host-monitor/_hostmonitor。原配置若
     // 已由安装包设置好属主与权限，原子替换必须把它们复制到新 inode；仅保留 mode
     // 会留下 root:root 0640，服务账户仍然读不到。
-    private_fs::write_atomic(path, &content, OwnerPolicy::PreserveTarget)
-        .with_context(|| format!("failed to save private config {}", path.display()))
+    #[cfg(unix)]
+    {
+        use sarmg_agent_fs_safety::{ConfigurationDirectory, EntryName};
+        let path = std::path::absolute(path)?;
+        let directory =
+            ConfigurationDirectory::open(path.parent().context("config path has no parent")?)?;
+        let name = EntryName::new(path.file_name().context("config path has no filename")?)?;
+        directory
+            .replace(&name, content)
+            .with_context(|| format!("failed to save private config {}", path.display()))
+    }
+    #[cfg(not(unix))]
+    {
+        private_fs::write_atomic(path, content)
+            .with_context(|| format!("failed to save private config {}", path.display()))
+    }
+}
+
+fn read_private_config(path: &Path) -> anyhow::Result<SecretBytes> {
+    #[cfg(unix)]
+    {
+        use sarmg_agent_fs_safety::{ConfigurationDirectory, EntryName};
+        let path = std::path::absolute(path)?;
+        let directory =
+            ConfigurationDirectory::open(path.parent().context("config path has no parent")?)?;
+        let name = EntryName::new(path.file_name().context("config path has no filename")?)?;
+        Ok(SecretBytes::new(
+            directory.read_bounded(&name, MAX_CONFIG_BYTES)?,
+        ))
+    }
+    #[cfg(not(unix))]
+    {
+        Ok(SecretBytes::new(private_fs::read_private(
+            path,
+            MAX_CONFIG_BYTES,
+        )?))
+    }
 }
 
 fn print_help() {
@@ -889,11 +892,7 @@ fn print_help() {
          Pairing example:\n\
            host-monitor pair --server https://host-monitoring.example.com\n\n\
          Common options: --config PATH [--endpoint REPORT_URL] [--output human|json]\n\
-           [--allow-insecure-http]\n\
-         --allow-insecure-http permits remote plaintext report/OTLP delivery only;\n\
-           pairing a remote plaintext report endpoint requires this policy to already\n\
-           be true in the persistent config; CLI/environment overrides are insufficient.\n\
-           browser pairing still requires HTTPS except on the local loopback host.\n\
+         Production delivery requires HTTPS; HTTP is restricted to loopback development.\n\
          Doctor delivery opt-in: --delivery (sends one report and may drain queued reports)\n\
          Pair options: [--server URL | --endpoint REPORT_URL]\n\
            [--replace-pending-pairing]\n\
@@ -908,6 +907,194 @@ fn print_help() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn configuration_secrets_share_storage_and_round_trip_only_at_explicit_fields() {
+        let token = Arc::new(SecretString::new("配置令牌🔑".into()));
+        let password = Arc::new(SecretString::new(" password with spaces ".into()));
+        let config = AgentConfig {
+            otlp_token: Some(token.clone()),
+            tls_identity_password: Some(password.clone()),
+            ..AgentConfig::default()
+        };
+        let copy = config.clone();
+        assert!(Arc::ptr_eq(copy.otlp_token.as_ref().unwrap(), &token));
+        assert!(Arc::ptr_eq(
+            copy.tls_identity_password.as_ref().unwrap(),
+            &password
+        ));
+        assert!(
+            !format!("{:?}/{:?}", copy.otlp_token, copy.tls_identity_password)
+                .contains("password with spaces")
+        );
+        let mut value = serde_json::to_value(&config).unwrap();
+        assert_eq!(value["otlp_token"], token.expose());
+        assert_eq!(value["tls_identity_password"], password.expose());
+        let loaded: AgentConfig = serde_json::from_value(value.clone()).unwrap();
+        assert_eq!(loaded.otlp_token.unwrap().expose(), token.expose());
+        assert_eq!(
+            loaded.tls_identity_password.unwrap().expose(),
+            password.expose()
+        );
+        value.as_object_mut().unwrap().remove("otlp_token");
+        value["tls_identity_password"] = serde_json::Value::Null;
+        let empty: AgentConfig = serde_json::from_value(value.clone()).unwrap();
+        assert!(empty.otlp_token.is_none() && empty.tls_identity_password.is_none());
+        value["tls_identity_password"] = serde_json::json!("");
+        let empty_password: AgentConfig = serde_json::from_value(value).unwrap();
+        assert_eq!(empty_password.tls_identity_password.unwrap().expose(), "");
+    }
+
+    #[test]
+    fn failed_secret_serialization_preserves_the_saved_configuration() {
+        let directory = std::env::temp_dir().join(format!(
+            "host-config-secret-budget-{}",
+            uuid::Uuid::new_v4()
+        ));
+        fs::create_dir(&directory).unwrap();
+        let path = directory.join("config.json");
+        let mut config = AgentConfig {
+            config_path: Some(path.clone()),
+            otlp_token: Some(Arc::new(SecretString::new("private-token-marker".into()))),
+            ..AgentConfig::default()
+        };
+        config.persist_after_pairing().unwrap();
+        let original = fs::read(&path).unwrap();
+        assert_eq!(original.last(), Some(&b'\n'));
+        let (loaded, _) =
+            AgentConfig::load_selected_config(Some(&path), AgentCommand::Run).unwrap();
+        assert_eq!(loaded.otlp_token.unwrap().expose(), "private-token-marker");
+        // Escaped bytes count toward the budget, not the source String length.
+        config.tls_identity_password = Some(Arc::new(SecretString::new(
+            "\"".repeat(MAX_CONFIG_BYTES / 2),
+        )));
+        let error = config.persist_after_pairing().unwrap_err();
+        assert!(!format!("{error:#}/{error:?}").contains("private-token-marker"));
+        assert_eq!(fs::read(&path).unwrap(), original);
+        assert_eq!(fs::read_dir(&directory).unwrap().count(), 1);
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn invalid_configuration_diagnostics_do_not_echo_secret_values_or_keys() {
+        let directory = std::env::temp_dir().join(format!(
+            "host-config-secret-errors-{}",
+            uuid::Uuid::new_v4()
+        ));
+        fs::create_dir(&directory).unwrap();
+        let path = directory.join("config.json");
+        for field in [
+            "application_version",
+            "otlp_token",
+            "tls_identity_password",
+            "private-marker-key",
+        ] {
+            let mut value = serde_json::to_value(AgentConfig::default()).unwrap();
+            value[field] = if field == "application_version" {
+                serde_json::json!("private-marker-value")
+            } else {
+                serde_json::json!({"private-marker-value": true})
+            };
+            let bytes = serde_json::to_vec(&value).unwrap();
+            persist_private_config(&path, &bytes).unwrap();
+            let error = AgentConfig::load_selected_config(Some(&path), AgentCommand::Run)
+                .err()
+                .unwrap();
+            assert!(!format!("{error:#}/{error:?}").contains("private-marker"));
+            let (_, issue) =
+                AgentConfig::load_selected_config(Some(&path), AgentCommand::Status).unwrap();
+            let issue = issue.unwrap();
+            assert!(issue.contains("line") && !issue.contains("private-marker"));
+            let mut expected = bytes;
+            expected.push(b'\n');
+            assert_eq!(fs::read(&path).unwrap(), expected);
+        }
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn configuration_persistence_preserves_service_mode_and_rejects_links_and_public_files() {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt, symlink};
+        let directory =
+            std::env::temp_dir().join(format!("host-config-safety-{}", uuid::Uuid::new_v4()));
+        fs::create_dir(&directory).unwrap();
+        fs::set_permissions(&directory, fs::Permissions::from_mode(0o750)).unwrap();
+        let path = directory.join("config.json");
+        let config = AgentConfig {
+            config_path: Some(path.clone()),
+            ..AgentConfig::default()
+        };
+        config.persist_after_pairing().unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o640)).unwrap();
+        let before = fs::metadata(&path).unwrap();
+        config.persist_after_pairing().unwrap();
+        let after = fs::metadata(&path).unwrap();
+        assert_eq!(
+            (after.uid(), after.gid(), after.mode() & 0o7777),
+            (before.uid(), before.gid(), 0o640)
+        );
+        assert!(AgentConfig::load_selected_config(Some(&path), AgentCommand::Run).is_ok());
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+        assert!(config.persist_after_pairing().is_err());
+        assert!(AgentConfig::load_selected_config(Some(&path), AgentCommand::Run).is_err());
+        let (_, issue) =
+            AgentConfig::load_selected_config(Some(&path), AgentCommand::Status).unwrap();
+        assert!(issue.is_some());
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o640)).unwrap();
+        let victim = directory.join("victim");
+        fs::rename(&path, &victim).unwrap();
+        let bytes = fs::read(&victim).unwrap();
+        symlink(&victim, &path).unwrap();
+        assert!(config.persist_after_pairing().is_err());
+        assert!(AgentConfig::load_selected_config(Some(&path), AgentCommand::Run).is_err());
+        fs::remove_file(&path).unwrap();
+        fs::hard_link(&victim, &path).unwrap();
+        assert!(config.persist_after_pairing().is_err());
+        assert!(AgentConfig::load_selected_config(Some(&path), AgentCommand::Run).is_err());
+        assert_eq!(fs::read(&victim).unwrap(), bytes);
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn configuration_budget_applies_to_reads_and_writes_without_truncation() {
+        let directory =
+            std::env::temp_dir().join(format!("host-config-budget-{}", uuid::Uuid::new_v4()));
+        let path = directory.join("config.json");
+        assert!(persist_private_config(&path, &vec![b'x'; MAX_CONFIG_BYTES]).is_err());
+        assert!(!directory.exists());
+        fs::create_dir(&directory).unwrap();
+        let mut bytes = serde_json::to_vec(&AgentConfig::default()).unwrap();
+        bytes.resize(MAX_CONFIG_BYTES - 1, b' ');
+        persist_private_config(&path, &bytes).unwrap();
+        assert!(AgentConfig::load_selected_config(Some(&path), AgentCommand::Run).is_ok());
+        let file = fs::OpenOptions::new().write(true).open(&path).unwrap();
+        file.set_len((MAX_CONFIG_BYTES + 1) as u64).unwrap();
+        assert!(AgentConfig::load_selected_config(Some(&path), AgentCommand::Run).is_err());
+        let (_, issue) =
+            AgentConfig::load_selected_config(Some(&path), AgentCommand::Status).unwrap();
+        assert!(issue.is_some());
+        assert_eq!(
+            fs::metadata(&path).unwrap().len(),
+            (MAX_CONFIG_BYTES + 1) as u64
+        );
+        drop(file);
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn spool_configuration_obeys_platform_ceiling() {
+        let mut config = AgentConfig {
+            spool_max_bytes: sarmg_agent_runtime::MAX_SPOOL_BYTES,
+            ..Default::default()
+        };
+        config.validate_for_diagnostics().unwrap();
+        config.spool_max_bytes += 1;
+        assert!(
+            format!("{:#}", config.validate_for_diagnostics().unwrap_err())
+                .contains("invalid spool limits")
+        );
+    }
 
     #[test]
     fn package_version_output_is_exact() {
@@ -1044,85 +1231,10 @@ mod tests {
 
     #[test]
     fn rejects_remote_plaintext_by_default() {
-        assert!(validate_endpoint("http://192.0.2.10/report", false).is_err());
-        assert!(validate_endpoint("http://127.0.0.1/report", false).is_ok());
-        assert!(validate_endpoint("http://[::1]/report", false).is_ok());
-        assert!(validate_endpoint("https://telemetry.example/report", false).is_ok());
-    }
-
-    #[test]
-    fn insecure_override_never_applies_to_browser_pairing() {
-        assert!(
-            validate_endpoint("http://192.0.2.10/api/v2/host-monitor/report", true).is_ok(),
-            "the explicit override still permits telemetry on a trusted isolated network"
-        );
-        assert!(
-            validate_pairing_endpoint("http://192.0.2.10/api/v2/host-monitor/pairing-requests")
-                .is_err(),
-            "the same override must never expose browser pairing over remote plaintext HTTP"
-        );
-
-        let split_endpoints = AgentConfig {
-            endpoint: "http://192.0.2.10/api/v2/host-monitor/report".into(),
-            pairing_endpoint: Some(
-                "https://host-monitoring.example/api/v2/host-monitor/pairing-requests".into(),
-            ),
-            allow_insecure_http: true,
-            ..AgentConfig::default()
-        };
-        split_endpoints.validate(AgentCommand::Run).unwrap();
-    }
-
-    #[test]
-    fn remote_plaintext_pairing_requires_a_persisted_transport_policy() {
-        let remote = "http://192.0.2.10/api/v2/host-monitor/report";
-        assert!(validate_persisted_pairing_transport(remote, false).is_err());
-        assert!(validate_persisted_pairing_transport(remote, true).is_ok());
-        assert!(
-            validate_persisted_pairing_transport(
-                "http://127.0.0.1:8081/api/v2/host-monitor/report",
-                false
-            )
-            .is_ok()
-        );
-        assert!(
-            validate_persisted_pairing_transport(
-                "https://host-monitoring.example/api/v2/host-monitor/report",
-                false
-            )
-            .is_ok()
-        );
-    }
-
-    #[test]
-    fn saving_pairing_config_preserves_the_original_plaintext_policy() {
-        let root = std::env::temp_dir().join(format!(
-            "host-monitor-persisted-http-policy-{}",
-            uuid::Uuid::new_v4()
-        ));
-        fs::create_dir_all(&root).unwrap();
-
-        for original_policy in [false, true] {
-            let path = root.join(format!("config-{original_policy}.json"));
-            let original = AgentConfig {
-                allow_insecure_http: original_policy,
-                ..AgentConfig::default()
-            };
-            fs::write(&path, serde_json::to_vec_pretty(&original).unwrap()).unwrap();
-
-            let (mut loaded, issue) =
-                AgentConfig::load_selected_config(Some(&path), AgentCommand::Pair).unwrap();
-            assert!(issue.is_none());
-            assert_eq!(loaded.persisted_allow_insecure_http, original_policy);
-            loaded.config_path = Some(path.clone());
-            loaded.allow_insecure_http = !original_policy;
-            loaded.persist_durable_config().unwrap();
-
-            let saved: AgentConfig = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
-            assert_eq!(saved.allow_insecure_http, original_policy);
-        }
-
-        fs::remove_dir_all(root).unwrap();
+        assert!(validate_endpoint("http://192.0.2.10/report").is_err());
+        assert!(validate_endpoint("http://127.0.0.1/report").is_ok());
+        assert!(validate_endpoint("http://[::1]/report").is_ok());
+        assert!(validate_endpoint("https://telemetry.example/report").is_ok());
     }
 
     #[test]
@@ -1139,12 +1251,17 @@ mod tests {
             let error = config
                 .validate(AgentCommand::Run)
                 .expect_err("pairing request paths cannot be appended after a query or fragment");
-            assert!(error.to_string().contains("query or fragment"));
+            let message = format!("{error:#}");
+            assert!(
+                message.contains("query or fragment")
+                    || message.contains("Foundation network policy")
+            );
         }
 
+        assert!(validate_endpoint("https://telemetry.example/report?tenant=one").is_ok());
         assert!(
-            validate_endpoint("https://telemetry.example/report?tenant=one#client", false).is_ok(),
-            "the generic telemetry endpoint keeps its existing query/fragment policy"
+            validate_endpoint("https://telemetry.example/report#client").is_err(),
+            "Foundation rejects URL fragments before any network request"
         );
     }
 
@@ -1173,7 +1290,7 @@ mod tests {
     #[test]
     fn tls_identity_password_requires_a_pkcs12_identity() {
         let config = AgentConfig {
-            tls_identity_password: Some("secret".into()),
+            tls_identity_password: Some(Arc::new(SecretString::new("secret".into()))),
             ..AgentConfig::default()
         };
         let error = config

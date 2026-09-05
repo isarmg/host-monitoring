@@ -1,6 +1,6 @@
 # Host Monitoring 文档总览
 
-本目录只描述当前 `0.7.0`。事实优先级依次为协议类型和当前 Schema、运行时校验、测试、发行 manifest、
+本目录只描述当前 `0.8.0`。事实优先级依次为协议类型和当前 Schema、运行时校验、测试、发行 manifest、
 本文档。更改版本身份、HTTP 路由、报告字段或安装布局时，应在同一提交中同步对应文档。
 
 范围必须先分清：Server 与随包管理 Web 只属于 AMD64 GNU/Linux，Web 使用 React/Vite 与 Foundation

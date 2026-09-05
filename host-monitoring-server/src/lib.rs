@@ -1,10 +1,8 @@
-pub mod auth;
 pub mod config;
 pub mod database_lock;
 pub mod database_schema;
 pub mod error;
 pub mod http;
-mod login;
 pub mod model;
 mod pairing_admission;
 pub mod release_bundle;

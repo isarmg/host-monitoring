@@ -1,36 +1,27 @@
-use std::{path::PathBuf, time::Duration};
+use std::path::PathBuf;
 
 use axum::{
     Router,
     body::Body,
     extract::ConnectInfo,
-    http::{Method, Request, Response, StatusCode, header},
+    http::{Method, Request, StatusCode, header},
 };
-use chrono::Utc;
 use host_monitoring_server::{
-    auth::{Auth, CSRF_HEADER, CookieMode},
     http::{AppState, router},
     store,
     telemetry::{TelemetryWriterConfig, TelemetryWriterTask},
-    token_hash,
 };
 use http_body_util::BodyExt;
-use sarmg_contracts::{AdministratorRole, AdministratorSession};
-use serde_json::{Value, json};
+use sarmg_admin_auth::{AdministratorOriginMode, CSRF_HEADER};
+use sarmg_contracts::AdministratorSession;
+use serde_json::json;
 use sqlx::SqlitePool;
 use tower::ServiceExt;
-use uuid::Uuid;
 
 struct Fixture {
     app: Router,
     pool: SqlitePool,
-    _telemetry_writer: TelemetryWriterTask,
-}
-
-struct BrowserCredentials {
-    cookie: String,
-    session_token: String,
-    csrf_token: String,
+    _telemetry: TelemetryWriterTask,
 }
 
 async fn fixture() -> Fixture {
@@ -41,595 +32,175 @@ async fn fixture() -> Fixture {
         .expect("open test database");
     store::initialize_empty(&pool)
         .await
-        .expect("initialize current test schema");
+        .expect("initialize schema");
     store::ensure_admin_user(&pool, "admin", Some("correct-password"))
         .await
         .expect("seed administrator");
-    let auth = Auth::new(
-        Duration::from_secs(60),
-        Duration::from_secs(600),
-        CookieMode::LoopbackDevelopment,
-    )
-    .expect("build development auth");
-    let (state, telemetry_writer) =
-        AppState::with_telemetry_config(pool.clone(), auth, TelemetryWriterConfig::production());
+    let (state, telemetry) = AppState::with_telemetry_config(
+        pool.clone(),
+        AdministratorOriginMode::LoopbackDevelopmentHttp,
+        TelemetryWriterConfig::production(),
+    );
     Fixture {
-        app: router(state, PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("web")),
+        app: router(state, PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("web"))
+            .expect("compose platform router"),
         pool,
-        _telemetry_writer: telemetry_writer,
+        _telemetry: telemetry,
     }
 }
 
-fn request(
-    method: Method,
-    uri: &str,
-    cookie: Option<&str>,
-    csrf_token: Option<&str>,
-    body: Option<Value>,
-) -> Request<Body> {
-    let unsafe_request = method == Method::POST
-        || method == Method::PUT
-        || method == Method::PATCH
-        || method == Method::DELETE;
+fn request(method: Method, uri: &str, cookie: Option<&str>, csrf: Option<&str>) -> Request<Body> {
     let mut builder = Request::builder()
-        .method(method)
+        .method(method.clone())
         .uri(uri)
-        .header(header::HOST, "127.0.0.1");
-    if unsafe_request {
-        builder = builder
-            .header(header::ORIGIN, "http://127.0.0.1")
-            .header(sarmg_admin_auth::SEC_FETCH_SITE_HEADER, "same-origin");
+        .header(header::HOST, "127.0.0.1")
+        .header(header::ORIGIN, "http://127.0.0.1")
+        .header(sarmg_admin_auth::SEC_FETCH_SITE_HEADER, "same-origin");
+    if let Some(value) = cookie {
+        builder = builder.header(header::COOKIE, value);
     }
-    if let Some(cookie) = cookie {
-        builder = builder.header(header::COOKIE, cookie);
+    if let Some(value) = csrf {
+        builder = builder.header(CSRF_HEADER, value);
     }
-    if let Some(csrf_token) = csrf_token {
-        builder = builder.header(CSRF_HEADER, csrf_token);
-    }
-    let body = if let Some(body) = body {
+    let body = if method == Method::POST && uri.ends_with("/login") {
         builder = builder.header(header::CONTENT_TYPE, "application/json");
-        Body::from(body.to_string())
+        Body::from(json!({"username":"admin","password":"correct-password"}).to_string())
     } else {
         Body::empty()
     };
-    let mut request = builder.body(body).expect("build request");
+    let mut request = builder.body(body).expect("request");
     request.extensions_mut().insert(ConnectInfo(
         "192.0.2.10:41000"
             .parse::<std::net::SocketAddr>()
-            .expect("test peer address"),
+            .expect("peer address"),
     ));
     request
 }
 
-async fn send(fixture: &Fixture, request: Request<Body>) -> Response<Body> {
-    fixture
+#[tokio::test]
+async fn foundation_login_session_csrf_and_logout_are_used_end_to_end() {
+    let fixture = fixture().await;
+    let login = fixture
         .app
         .clone()
-        .oneshot(request)
+        .oneshot(request(Method::POST, "/api/v2/auth/login", None, None))
         .await
-        .expect("router response")
-}
-
-async fn response_json(response: Response<Body>) -> Value {
-    let bytes = response
-        .into_body()
-        .collect()
-        .await
-        .expect("collect response body")
-        .to_bytes();
-    serde_json::from_slice(&bytes).expect("JSON response body")
-}
-
-fn assert_administrator_session(value: &Value) {
-    let session: AdministratorSession = serde_json::from_value(value.clone())
-        .expect("response must be the strict Foundation administrator session");
-    assert!(session.authenticated);
-    assert_eq!(session.role, AdministratorRole::Admin);
-    assert_eq!(session.username, "admin");
-    Uuid::parse_str(&session.user_id).expect("administrator session user_id must be a UUID");
-    assert_eq!(session.csrf_token.len(), 43);
-}
-
-async fn login(fixture: &Fixture, password: &str) -> BrowserCredentials {
-    let response = send(
-        fixture,
-        request(
-            Method::POST,
-            "/api/v2/auth/login",
-            None,
-            None,
-            Some(json!({
-                "username": "admin",
-                "password": password
-            })),
-        ),
-    )
-    .await;
-    assert_eq!(response.status(), StatusCode::OK);
-    assert_eq!(
-        response.headers().get(header::CACHE_CONTROL).unwrap(),
-        "no-store"
-    );
-    let set_cookie = response
-        .headers()
-        .get(header::SET_COOKIE)
-        .expect("login sets session cookie")
+        .expect("login response");
+    assert_eq!(login.status(), StatusCode::OK);
+    let cookie = login.headers()[header::SET_COOKIE]
         .to_str()
-        .unwrap();
-    let cookie = set_cookie
+        .expect("cookie")
         .split(';')
         .next()
         .expect("cookie pair")
-        .to_string();
-    let session_token = cookie.split_once('=').expect("cookie token").1.to_string();
-    let json = response_json(response).await;
-    assert_administrator_session(&json);
-    BrowserCredentials {
-        cookie,
-        session_token,
-        csrf_token: json["csrf_token"].as_str().unwrap().to_string(),
-    }
-}
+        .to_owned();
+    let body = login.into_body().collect().await.expect("body").to_bytes();
+    let session: AdministratorSession = serde_json::from_slice(&body).expect("session contract");
+    let stored: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM _sarmg_admin_sessions")
+        .fetch_one(&fixture.pool)
+        .await
+        .expect("session count");
+    assert_eq!(stored, 1);
 
-async fn reload_session(fixture: &Fixture, cookie: &str) -> (StatusCode, Option<String>) {
-    let response = send(
-        fixture,
-        request(
+    let protected = fixture
+        .app
+        .clone()
+        .oneshot(request(
+            Method::GET,
+            "/api/v2/monitoring/hosts",
+            Some(&cookie),
+            None,
+        ))
+        .await
+        .expect("protected response");
+    assert_eq!(protected.status(), StatusCode::OK);
+    let rejected_mutation = fixture
+        .app
+        .clone()
+        .oneshot(request(
+            Method::POST,
+            "/api/v2/monitoring/agent-instances",
+            Some(&cookie),
+            None,
+        ))
+        .await
+        .expect("business mutation csrf rejection");
+    assert_eq!(rejected_mutation.status(), StatusCode::FORBIDDEN);
+    let body = rejected_mutation
+        .into_body()
+        .collect()
+        .await
+        .expect("body")
+        .to_bytes();
+    let error: sarmg_contracts::ErrorEnvelope =
+        serde_json::from_slice(&body).expect("Foundation error");
+    assert_eq!(error.code.as_str(), "auth.csrf_rejected");
+    let rejected = fixture
+        .app
+        .clone()
+        .oneshot(request(
+            Method::POST,
+            "/api/v2/auth/logout",
+            Some(&cookie),
+            None,
+        ))
+        .await
+        .expect("csrf rejection");
+    assert_eq!(rejected.status(), StatusCode::FORBIDDEN);
+    let logout = fixture
+        .app
+        .clone()
+        .oneshot(request(
+            Method::POST,
+            "/api/v2/auth/logout",
+            Some(&cookie),
+            Some(&session.csrf_token),
+        ))
+        .await
+        .expect("logout response");
+    assert_eq!(logout.status(), StatusCode::NO_CONTENT);
+    let reload = fixture
+        .app
+        .oneshot(request(
             Method::GET,
             "/api/v2/auth/session",
-            Some(cookie),
+            Some(&cookie),
             None,
-            None,
-        ),
-    )
-    .await;
-    let status = response.status();
-    if status != StatusCode::OK {
-        return (status, None);
-    }
-    let json = response_json(response).await;
-    assert_administrator_session(&json);
-    (
-        status,
-        Some(json["csrf_token"].as_str().unwrap().to_string()),
-    )
+        ))
+        .await
+        .expect("reload response");
+    assert_eq!(reload.status(), StatusCode::UNAUTHORIZED);
 }
 
 #[tokio::test]
-async fn login_reload_csrf_and_logout_use_revocable_database_sessions() {
+async fn disabling_foundation_administrator_invalidates_existing_session() {
     let fixture = fixture().await;
-    let credentials = login(&fixture, "correct-password").await;
-    assert_eq!(credentials.session_token.len(), 43);
-    assert_eq!(credentials.csrf_token.len(), 43);
-
-    let (stored_session_hash, session_id): (String, Uuid) =
-        sqlx::query_as("SELECT token_hash,session_id FROM auth_sessions WHERE token_hash=?")
-            .bind(token_hash(&credentials.session_token))
-            .fetch_one(&fixture.pool)
-            .await
-            .expect("persisted session digest");
-    assert_eq!(stored_session_hash, token_hash(&credentials.session_token));
-    assert_ne!(stored_session_hash, credentials.session_token);
-    let stored_csrf_hashes: Vec<String> =
-        sqlx::query_scalar("SELECT token_hash FROM auth_session_csrf_tokens WHERE session_id=?")
-            .bind(session_id)
-            .fetch_all(&fixture.pool)
-            .await
-            .expect("persisted CSRF digests");
-    assert!(stored_csrf_hashes.contains(&token_hash(&credentials.csrf_token)));
-    assert!(!stored_csrf_hashes.contains(&credentials.csrf_token));
-
-    let short_idle_expiry = Utc::now() + chrono::Duration::seconds(1);
-    sqlx::query("UPDATE auth_sessions SET idle_expires_at=? WHERE session_id=?")
-        .bind(short_idle_expiry)
-        .bind(session_id)
-        .execute(&fixture.pool)
+    let login = fixture
+        .app
+        .clone()
+        .oneshot(request(Method::POST, "/api/v2/auth/login", None, None))
         .await
-        .expect("shorten idle expiry");
-    let (status, reload_csrf) = reload_session(&fixture, &credentials.cookie).await;
-    assert_eq!(status, StatusCode::OK);
-    let reload_csrf = reload_csrf.expect("reload returns a CSRF token");
-    assert_ne!(reload_csrf, credentials.csrf_token);
-    let (refreshed_idle_expiry, absolute_expiry): (chrono::DateTime<Utc>, chrono::DateTime<Utc>) =
-        sqlx::query_as(
-            "SELECT idle_expires_at,absolute_expires_at FROM auth_sessions WHERE session_id=?",
-        )
-        .bind(session_id)
-        .fetch_one(&fixture.pool)
-        .await
-        .expect("read refreshed expiry");
-    assert!(refreshed_idle_expiry > short_idle_expiry);
-    assert!(refreshed_idle_expiry <= absolute_expiry);
-
-    let invite = json!({"display_name": "CSRF Host", "expires_in_minutes": 15});
-    let mut missing_origin = request(
-        Method::POST,
-        "/api/v2/monitoring/agent-instances",
-        Some(&credentials.cookie),
-        Some(&reload_csrf),
-        Some(invite.clone()),
-    );
-    missing_origin.headers_mut().remove(header::ORIGIN);
-    let response = send(&fixture, missing_origin).await;
-    assert_eq!(response.status(), StatusCode::FORBIDDEN);
-
-    let mut cross_origin = request(
-        Method::POST,
-        "/api/v2/monitoring/agent-instances",
-        Some(&credentials.cookie),
-        Some(&reload_csrf),
-        Some(invite.clone()),
-    );
-    cross_origin
-        .headers_mut()
-        .insert(header::ORIGIN, "http://attacker.example".parse().unwrap());
-    let response = send(&fixture, cross_origin).await;
-    assert_eq!(response.status(), StatusCode::FORBIDDEN);
-
-    for csrf in [None, Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")] {
-        let response = send(
-            &fixture,
-            request(
-                Method::POST,
-                "/api/v2/monitoring/agent-instances",
-                Some(&credentials.cookie),
-                csrf,
-                Some(invite.clone()),
-            ),
-        )
-        .await;
-        assert_eq!(response.status(), StatusCode::FORBIDDEN);
-    }
-    let invite_count: i64 = sqlx::query_scalar("SELECT count(*) FROM agent_instance_invites")
-        .fetch_one(&fixture.pool)
-        .await
-        .unwrap();
-    assert_eq!(invite_count, 0);
-
-    let response = send(
-        &fixture,
-        request(
-            Method::POST,
-            "/api/v2/monitoring/agent-instances",
-            Some(&credentials.cookie),
-            Some(&reload_csrf),
-            Some(invite),
-        ),
-    )
-    .await;
-    assert_eq!(response.status(), StatusCode::CREATED);
-
-    let other = login(&fixture, "correct-password").await;
-    let cross_session = send(
-        &fixture,
-        request(
-            Method::POST,
-            "/api/v2/monitoring/agent-instances",
-            Some(&other.cookie),
-            Some(&reload_csrf),
-            Some(json!({"display_name": "Wrong Session", "expires_in_minutes": 15})),
-        ),
-    )
-    .await;
-    assert_eq!(cross_session.status(), StatusCode::FORBIDDEN);
-    let other_logout = send(
-        &fixture,
-        request(
-            Method::POST,
-            "/api/v2/auth/logout",
-            Some(&other.cookie),
-            Some(&other.csrf_token),
-            None,
-        ),
-    )
-    .await;
-    assert_eq!(other_logout.status(), StatusCode::NO_CONTENT);
-
-    let missing_csrf_logout = send(
-        &fixture,
-        request(
-            Method::POST,
-            "/api/v2/auth/logout",
-            Some(&credentials.cookie),
-            None,
-            None,
-        ),
-    )
-    .await;
-    assert_eq!(missing_csrf_logout.status(), StatusCode::FORBIDDEN);
-    assert_eq!(
-        reload_session(&fixture, &credentials.cookie).await.0,
-        StatusCode::OK
-    );
-
-    let logout = send(
-        &fixture,
-        request(
-            Method::POST,
-            "/api/v2/auth/logout",
-            Some(&credentials.cookie),
-            Some(&reload_csrf),
-            None,
-        ),
-    )
-    .await;
-    assert_eq!(logout.status(), StatusCode::NO_CONTENT);
-    let expired_cookie = logout
-        .headers()
-        .get(header::SET_COOKIE)
-        .unwrap()
+        .expect("login response");
+    let cookie = login.headers()[header::SET_COOKIE]
         .to_str()
-        .unwrap();
-    assert!(expired_cookie.starts_with("host_session=;"));
-    assert!(expired_cookie.contains("Max-Age=0"));
-    assert_eq!(
-        reload_session(&fixture, &credentials.cookie).await.0,
-        StatusCode::UNAUTHORIZED
-    );
-
-    let (revoked_at, csrf_count): (Option<String>, i64) = sqlx::query_as(
-        r#"SELECT s.revoked_at,
-                  (SELECT count(*) FROM auth_session_csrf_tokens c WHERE c.session_id=s.session_id)
-           FROM auth_sessions s WHERE s.session_id=?"#,
-    )
-    .bind(session_id)
-    .fetch_one(&fixture.pool)
-    .await
-    .expect("revoked session record");
-    assert!(revoked_at.is_some());
-    assert_eq!(csrf_count, 0);
-
-    let agent_response = send(
-        &fixture,
-        request(
-            Method::POST,
-            "/api/v2/host-monitor/pairing-requests",
-            None,
-            None,
-            Some(json!({})),
-        ),
-    )
-    .await;
-    assert_ne!(agent_response.status(), StatusCode::UNAUTHORIZED);
-    assert_ne!(agent_response.status(), StatusCode::FORBIDDEN);
-}
-
-#[tokio::test]
-async fn old_unversioned_and_unknown_api_epochs_are_zero_write_rejections() {
-    let fixture = fixture().await;
-    let before: (i64, i64, i64) = sqlx::query_as(
-        "SELECT \
-           (SELECT count(*) FROM auth_sessions),\
-           (SELECT count(*) FROM agent_instance_invites),\
-           (SELECT count(*) FROM agent_pairing_requests)",
-    )
-    .fetch_one(&fixture.pool)
-    .await
-    .unwrap();
-
-    for (method, path, body) in [
-        (
-            Method::POST,
-            "/api/v1/auth/login",
-            Some(json!({
-                "username": "admin",
-                "password": "correct-password"
-            })),
-        ),
-        (Method::GET, "/api/monitoring/hosts", None),
-        (
-            Method::POST,
-            "/api/host-monitor/v1/pairing-requests",
-            Some(json!({})),
-        ),
-        (Method::GET, "/api/v3/monitoring/hosts", None),
-        (Method::GET, "/health", None),
-    ] {
-        let response = send(&fixture, request(method, path, None, None, body)).await;
-        assert_eq!(response.status(), StatusCode::NOT_FOUND, "old route {path}");
-    }
-
-    let after: (i64, i64, i64) = sqlx::query_as(
-        "SELECT \
-           (SELECT count(*) FROM auth_sessions),\
-           (SELECT count(*) FROM agent_instance_invites),\
-           (SELECT count(*) FROM agent_pairing_requests)",
-    )
-    .fetch_one(&fixture.pool)
-    .await
-    .unwrap();
-    assert_eq!(after, before);
-}
-
-#[tokio::test]
-async fn login_policy_violations_are_bad_requests_not_credentials_failures() {
-    let fixture = fixture().await;
-    for credentials in [
-        json!({"username": "bad username", "password": "correct-password"}),
-        json!({"username": "admin", "password": "too-short"}),
-    ] {
-        let response = send(
-            &fixture,
-            request(
-                Method::POST,
-                "/api/v2/auth/login",
-                None,
-                None,
-                Some(credentials),
-            ),
-        )
-        .await;
-        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-    }
-}
-
-#[tokio::test]
-async fn expiry_password_reset_and_disable_invalidate_existing_sessions() {
-    let fixture = fixture().await;
-
-    let idle_expired = login(&fixture, "correct-password").await;
-    let past = Utc::now() - chrono::Duration::seconds(1);
-    sqlx::query("UPDATE auth_sessions SET idle_expires_at=? WHERE token_hash=?")
-        .bind(past)
-        .bind(token_hash(&idle_expired.session_token))
+        .expect("cookie")
+        .split(';')
+        .next()
+        .expect("cookie pair")
+        .to_owned();
+    sqlx::query("UPDATE _sarmg_administrators SET active=0,session_version=session_version+1")
         .execute(&fixture.pool)
         .await
-        .expect("expire idle window");
-    assert_eq!(
-        reload_session(&fixture, &idle_expired.cookie).await.0,
-        StatusCode::UNAUTHORIZED
-    );
-
-    let absolute_expired = login(&fixture, "correct-password").await;
-    sqlx::query(
-        "UPDATE auth_sessions SET idle_expires_at=?,absolute_expires_at=? WHERE token_hash=?",
-    )
-    .bind(past)
-    .bind(past)
-    .bind(token_hash(&absolute_expired.session_token))
-    .execute(&fixture.pool)
-    .await
-    .expect("expire absolute window");
-    assert_eq!(
-        reload_session(&fixture, &absolute_expired.cookie).await.0,
-        StatusCode::UNAUTHORIZED
-    );
-
-    let before_reset = login(&fixture, "correct-password").await;
-    store::reset_admin_password(&fixture.pool, "admin", "new-password")
-        .await
-        .expect("reset password");
-    assert_eq!(
-        reload_session(&fixture, &before_reset.cookie).await.0,
-        StatusCode::UNAUTHORIZED
-    );
-    let session_version: i64 =
-        sqlx::query_scalar("SELECT session_version FROM auth_users WHERE username=?")
-            .bind("admin")
-            .fetch_one(&fixture.pool)
-            .await
-            .unwrap();
-    assert_eq!(session_version, 2);
-
-    let after_reset = login(&fixture, "new-password").await;
-    sqlx::query("UPDATE auth_users SET active=false WHERE username=?")
-        .bind("admin")
-        .execute(&fixture.pool)
-        .await
-        .expect("disable user");
-    assert_eq!(
-        reload_session(&fixture, &after_reset.cookie).await.0,
-        StatusCode::UNAUTHORIZED
-    );
-    let disabled_login = send(
-        &fixture,
-        request(
-            Method::POST,
-            "/api/v2/auth/login",
+        .expect("disable administrator");
+    let response = fixture
+        .app
+        .oneshot(request(
+            Method::GET,
+            "/api/v2/auth/session",
+            Some(&cookie),
             None,
-            None,
-            Some(json!({
-                "username": "admin",
-                "password": "new-password"
-            })),
-        ),
-    )
-    .await;
-    assert_eq!(disabled_login.status(), StatusCode::UNAUTHORIZED);
-
-    sqlx::query("UPDATE auth_users SET active=true WHERE username=?")
-        .bind("admin")
-        .execute(&fixture.pool)
+        ))
         .await
-        .expect("re-enable user");
-    assert_eq!(
-        reload_session(&fixture, &after_reset.cookie).await.0,
-        StatusCode::UNAUTHORIZED
-    );
-    let active_csrf_tokens: i64 = sqlx::query_scalar(
-        r#"SELECT count(*) FROM auth_session_csrf_tokens c
-           JOIN auth_sessions s ON s.session_id=c.session_id
-           JOIN auth_users u ON u.user_id=s.user_id
-           WHERE u.username=?"#,
-    )
-    .bind("admin")
-    .fetch_one(&fixture.pool)
-    .await
-    .unwrap();
-    assert_eq!(active_csrf_tokens, 0);
-}
-
-#[tokio::test]
-async fn ambiguous_cookies_and_non_current_password_hashes_fail_closed() {
-    let fixture = fixture().await;
-    let credentials = login(&fixture, "correct-password").await;
-
-    for (name, value) in [
-        (header::ORIGIN, "http://127.0.0.1"),
-        (header::HOST, "127.0.0.1"),
-        (
-            header::HeaderName::from_static(sarmg_admin_auth::SEC_FETCH_SITE_HEADER),
-            "same-origin",
-        ),
-        (
-            header::HeaderName::from_static(CSRF_HEADER),
-            credentials.csrf_token.as_str(),
-        ),
-    ] {
-        let mut duplicated = request(
-            Method::POST,
-            "/api/v2/monitoring/agent-instances",
-            Some(&credentials.cookie),
-            Some(&credentials.csrf_token),
-            Some(json!({"display_name": "Ambiguous Header", "expires_in_minutes": 15})),
-        );
-        duplicated
-            .headers_mut()
-            .append(name, value.parse().unwrap());
-        assert_eq!(
-            send(&fixture, duplicated).await.status(),
-            StatusCode::FORBIDDEN
-        );
-    }
-
-    let mut duplicate_header = request(
-        Method::GET,
-        "/api/v2/auth/session",
-        Some(&credentials.cookie),
-        None,
-        None,
-    );
-    duplicate_header
-        .headers_mut()
-        .append(header::COOKIE, credentials.cookie.parse().unwrap());
-    assert_eq!(
-        send(&fixture, duplicate_header).await.status(),
-        StatusCode::UNAUTHORIZED
-    );
-
-    let duplicate_pair = format!("{}; {}", credentials.cookie, credentials.cookie);
-    assert_eq!(
-        reload_session(&fixture, &duplicate_pair).await.0,
-        StatusCode::UNAUTHORIZED
-    );
-
-    sqlx::query("UPDATE auth_users SET password_hash='not-a-current-hash'")
-        .execute(&fixture.pool)
-        .await
-        .unwrap();
-    assert!(
-        store::ensure_admin_user(&fixture.pool, "admin", None)
-            .await
-            .is_err()
-    );
-    assert!(
-        store::find_active_user_by_username(&fixture.pool, "admin")
-            .await
-            .is_err()
-    );
-    assert!(
-        store::reset_admin_password(&fixture.pool, "admin", "replacement-password")
-            .await
-            .is_err()
-    );
+        .expect("session response");
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
 }

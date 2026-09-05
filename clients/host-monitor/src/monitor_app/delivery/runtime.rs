@@ -1,20 +1,3 @@
-/// Capacity-one notifications deliberately coalesce. Reports are durable in
-/// the spool before notification, so the channel is only a wake-up edge rather
-/// than the source of truth and can never apply network backpressure to sampling.
-#[derive(Clone)]
-struct DeliveryTrigger {
-    sender: mpsc::Sender<()>,
-}
-
-impl DeliveryTrigger {
-    fn notify(&self) -> bool {
-        match self.sender.try_send(()) {
-            Ok(()) | Err(mpsc::error::TrySendError::Full(())) => true,
-            Err(mpsc::error::TrySendError::Closed(())) => false,
-        }
-    }
-}
-
 /// A cadence is anchored to its previous deadline, not to the end of sampling.
 /// If collection itself overruns a full interval, missed ticks are skipped
 /// instead of emitted in a burst.
@@ -49,28 +32,15 @@ pub(super) async fn run_loop(
     mut sampler: SystemSampler,
     spool: Spool,
     reporter: Reporter,
-    active_pairing: Option<(Uuid, Uuid)>,
     process_shutdown: &ShutdownSignal,
 ) -> anyhow::Result<()> {
-    let (delivery_sender, delivery_receiver) = mpsc::channel(1);
-    let delivery_trigger = DeliveryTrigger {
-        sender: delivery_sender,
-    };
+    let (delivery_trigger, delivery_receiver) = sarmg_agent_runtime::DeliveryWake::channel();
     let (shutdown_sender, shutdown_receiver) = watch::channel(false);
     let (host_sender, host_receiver) = watch::channel(host.clone());
-    let mut delivery_worker = tokio::spawn(
-        DeliveryWorker {
-            config: config.clone(),
-            host,
-            spool: spool.clone(),
-            reporter,
-            active_pairing,
-            wake: delivery_receiver,
-            shutdown: shutdown_receiver,
-            host_updates: host_sender,
-        }
-        .run(),
-    );
+    let driver =
+        HostDeliveryDriver::new(config.clone(), host, spool.clone(), reporter, host_sender);
+    let worker = sarmg_agent_runtime::DeliveryWorker::new(driver, config.jitter_percent)?;
+    let mut delivery_worker = tokio::spawn(worker.run(delivery_receiver, shutdown_receiver));
 
     let mut spool_read_health = SpoolHealth::default();
     let mut spool_write_health = SpoolHealth::default();
@@ -112,7 +82,7 @@ pub(super) async fn run_loop(
                     warn!(report_id = %report.report_id, "delivery worker stopped before notification");
                 }
                 cadence.schedule_next(
-                    jitter(config.interval(), config.jitter_percent),
+                    sarmg_agent_runtime::sampling_jitter(config.interval(), config.jitter_percent)?,
                     tokio::time::Instant::now(),
                 );
             }
@@ -142,285 +112,185 @@ async fn stop_delivery_worker(
     }
 }
 
-struct DeliveryWorker {
+struct HostDeliveryDriver {
     config: AgentConfig,
     host: host_monitor::HostIdentity,
     spool: Spool,
     reporter: Reporter,
-    active_pairing: Option<(Uuid, Uuid)>,
-    wake: mpsc::Receiver<()>,
-    shutdown: watch::Receiver<bool>,
     host_updates: watch::Sender<host_monitor::HostIdentity>,
+    otlp_queue: Option<std::sync::Arc<OtlpQueue>>,
+    last_waiting_notice: Option<Uuid>,
 }
 
-fn delivery_timing(
-    authorization_blocked: bool,
-    retry_at: Option<Instant>,
-    now: Instant,
-) -> (bool, Option<Instant>) {
-    if authorization_blocked {
-        return (false, None);
-    }
-    match retry_at {
-        Some(at) if now >= at => (true, None),
-        Some(at) => (false, Some(at)),
-        None => (false, None),
-    }
-}
-
-fn pairing_failure_schedule(
-    now: Instant,
-    backoff: Duration,
-    jitter_percent: u8,
-) -> (Instant, Duration, Duration) {
-    let delay = jitter(backoff, jitter_percent);
-    let next_backoff = (backoff * 2).min(Duration::from_secs(300));
-    (now + delay, next_backoff, delay)
-}
-
-impl DeliveryWorker {
-    async fn run(self) -> anyhow::Result<()> {
-        let Self {
-            mut config,
-            mut host,
-            spool,
-            mut reporter,
-            mut active_pairing,
-            mut wake,
-            mut shutdown,
-            host_updates,
-        } = self;
-        let mut retry_at = Some(Instant::now());
-        let mut backoff = Duration::from_secs(1);
-        let mut spool_flush_health = SpoolHealth::default();
-        let mut authorization_blocked = false;
-        let mut pairing_retry_at = Instant::now();
-        let mut pairing_backoff = Duration::from_secs(1);
-        let mut pairing_probe = None;
+impl HostDeliveryDriver {
+    fn new(
+        config: AgentConfig,
+        host: host_monitor::HostIdentity,
+        spool: Spool,
+        reporter: Reporter,
+        host_updates: watch::Sender<host_monitor::HostIdentity>,
+    ) -> Self {
         let otlp_queue = config
             .otlp_endpoint
             .as_ref()
             .map(|_| OtlpQueue::spawn(reporter.clone()));
+        Self {
+            config,
+            host,
+            spool,
+            reporter,
+            host_updates,
+            otlp_queue,
+            last_waiting_notice: None,
+        }
+    }
+}
 
-        let outcome: anyhow::Result<()> = async {
-        loop {
-            if *shutdown.borrow() {
-                break Ok(());
+impl Drop for HostDeliveryDriver {
+    fn drop(&mut self) {
+        if let Some(queue) = self.otlp_queue.take() {
+            queue.abort();
+        }
+    }
+}
+
+enum HostRecoveryProbe {
+    Credential(Box<pairing::ReporterSnapshot>),
+    Pairing(Option<PairingProgress>),
+}
+
+impl sarmg_agent_runtime::AgentDeliveryDriver for HostDeliveryDriver {
+    type Probe = HostRecoveryProbe;
+    type Failure = host_monitor::transport::SendError;
+    type Error = anyhow::Error;
+
+    fn recover(&self) -> sarmg_agent_runtime::DeliveryFuture<anyhow::Result<Self::Probe>> {
+        let config = self.config.clone();
+        let revision = self.reporter.credential_revision();
+        Box::pin(async move {
+            // A usable local rotation must not wait for a subsequent pairing's
+            // network endpoint, which may be slow or unavailable.
+            if let Some(snapshot) = pairing::refresh_reporter_snapshot(&config, revision)? {
+                return Ok(HostRecoveryProbe::Credential(Box::new(snapshot)));
             }
-            if pairing_probe.is_none() && Instant::now() >= pairing_retry_at {
-                let probe_config = config.clone();
-                pairing_probe = Some(tokio::spawn(async move {
-                    pairing::poll_existing(&probe_config).await
-                }));
+            pairing::poll_existing(&config)
+                .await
+                .map(HostRecoveryProbe::Pairing)
+        })
+    }
+
+    fn apply_recovery(
+        &mut self,
+        probe: Self::Probe,
+    ) -> anyhow::Result<sarmg_agent_runtime::RecoveryUpdate> {
+        use sarmg_agent_runtime::RecoveryUpdate;
+        let (probe, snapshot) = match probe {
+            HostRecoveryProbe::Credential(snapshot) => {
+                (pairing::local_progress(&self.config)?, Some(*snapshot))
             }
+            HostRecoveryProbe::Pairing(probe) => (probe, None),
+        };
+        let poll_after = match probe {
+            Some(PairingProgress::Waiting(waiting)) => {
+                if self.last_waiting_notice != Some(waiting.request_id) {
+                    info!(agent_state = "awaiting_authorization", activation_url = %waiting.activation_url,
+                        "open the activation URL to authorize telemetry delivery");
+                    self.last_waiting_notice = Some(waiting.request_id);
+                }
+                Duration::from_secs(waiting.poll_interval)
+            }
+            Some(PairingProgress::Creating { .. }) => Duration::from_secs(2),
+            Some(
+                PairingProgress::Active { .. }
+                | PairingProgress::Denied { .. }
+                | PairingProgress::Expired { .. },
+            )
+            | None => Duration::from_secs(60),
+        };
+        let snapshot = match snapshot {
+            Some(snapshot) => Some(snapshot),
+            None => pairing::refresh_reporter_snapshot(
+                &self.config,
+                self.reporter.credential_revision(),
+            )?,
+        };
+        if let Some(snapshot) = snapshot {
+            let revision = snapshot.credential_revision();
+            let reporter = snapshot.apply(&mut self.config, &mut self.host);
+            let next_otlp = self
+                .config
+                .otlp_endpoint
+                .as_ref()
+                .map(|_| OtlpQueue::spawn(reporter.clone()));
+            if let Some(previous) = self.otlp_queue.take() {
+                previous.abort();
+            }
+            self.otlp_queue = next_otlp;
+            self.reporter = reporter;
+            let _ = self.host_updates.send(self.host.clone());
+            info!(agent_state = "authorized", request_id = %revision.1,
+                "current bound credential snapshot loaded; queued reports will be retried");
+            return Ok(RecoveryUpdate::Renewed { poll_after });
+        }
+        Ok(RecoveryUpdate::Unchanged { poll_after })
+    }
 
-            let now = Instant::now();
-            // Once a retry becomes ready it must stop participating as a timer in this
-            // `select!`. Keeping an expired deadline enabled would let `sleep_until` complete
-            // immediately and cancel a still-pending HTTP delivery future on every loop.
-            let (delivery_ready, next_retry) =
-                delivery_timing(authorization_blocked, retry_at, now);
-            let next_pairing = pairing_probe.is_none().then_some(pairing_retry_at);
-            let deadline = match (next_retry, next_pairing) {
-                (Some(left), Some(right)) => left.min(right),
-                (Some(value), None) | (None, Some(value)) => value,
-                (None, None) => now + Duration::from_secs(60 * 60),
-            };
+    fn batch(&self) -> sarmg_agent_runtime::DeliveryFuture<anyhow::Result<FlushOutcome>> {
+        let spool = self.spool.clone();
+        let reporter = self.reporter.clone();
+        let otlp = self.otlp_queue.clone();
+        Box::pin(async move { flush_spool(&spool, &reporter, otlp.as_deref()).await })
+    }
 
-            tokio::select! {
-                biased;
-                changed = shutdown.changed() => {
-                    if changed.is_err() || *shutdown.borrow() {
-                        break Ok(());
-                    }
-                }
-                joined = async {
-                    pairing_probe
-                        .as_mut()
-                        .expect("pairing probe branch requires a task")
-                        .await
-                }, if pairing_probe.is_some() => {
-                    pairing_probe = None;
-                    let outcome = joined
-                        .context("pairing probe task failed")?;
-                    match outcome {
-                        Ok(Some(PairingProgress::Active {
-                            generation,
-                            request_id,
-                            instance_id,
-                            report_endpoint,
-                        })) if Some((generation, request_id)) != active_pairing => {
-                            match pairing::activate_reporter_snapshot(
-                                &mut config,
-                                &mut host,
-                                generation,
-                                request_id,
-                                instance_id,
-                                &report_endpoint,
-                            ) {
-                                Ok(fresh) => {
-                                    reporter = fresh;
-                                    active_pairing = Some((generation, request_id));
-                                    authorization_blocked = false;
-                                    retry_at = Some(Instant::now());
-                                    backoff = Duration::from_secs(1);
-                                    pairing_backoff = Duration::from_secs(1);
-                                    pairing_retry_at = Instant::now() + Duration::from_secs(60);
-                                    let _ = host_updates.send(host.clone());
-                                    info!(
-                                        agent_state = "authorized",
-                                        %request_id,
-                                        "new instance pairing completed; queued reports will be retried"
-                                    );
-                                }
-                                Err(error) => {
-                                    let delay;
-                                    (pairing_retry_at, pairing_backoff, delay) =
-                                        pairing_failure_schedule(
-                                            Instant::now(),
-                                            pairing_backoff,
-                                            config.jitter_percent,
-                                        );
-                                    warn!(
-                                        retry_seconds = delay.as_secs_f64(),
-                                        "pairing changed before its Reporter snapshot was loaded: {error}"
-                                    );
-                                }
-                            }
-                        }
-                        Ok(Some(PairingProgress::Waiting(waiting))) => {
-                            pairing_backoff = Duration::from_secs(1);
-                            pairing_retry_at =
-                                Instant::now() + Duration::from_secs(waiting.poll_interval);
-                            if authorization_blocked {
-                                warn!(
-                                    agent_state = "awaiting_authorization",
-                                    activation_url = %waiting.activation_url,
-                                    "open the activation URL to restore telemetry delivery"
-                                );
-                            }
-                        }
-                        Ok(Some(PairingProgress::Creating { .. })) => {
-                            pairing_retry_at = Instant::now() + Duration::from_secs(2);
-                        }
-                        Ok(Some(PairingProgress::Active { .. }))
-                        | Ok(Some(PairingProgress::Denied { .. }))
-                        | Ok(Some(PairingProgress::Expired { .. }))
-                        | Ok(None) => {
-                            pairing_retry_at = Instant::now() + Duration::from_secs(60);
-                        }
-                        Err(error) => {
-                            let delay;
-                            (pairing_retry_at, pairing_backoff, delay) =
-                                pairing_failure_schedule(
-                                    Instant::now(),
-                                    pairing_backoff,
-                                    config.jitter_percent,
-                                );
-                            warn!(
-                                retry_seconds = delay.as_secs_f64(),
-                                "browser pairing state could not be checked: {error}"
-                            );
-                        }
-                    }
-                }
-                flushed = flush_spool(&spool, &reporter, otlp_queue.as_ref()), if delivery_ready => {
-                    match flushed {
-                        Ok(FlushOutcome::Drained) => {
-                            spool_flush_health.record_success();
-                            retry_at = None;
-                            backoff = Duration::from_secs(1);
-                        }
-                        Ok(FlushOutcome::BatchComplete) => {
-                            spool_flush_health.record_success();
-                            retry_at = Some(Instant::now());
-                            backoff = Duration::from_secs(1);
-                            tokio::task::yield_now().await;
-                        }
-                        Err(error) => {
-                            spool_flush_health.record_failure("补传 spool 队列", &error)?;
-                            warn!(
-                                pending = spool.pending_count().unwrap_or(0),
-                                "telemetry delivery failed: {error}"
-                            );
-                            retry_at = Some(Instant::now() + jitter(backoff, config.jitter_percent));
-                            backoff = (backoff * 2).min(Duration::from_secs(300));
-                        }
-                        Ok(FlushOutcome::Failed(error)) if error.is_unauthorized() => {
-                            spool_flush_health.record_success();
-                            let rendered = anyhow::anyhow!(error);
-                            let reporter_is_current = match pairing::mark_reauth_required_if_current(
-                                &config,
-                                active_pairing,
-                                format!("the host credential was rejected with HTTP 401: {rendered}"),
-                            ) {
-                                Ok(true) => {
-                                    authorization_blocked = true;
-                                    retry_at = None;
-                                    pairing_retry_at = Instant::now();
-                                    true
-                                }
-                                Ok(false) => {
-                                    pairing_retry_at = Instant::now();
-                                    warn!("ignored a stale 401 from a reporter superseded by newer pairing state");
-                                    false
-                                }
-                                Err(state_error) => {
-                                    authorization_blocked = true;
-                                    retry_at = None;
-                                    pairing_retry_at = Instant::now();
-                                    warn!("failed to validate reauth_required state: {state_error}");
-                                    true
-                                }
-                            };
-                            if reporter_is_current {
-                                error!(
-                                    agent_state = "reauth_required",
-                                    "the paired credential is no longer accepted. Run `host-monitor \
-                                     pair --server <url>`: {rendered}"
-                                );
-                            } else {
-                                retry_at = Some(
-                                    Instant::now() + jitter(backoff, config.jitter_percent),
-                                );
-                            }
-                        }
-                        Ok(FlushOutcome::Failed(error)) => {
-                            spool_flush_health.record_success();
-                            warn!(
-                                pending = spool.pending_count().unwrap_or(0),
-                                "telemetry delivery failed: {error}"
-                            );
-                            retry_at = Some(
-                                Instant::now() + jitter(backoff, config.jitter_percent),
-                            );
-                            backoff = (backoff * 2).min(Duration::from_secs(300));
-                        }
-                    }
-                }
-                message = wake.recv() => {
-                    if message.is_none() {
-                        break Ok(());
-                    }
-                    // A wake edge is needed only after the queue was drained.
-                    // New samples must not collapse an active network backoff
-                    // into one request per sampling interval.
-                    if !authorization_blocked && retry_at.is_none() {
-                        retry_at = Some(Instant::now());
-                    }
-                }
-                _ = tokio::time::sleep_until(deadline.into()) => {}
+    fn classify_failure(&mut self, error: &Self::Failure) -> sarmg_agent_runtime::DeliveryResponse {
+        use sarmg_agent_runtime::DeliveryResponse;
+        if !error.is_unauthorized() {
+            return DeliveryResponse::Retry;
+        }
+        match pairing::mark_reauth_required_if_current(
+            &self.config,
+            self.reporter.credential_revision(),
+            format!("the host credential was rejected with HTTP 401: {error}"),
+        ) {
+            Ok(false) => {
+                warn!("ignored a stale 401 from a reporter superseded by newer pairing state");
+                DeliveryResponse::RetryAfterRecovery
+            }
+            Ok(true) => {
+                error!(
+                    agent_state = "reauth_required",
+                    "the paired credential is no longer accepted. Run `host-monitor pair --server <url>`: {error}"
+                );
+                DeliveryResponse::AuthorizationRequired
+            }
+            Err(state_error) => {
+                warn!("failed to validate reauth_required state: {state_error}");
+                DeliveryResponse::AuthorizationRequired
             }
         }
     }
-    .await;
 
-        if let Some(probe) = pairing_probe {
-            probe.abort();
+    fn recovery_failed(&self, error: &anyhow::Error, retry_in: Duration) {
+        warn!(
+            retry_seconds = retry_in.as_secs_f64(),
+            "browser pairing state could not be checked: {error}"
+        );
+    }
+
+    fn local_queue_failed(&self, error: &anyhow::Error, consecutive: u32) {
+        warn!(
+            consecutive_failures = consecutive,
+            "local spool delivery failed: {error}"
+        );
+    }
+
+    fn delivery_failed(&self, error: &Self::Failure, retry_in: Option<Duration>) {
+        if let Some(delay) = retry_in {
+            warn!(
+                pending = self.spool.pending_count().unwrap_or(0),
+                retry_seconds = delay.as_secs_f64(),
+                "telemetry delivery failed: {error}"
+            );
         }
-        if let Some(queue) = otlp_queue {
-            queue.abort();
-        }
-        outcome
     }
 }

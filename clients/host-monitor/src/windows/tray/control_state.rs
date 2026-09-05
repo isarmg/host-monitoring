@@ -324,22 +324,6 @@ struct ConnectionRequest {
     server: String,
 }
 
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct ServerHealthResponse {
-    status: String,
-    version: String,
-    #[serde(rename = "uptime_seconds")]
-    _uptime_seconds: i64,
-}
-
-struct ServerConnectionStatus {
-    status: &'static str,
-    message: String,
-    version: Option<String>,
-    latency_ms: Option<u64>,
-}
-
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct PairIpcMessage {

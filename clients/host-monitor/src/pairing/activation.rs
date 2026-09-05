@@ -1,10 +1,12 @@
 use anyhow::{Context, bail};
 use uuid::Uuid;
 
-pub(super) fn activation_endpoint(pairing_endpoint: &str) -> anyhow::Result<reqwest::Url> {
+pub(super) fn activation_endpoint(
+    pairing_endpoint: &str,
+) -> anyhow::Result<sarmg_agent_secure_http::Url> {
     crate::config::validate_pairing_endpoint(pairing_endpoint)
         .context("stored pairing endpoint is unsafe")?;
-    let mut endpoint = reqwest::Url::parse(pairing_endpoint)
+    let mut endpoint = sarmg_agent_secure_http::Url::parse(pairing_endpoint)
         .context("stored pairing endpoint is not a valid URL")?;
     if !endpoint.username().is_empty() || endpoint.password().is_some() {
         bail!("stored pairing endpoint unexpectedly contains credentials");
@@ -24,10 +26,10 @@ pub(super) fn validate_activation_url_request(
     pairing_endpoint: &str,
     request_id: Uuid,
 ) -> anyhow::Result<()> {
-    let url =
-        reqwest::Url::parse(activation_url).context("stored pairing activation URL is invalid")?;
-    let pairing =
-        reqwest::Url::parse(pairing_endpoint).context("stored pairing endpoint is invalid")?;
+    let url = sarmg_agent_secure_http::Url::parse(activation_url)
+        .context("stored pairing activation URL is invalid")?;
+    let pairing = sarmg_agent_secure_http::Url::parse(pairing_endpoint)
+        .context("stored pairing endpoint is invalid")?;
     if !url.username().is_empty()
         || url.password().is_some()
         || url.query().is_some()
@@ -51,8 +53,9 @@ pub(super) fn resolve_activation_url(
     pairing_endpoint: &str,
     activation_url: &str,
 ) -> anyhow::Result<String> {
-    let base = reqwest::Url::parse(pairing_endpoint).context("invalid pairing endpoint URL")?;
-    let url = match reqwest::Url::parse(activation_url) {
+    let base = sarmg_agent_secure_http::Url::parse(pairing_endpoint)
+        .context("invalid pairing endpoint URL")?;
+    let url = match sarmg_agent_secure_http::Url::parse(activation_url) {
         Ok(url) => url,
         Err(_) => base
             .join(activation_url)

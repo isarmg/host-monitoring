@@ -6,7 +6,12 @@
 /// recovery path can publish a credential and rewrite several state files.
 /// Recovery remains the responsibility of `run` and `pair`.
 pub fn local_progress(config: &AgentConfig) -> anyhow::Result<Option<PairingProgress>> {
-    load_state(config).map(|state| state.map(progress_from_terminal))
+    let reader = match StateReader::open(&config.state_dir) {
+        Ok(reader) => reader,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error.into()),
+    };
+    load_state(&reader).map(|state| state.map(progress_from_terminal))
 }
 
 /// Read pairing progress and its active endpoint binding as one stable, byte-for-byte read-only
@@ -14,9 +19,20 @@ pub fn local_progress(config: &AgentConfig) -> anyhow::Result<Option<PairingProg
 /// from manufacturing a false mismatch in diagnostics.
 pub fn local_status(config: &AgentConfig) -> anyhow::Result<LocalPairingStatus> {
     const MAX_SNAPSHOT_ATTEMPTS: usize = 3;
+    let reader = match StateReader::open(&config.state_dir) {
+        Ok(reader) => reader,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(LocalPairingStatus {
+                progress: None,
+                active_report_endpoint: None,
+            });
+        }
+        Err(error) => return Err(error.into()),
+    };
+    let store = &reader;
 
     for _ in 0..MAX_SNAPSHOT_ATTEMPTS {
-        let state = load_state(config)?;
+        let state = load_state(store)?;
         if !matches!(state.as_ref(), Some(StoredPairingState::Active { .. })) {
             return Ok(LocalPairingStatus {
                 progress: state.map(progress_from_terminal),
@@ -25,8 +41,8 @@ pub fn local_status(config: &AgentConfig) -> anyhow::Result<LocalPairingStatus> 
         }
         let active = state.expect("checked Active pairing state above");
         let expected = binding_from_active_state(&active)?;
-        let binding = load_active_binding(config);
-        let current = load_state(config)?;
+        let binding = load_active_binding(config, store);
+        let current = load_state(store)?;
         let current_binding = match current.as_ref() {
             Some(current @ StoredPairingState::Active { .. }) => {
                 Some(binding_from_active_state(current)?)
@@ -39,7 +55,9 @@ pub fn local_status(config: &AgentConfig) -> anyhow::Result<LocalPairingStatus> 
         match binding? {
             Some(binding) if binding == expected => {}
             Some(_) => bail!("active binding does not match the current Active pairing state"),
-            None => bail!("active binding is missing; purge local state and pair host-monitor again"),
+            None => {
+                bail!("active binding is missing; purge local state and pair host-monitor again")
+            }
         }
         return Ok(LocalPairingStatus {
             progress: Some(progress_from_terminal(active)),
@@ -52,14 +70,15 @@ pub fn local_status(config: &AgentConfig) -> anyhow::Result<LocalPairingStatus> 
 /// Return whether the durable host-id belongs to a current package-version
 /// pairing transaction that still has an authorized credential.
 pub fn has_current_authorized_identity(config: &AgentConfig) -> anyhow::Result<bool> {
-    let _lock = lock_state(config)?;
-    let authorized =
-        local_auth_state_unlocked(config)?.is_some_and(|state| state.status == "authorized");
+    let transaction = lock_state(config)?;
+    let store = &transaction;
+    let authorized = local_auth_state_unlocked(store)?
+        .is_some_and(|state| state.status == CredentialAuthorization::Authorized);
     if !authorized {
         return Ok(false);
     }
     Ok(matches!(
-        load_state(config)?,
+        load_state(store)?,
         Some(
             StoredPairingState::Creating { .. }
                 | StoredPairingState::Pending { .. }
@@ -77,30 +96,94 @@ fn config_for_active_binding(config: &AgentConfig, binding: &ActiveBinding) -> A
     active
 }
 
+/// Product identity and endpoint accompany the same locked credential snapshot.
+/// Applying a fully built snapshot cannot fail or partly mutate caller state.
+pub struct ReporterSnapshot {
+    reporter: Reporter,
+    host: HostIdentity,
+    report_endpoint: String,
+}
+impl ReporterSnapshot {
+    pub fn credential_revision(&self) -> (Uuid, Uuid) {
+        self.reporter.credential_revision()
+    }
+
+    pub fn apply(self, config: &mut AgentConfig, host: &mut HostIdentity) -> Reporter {
+        apply_active_config(config, &self.report_endpoint);
+        *host = self.host;
+        self.reporter
+    }
+}
+
 fn reporter_for_active_binding_unlocked(
     config: &AgentConfig,
+    store: &StateTransaction,
     binding: &ActiveBinding,
-) -> anyhow::Result<Option<Reporter>> {
-    let durable_host = load_host_identity(&config.state_dir)?;
-    if durable_host.id != binding.instance_id.to_string() {
-        bail!("stored host identity does not match the active endpoint binding");
+) -> anyhow::Result<Option<ReporterSnapshot>> {
+    let durable_host = crate::collectors::load_host_identity_from(store)?;
+    crate::agent_identity::for_instance(&durable_host.id)?.ensure_matches(
+        &crate::agent_identity::for_instance(&binding.instance_id.to_string())?
+    )?;
+    Ok(
+        Reporter::for_existing_credential(&config_for_active_binding(config, binding), store)?.map(
+            |reporter| ReporterSnapshot {
+                reporter,
+                host: durable_host,
+                report_endpoint: binding.report_endpoint.clone(),
+            },
+        ),
+    )
+}
+
+/// Re-read the currently authorized binding, independent of a potentially stale
+/// network probe. An incomplete new pairing may coexist with a newer, usable
+/// credential that this process has not observed yet.
+pub fn refresh_reporter_snapshot(
+    config: &AgentConfig,
+    revision: (Uuid, Uuid),
+) -> anyhow::Result<Option<ReporterSnapshot>> {
+    let transaction = lock_state(config)?;
+    if local_auth_state_unlocked(&transaction)?
+        .is_none_or(|state| state.status != CredentialAuthorization::Authorized)
+    {
+        return Ok(None);
     }
-    Reporter::for_existing_credential(&config_for_active_binding(config, binding))
+    let Some(state) = load_state(&transaction)? else {
+        return Ok(None);
+    };
+    if matches!(state, StoredPairingState::Activating { .. }) {
+        // The next recovery poll completes the journal before exposing its files.
+        return Ok(None);
+    }
+    let binding = load_active_binding(config, &transaction)?
+        .context("authorized credential binding is missing")?;
+    if matches!(state, StoredPairingState::Active { .. })
+        && binding_from_active_state(&state)? != binding
+    {
+        bail!("active credential binding does not match the pairing journal");
+    }
+    if (binding.generation, binding.request_id) == revision {
+        return Ok(None);
+    }
+    reporter_for_active_binding_unlocked(config, &transaction, &binding)
 }
 
 /// Return a consistent snapshot of the previously active reporter while a
 /// new pairing attempt is incomplete. Reading the durable endpoint binding
 /// and token under the same cross-process lock prevents observing a token with
 /// an unrelated base configuration endpoint.
-pub fn existing_reporter_for_run(config: &AgentConfig) -> anyhow::Result<Option<Reporter>> {
-    let _lock = lock_state(config)?;
-    if local_auth_state_unlocked(config)?.is_none_or(|state| state.status != "authorized") {
+pub fn existing_reporter_for_run(config: &AgentConfig) -> anyhow::Result<Option<ReporterSnapshot>> {
+    let transaction = lock_state(config)?;
+    let store = &transaction;
+    if local_auth_state_unlocked(store)?
+        .is_none_or(|state| state.status != CredentialAuthorization::Authorized)
+    {
         return Ok(None);
     }
-    match load_state(config)? {
+    match load_state(store)? {
         Some(StoredPairingState::Active { .. }) => Ok(None),
         Some(activating @ StoredPairingState::Activating { .. }) => {
-            finish_activating_unlocked(config, activating)?;
+            finish_activating_unlocked(config, store, activating)?;
             Ok(None)
         }
         Some(
@@ -108,9 +191,11 @@ pub fn existing_reporter_for_run(config: &AgentConfig) -> anyhow::Result<Option<
             | StoredPairingState::Pending { .. }
             | StoredPairingState::Denied { .. }
             | StoredPairingState::Expired { .. },
-        ) => match load_active_binding(config)? {
-            Some(binding) => reporter_for_active_binding_unlocked(config, &binding),
-            None => bail!("active binding is missing; purge local state and pair host-monitor again"),
+        ) => match load_active_binding(config, store)? {
+            Some(binding) => reporter_for_active_binding_unlocked(config, store, &binding),
+            None => {
+                bail!("active binding is missing; purge local state and pair host-monitor again")
+            }
         },
         _ => Ok(None),
     }
@@ -121,17 +206,20 @@ pub fn existing_reporter_for_run(config: &AgentConfig) -> anyhow::Result<Option<
 pub(crate) fn reporter_for_current_active_state(
     config: &AgentConfig,
 ) -> anyhow::Result<Option<Reporter>> {
-    let _lock = lock_state(config)?;
-    if local_auth_state_unlocked(config)?.is_none_or(|state| state.status != "authorized") {
+    let transaction = lock_state(config)?;
+    let store = &transaction;
+    if local_auth_state_unlocked(store)?
+        .is_none_or(|state| state.status != CredentialAuthorization::Authorized)
+    {
         return Ok(None);
     }
-    let Some(state @ StoredPairingState::Active { .. }) = load_state(config)?
-    else {
+    let Some(state @ StoredPairingState::Active { .. }) = load_state(store)? else {
         return Ok(None);
     };
     let expected = binding_from_active_state(&state)?;
-    let binding = load_current_active_binding_unlocked(config, &expected)?;
-    reporter_for_active_binding_unlocked(config, &binding)
+    let binding = load_current_active_binding_unlocked(config, store, &expected)?;
+    reporter_for_active_binding_unlocked(config, store, &binding)
+        .map(|snapshot| snapshot.map(|snapshot| snapshot.reporter))
 }
 
 /// Revalidate the exact Active generation and durably converge the main
@@ -143,10 +231,11 @@ pub fn commit_active_configuration(
     instance_id: Uuid,
     report_endpoint: &str,
 ) -> anyhow::Result<PathBuf> {
-    let _lock = lock_state(config)?;
+    let transaction = lock_state(config)?;
+    let store = &transaction;
     let expected =
-        ensure_active_is_current(config, generation, request_id, instance_id, report_endpoint)?;
-    let binding = load_current_active_binding_unlocked(config, &expected)?;
+        ensure_active_is_current(store, generation, request_id, instance_id, report_endpoint)?;
+    let binding = load_current_active_binding_unlocked(config, store, &expected)?;
     let path = persist_active_config_unlocked(config, &binding.report_endpoint)?;
     apply_active_config(config, &binding.report_endpoint);
     Ok(path)
@@ -163,142 +252,90 @@ pub fn activate_reporter_snapshot(
     instance_id: Uuid,
     report_endpoint: &str,
 ) -> anyhow::Result<Reporter> {
-    let _lock = lock_state(config)?;
-    if local_auth_state_unlocked(config)?.is_none_or(|state| state.status != "authorized") {
+    let transaction = lock_state(config)?;
+    let store = &transaction;
+    if local_auth_state_unlocked(store)?
+        .is_none_or(|state| state.status != CredentialAuthorization::Authorized)
+    {
         bail!("current Active pairing state has no current authorized identity state");
     }
     let expected =
-        ensure_active_is_current(config, generation, request_id, instance_id, report_endpoint)?;
-    let binding = load_current_active_binding_unlocked(config, &expected)?;
-    let reporter_config = config_for_active_binding(config, &binding);
-    apply_active_config(config, &binding.report_endpoint);
-    let durable_host = load_host_identity(&config.state_dir)?;
-    let durable_host_id = Uuid::parse_str(&durable_host.id)
-        .context("durable host identity contains an invalid UUID")?;
-    if durable_host_id != binding.instance_id {
-        bail!(
-            "paired host identity mismatch: state contains {}, server assigned {instance_id}; run pair again",
-            durable_host.id
-        );
-    }
-    *host = durable_host;
-    Reporter::for_existing_credential(&reporter_config)?
-        .context("paired host credential is missing after the Active pairing transaction")
+        ensure_active_is_current(store, generation, request_id, instance_id, report_endpoint)?;
+    let binding = load_current_active_binding_unlocked(config, store, &expected)?;
+    let snapshot = reporter_for_active_binding_unlocked(config, store, &binding)?
+        .context("paired host credential is missing after the Active pairing transaction")?;
+    Ok(snapshot.apply(config, host))
 }
 
 fn ensure_active_is_current(
-    config: &AgentConfig,
+    store: &StateReader,
     generation: Uuid,
     request_id: Uuid,
     instance_id: Uuid,
     report_endpoint: &str,
 ) -> anyhow::Result<ActiveBinding> {
-    let current = load_state(config)?;
+    let current = load_state(store)?;
     match current.as_ref() {
-        Some(state @ StoredPairingState::Active {
-            generation: current_generation,
-            request_id: current_request_id,
-            instance_id: current_instance_id,
-            report_endpoint: current_report_endpoint,
-            ..
-        }) if *current_generation == generation
+        Some(
+            state @ StoredPairingState::Active {
+                generation: current_generation,
+                request_id: current_request_id,
+                instance_id: current_instance_id,
+                report_endpoint: current_report_endpoint,
+                ..
+            },
+        ) if *current_generation == generation
             && *current_request_id == request_id
             && *current_instance_id == instance_id
-            && current_report_endpoint == report_endpoint
-        => binding_from_active_state(state),
+            && current_report_endpoint == report_endpoint =>
+        {
+            binding_from_active_state(state)
+        }
         _ => Err(PairingSuperseded.into()),
     }
 }
 
-pub fn mark_reauth_required(config: &AgentConfig, reason: impl Into<String>) -> anyhow::Result<()> {
-    persist_auth_state(
-        config,
-        &LocalAuthState {
-            version: PAIRING_STATE_VERSION,
-            status: "reauth_required".into(),
-            reason: reason.into(),
-            changed_at: Utc::now(),
-        },
-    )
-}
-
-/// Mark the reporter credential blocked only if no newer Active transaction
-/// superseded the in-memory reporter while its HTTP request was in flight.
+/// Invalidate only the credential revision retained by the rejected Reporter.
 pub fn mark_reauth_required_if_current(
     config: &AgentConfig,
-    active_pairing: Option<(Uuid, Uuid)>,
+    revision: (Uuid, Uuid),
     reason: impl Into<String>,
 ) -> anyhow::Result<bool> {
-    let _lock = lock_state(config)?;
-    let state = load_state(config)?;
-    let current = match active_pairing {
-        Some((expected_generation, expected_request_id)) => match state {
-            Some(StoredPairingState::Activating { .. }) => false,
-            Some(StoredPairingState::Active {
-                generation,
-                request_id,
-                ..
-            }) => generation == expected_generation && request_id == expected_request_id,
-            _ => true,
-        },
-        None => !matches!(
-            state,
-            Some(StoredPairingState::Activating { .. } | StoredPairingState::Active { .. })
-        ),
-    };
-    if !current {
-        return Ok(false);
-    }
-    persist_auth_state_unlocked(
-        config,
-        &LocalAuthState {
-            version: PAIRING_STATE_VERSION,
-            status: "reauth_required".into(),
-            reason: reason.into(),
-            changed_at: Utc::now(),
-        },
-    )?;
-    Ok(true)
-}
-
-pub fn mark_authorized(config: &AgentConfig) -> anyhow::Result<()> {
-    persist_auth_state(
-        config,
-        &LocalAuthState {
-            version: PAIRING_STATE_VERSION,
-            status: "authorized".into(),
-            reason: "browser pairing completed".into(),
-            changed_at: Utc::now(),
-        },
-    )
+    let transaction = lock_state(config)?;
+    let result =
+        HostCredentials::new(config, &transaction).invalidate(&revision, &reason.into())?;
+    Ok(result == sarmg_agent_runtime::CredentialMutation::Applied)
 }
 
 pub fn local_auth_state(config: &AgentConfig) -> anyhow::Result<Option<LocalAuthState>> {
-    local_auth_state_unlocked(config)
+    match StateReader::open(&config.state_dir) {
+        Ok(reader) => local_auth_state_unlocked(&reader),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error.into()),
+    }
 }
 
-fn local_auth_state_unlocked(config: &AgentConfig) -> anyhow::Result<Option<LocalAuthState>> {
-    let path = config.state_dir.join(AUTH_STATE_FILE);
-    match fs::read(&path) {
+fn local_auth_state_unlocked(store: &StateReader) -> anyhow::Result<Option<LocalAuthState>> {
+    let path = store.path(StateFile::Authorization);
+    match store.read(StateFile::Authorization) {
         Ok(bytes) => serde_json::from_slice(&bytes)
-            .with_context(|| format!("auth state {} is invalid", path.display()))
+            .map_err(|_| anyhow::anyhow!("auth state {} is invalid", path.display()))
             .map(Some),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(error) => Err(error).with_context(|| format!("failed to read {}", path.display())),
     }
 }
 
-fn persist_auth_state(config: &AgentConfig, state: &LocalAuthState) -> anyhow::Result<()> {
-    let _lock = lock_state(config)?;
-    persist_auth_state_unlocked(config, state)
-}
-
-fn persist_auth_state_unlocked(config: &AgentConfig, state: &LocalAuthState) -> anyhow::Result<()> {
-    persist_private_value(
-        &config.state_dir.join(AUTH_STATE_FILE),
-        &serde_json::to_string_pretty(state)?,
-        "local authorization state",
-    )
+fn persist_auth_state_unlocked(
+    store: &StateTransaction,
+    state: &LocalAuthState,
+) -> anyhow::Result<()> {
+    store
+        .write(
+            StateFile::Authorization,
+            &serde_json::to_string_pretty(state)?,
+        )
+        .context("failed to persist authorization state")
 }
 
 fn progress_from_terminal(state: StoredPairingState) -> PairingProgress {

@@ -38,18 +38,25 @@ pub async fn poll_existing(config: &AgentConfig) -> anyhow::Result<Option<Pairin
 
     let endpoint = pairing_status_endpoint(&pairing_endpoint, request_id)?;
     let client = build_client(config)?;
+    let mut headers = json_headers();
+    headers.insert(
+            header::AUTHORIZATION,
+            pairing_authorization(&polling_secret)?,
+    );
     let response = client
-        .post(endpoint.as_str())
-        .header(header::AUTHORIZATION, format!("Pairing {polling_secret}"))
-        .send()
+        .post_agent(endpoint.as_str(), headers, Vec::new())
         .await
         .context("failed to poll browser pairing status")?;
-    let status = response.status();
+    let status = response.status;
     let content_type = pairing_response_content_type(&response);
-    let body = read_limited(response, "pairing status").await?;
-    ensure_pairing_status(status, &[StatusCode::OK], &body, "poll pairing status")?;
-    let polled: PairingStatusResponse =
-        parse_pairing_json(&body, &content_type, endpoint.as_str(), "pairing status response")?;
+    let body = response.body;
+    ensure_pairing_status(status, &[StatusCode::OK], "poll pairing status")?;
+    let polled: PairingStatusResponse = parse_pairing_json(
+        &body,
+        &content_type,
+        endpoint.as_str(),
+        "pairing status response",
+    )?;
 
     match polled.status {
         PairingStatus::Waiting => {
@@ -134,10 +141,10 @@ pub async fn poll_existing(config: &AgentConfig) -> anyhow::Result<Option<Pairin
 fn pairing_status_endpoint(
     pairing_endpoint: &str,
     request_id: Uuid,
-) -> anyhow::Result<reqwest::Url> {
+) -> anyhow::Result<sarmg_agent_secure_http::Url> {
     crate::config::validate_pairing_endpoint(pairing_endpoint)
         .context("stored pairing endpoint is unsafe")?;
-    let mut endpoint = reqwest::Url::parse(pairing_endpoint)
+    let mut endpoint = sarmg_agent_secure_http::Url::parse(pairing_endpoint)
         .context("stored pairing endpoint is not a valid URL")?;
     if endpoint.query().is_some() || endpoint.fragment().is_some() {
         bail!("stored pairing endpoint must not contain a query or fragment");
@@ -154,6 +161,7 @@ fn pairing_status_endpoint(
 }
 
 fn load_state_for_network(config: &AgentConfig) -> anyhow::Result<Option<StoredPairingState>> {
-    let _lock = lock_state(config)?;
-    load_state(config)
+    let transaction = lock_state(config)?;
+    let store = &transaction;
+    load_state(store)
 }

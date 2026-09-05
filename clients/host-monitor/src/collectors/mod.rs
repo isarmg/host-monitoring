@@ -1,9 +1,8 @@
-use std::{fs, path::Path, time::Instant};
+use std::{path::Path, time::Instant};
 
 #[cfg(not(target_os = "linux"))]
 use std::collections::HashSet;
 
-use anyhow::Context;
 use chrono::Utc;
 use sysinfo::{
     Components, CpuRefreshKind, Disks, MemoryRefreshKind, Networks, RefreshKind, System,
@@ -194,24 +193,26 @@ impl Default for SystemSampler {
 }
 
 pub fn load_host_identity(state_dir: &Path) -> anyhow::Result<HostIdentity> {
-    let id_path = state_dir.join("host-id");
-    let value = fs::read_to_string(&id_path)
-        .with_context(|| format!("failed to read paired host identity {}", id_path.display()))?;
-    let value = value.trim();
-    let id = Uuid::parse_str(value).context("paired host identity is not a UUID")?;
-    anyhow::ensure!(
-        id.to_string() == value,
-        "paired host identity must use canonical lowercase hyphenated UUID text"
-    );
+    let reader = crate::state_store::StateReader::open(state_dir)?;
+    load_host_identity_from(&reader)
+}
 
-    Ok(transient_host_identity(id))
+pub(crate) fn load_host_identity_from(
+    reader: &crate::state_store::StateReader,
+) -> anyhow::Result<HostIdentity> {
+    let identity = crate::agent_identity::from_state(reader)?;
+    Ok(host_details(identity.instance_id().to_owned()))
 }
 
 /// Build a collection identity without touching durable state. Used only by
 /// read-only local diagnostics and capability probes.
 pub fn transient_host_identity(id: Uuid) -> HostIdentity {
+    host_details(id.to_string())
+}
+
+fn host_details(id: String) -> HostIdentity {
     HostIdentity {
-        id: id.to_string(),
+        id,
         os: std::env::consts::OS.to_string(),
         os_version: System::os_version(),
         kernel_version: System::kernel_version(),

@@ -1,7 +1,6 @@
 use std::{
     fs,
     io::{Read, Write},
-    path::Path,
     time::{Duration, Instant},
 };
 
@@ -15,7 +14,7 @@ use host_monitor::{
     spool::Spool,
     transport::Reporter,
 };
-use rand::random;
+use sarmg_agent_runtime::RetryBackoff;
 use serde::Serialize;
 use tokio::sync::{mpsc, watch};
 use tracing::{error, info, warn};
@@ -76,6 +75,13 @@ async fn run_agent(ready: Option<fn() -> anyhow::Result<bool>>) -> anyhow::Resul
     if command == AgentCommand::Doctor && !config.doctor_delivery {
         return run_read_only_doctor(&config).await;
     }
+    let session = match command {
+        AgentCommand::Run | AgentCommand::Once | AgentCommand::Doctor => Some(std::sync::Arc::new(
+            sarmg_agent_runtime::AgentSession::open(&config.state_dir)
+                .context("failed to acquire the exclusive Agent delivery session")?,
+        )),
+        AgentCommand::Pair | AgentCommand::Probe | AgentCommand::Status => None,
+    };
     let shutdown = install_process_shutdown_signal()?;
     let mut host = if command == AgentCommand::Probe {
         transient_host_identity(Uuid::new_v4())
@@ -117,8 +123,11 @@ async fn run_agent(ready: Option<fn() -> anyhow::Result<bool>>) -> anyhow::Resul
         return Ok(());
     }
 
-    let spool = Spool::open(&config.state_dir, config.spool_max_bytes)
-        .with_context(|| format!("failed to open spool in {}", config.state_dir.display()))?;
+    let spool = Spool::from_session(
+        session.context("delivery requires an Agent session")?,
+        config.spool_max_bytes,
+    )
+    .with_context(|| format!("failed to open spool in {}", config.state_dir.display()))?;
     // A service becomes ready only after configuration, host identity, collectors
     // and durable spool have all initialized. Network authorization is deliberately
     // not part of bootstrap: an unpaired service must remain healthy while it waits
@@ -128,9 +137,7 @@ async fn run_agent(ready: Option<fn() -> anyhow::Result<bool>>) -> anyhow::Resul
     {
         return Ok(());
     }
-    let Some((reporter, active_pairing)) =
-        prepare_reporter(&mut config, &mut host, command, &shutdown).await?
-    else {
+    let Some(reporter) = prepare_reporter(&mut config, &mut host, command, &shutdown).await? else {
         info!("shutdown signal received while waiting for browser pairing");
         return Ok(());
     };
@@ -194,16 +201,7 @@ async fn run_agent(ready: Option<fn() -> anyhow::Result<bool>>) -> anyhow::Resul
     }
 
     info!(host_id = %host.id, "read-only telemetry agent started");
-    run_loop(
-        config,
-        host,
-        sampler,
-        spool,
-        reporter,
-        active_pairing,
-        &shutdown,
-    )
-    .await
+    run_loop(config, host, sampler, spool, reporter, &shutdown).await
 }
 
 async fn run_pairing(
@@ -298,7 +296,11 @@ async fn run_pairing(
         None
     };
 
-    let mut network_backoff = Duration::from_secs(1);
+    let mut network_backoff = RetryBackoff::new(
+        Duration::from_secs(1),
+        Duration::from_secs(60),
+        config.jitter_percent,
+    )?;
     loop {
         let polled = tokio::select! {
             result = pairing::poll_existing(config) => result,
@@ -329,7 +331,7 @@ async fn run_pairing(
                         "this pairing request was superseded by another request; no credentials were changed"
                     );
                 }
-                network_backoff = Duration::from_secs(1);
+                network_backoff.reset();
                 let delay = Duration::from_secs(waiting.poll_interval);
                 match wait_for_pairing_control(delay, shutdown, tray_cancel.as_ref(), tray_deadline)
                     .await?
@@ -479,7 +481,7 @@ async fn run_pairing(
                         session.request_id
                     );
                 }
-                let delay = jitter(network_backoff, config.jitter_percent);
+                let delay = network_backoff.next_delay()?;
                 warn!(
                     retry_seconds = delay.as_secs_f64(),
                     "pairing status could not be checked; the saved request will be retried: {error}"
@@ -491,7 +493,6 @@ async fn run_pairing(
                     PairingWait::Shutdown => return Ok(()),
                     outcome => stop_tray_pairing(config, outcome)?,
                 }
-                network_backoff = (network_backoff * 2).min(Duration::from_secs(60));
             }
         }
     }
@@ -672,7 +673,7 @@ use diagnostics::{print_local_status, run_read_only_doctor};
 
 mod delivery;
 
-use delivery::{jitter, prepare_reporter, run_loop, run_once};
+use delivery::{prepare_reporter, run_loop, run_once};
 
 fn install_process_shutdown_signal() -> anyhow::Result<ShutdownSignal> {
     #[cfg(windows)]

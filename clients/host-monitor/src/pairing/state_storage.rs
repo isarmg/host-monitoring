@@ -1,36 +1,26 @@
+#[cfg(test)]
 fn state_path(config: &AgentConfig) -> PathBuf {
     config.state_dir.join(PAIRING_STATE_FILE)
 }
 
+#[cfg(test)]
 fn active_binding_path(config: &AgentConfig) -> PathBuf {
     config.state_dir.join(ACTIVE_BINDING_FILE)
 }
 
-const MAX_ACTIVE_BINDING_BYTES: u64 = 16 * 1024;
-
-fn load_active_binding(config: &AgentConfig) -> anyhow::Result<Option<ActiveBinding>> {
-    use std::io::Read as _;
-
-    let path = active_binding_path(config);
-    let file = match fs::File::open(&path) {
-        Ok(file) => file,
+fn load_active_binding(
+    config: &AgentConfig,
+    store: &StateReader,
+) -> anyhow::Result<Option<ActiveBinding>> {
+    let path = store.path(StateFile::Binding);
+    let bytes = match store.read(StateFile::Binding) {
+        Ok(bytes) => bytes,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(error) => {
             return Err(error)
                 .with_context(|| format!("failed to read active binding {}", path.display()));
         }
     };
-    let mut bytes = Vec::new();
-    file.take(MAX_ACTIVE_BINDING_BYTES + 1)
-        .read_to_end(&mut bytes)
-        .with_context(|| format!("failed to read active binding {}", path.display()))?;
-    if bytes.len() as u64 > MAX_ACTIVE_BINDING_BYTES {
-        bail!(
-            "active binding {} exceeds the {} KiB limit",
-            path.display(),
-            MAX_ACTIVE_BINDING_BYTES / 1024
-        );
-    }
     let binding: ActiveBinding = serde_json::from_slice(&bytes)
         .with_context(|| format!("active binding {} is invalid", path.display()))?;
     validate_active_binding(config, &binding)?;
@@ -68,13 +58,14 @@ fn binding_from_active_state(state: &StoredPairingState) -> anyhow::Result<Activ
     })
 }
 
-fn lock_state(config: &AgentConfig) -> anyhow::Result<state_lock::CredentialStateLock> {
-    state_lock::lock(&config.state_dir)
+fn lock_state(config: &AgentConfig) -> anyhow::Result<StateTransaction> {
+    StateTransaction::begin(&config.state_dir)
+        .context("failed to open private credential state transaction")
 }
 
-fn load_state(config: &AgentConfig) -> anyhow::Result<Option<StoredPairingState>> {
-    let path = state_path(config);
-    let bytes = match fs::read(&path) {
+fn load_state(store: &StateReader) -> anyhow::Result<Option<StoredPairingState>> {
+    let path = store.path(StateFile::Pairing);
+    let bytes = match store.read(StateFile::Pairing) {
         Ok(bytes) => bytes,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(error) => {
@@ -82,8 +73,9 @@ fn load_state(config: &AgentConfig) -> anyhow::Result<Option<StoredPairingState>
                 .with_context(|| format!("failed to read pairing state {}", path.display()));
         }
     };
-    let state: StoredPairingState = serde_json::from_slice(&bytes)
-        .with_context(|| format!("pairing state {} is invalid", path.display()))?;
+    let bytes = sarmg_agent_secret::SecretBytes::new(bytes);
+    let state: StoredPairingState = serde_json::from_slice(bytes.expose())
+        .map_err(|_| anyhow::anyhow!("pairing state {} is invalid", path.display()))?;
     let (version, generation) = match &state {
         StoredPairingState::Creating {
             version,

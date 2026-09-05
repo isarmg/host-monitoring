@@ -1,4 +1,6 @@
-use std::{fs, path::Path};
+#[cfg(test)]
+use std::fs;
+use std::sync::Arc;
 
 #[cfg(feature = "otlp")]
 use std::io::Write;
@@ -6,30 +8,40 @@ use std::io::Write;
 use anyhow::{Context, bail};
 #[cfg(feature = "otlp")]
 use flate2::{Compression, write::GzEncoder};
-use reqwest::{Certificate, Client, Identity, StatusCode};
-use sarmg_error::ErrorEnvelope;
+use sarmg_agent_error::ErrorEnvelope;
+use sarmg_agent_runtime::{AgentIdentity, CredentialSnapshot, CredentialStore};
+use sarmg_agent_secret::{SecretBytes, SecretString};
+use sarmg_agent_secure_http::{Certificate, Identity, StatusCode, header};
+use sarmg_agent_secure_http::{ResponseBudget, SecureHttpClient, TlsConfig};
+use uuid::Uuid;
 
 use host_protocol::AgentReportAck;
 
 use crate::{
     config::AgentConfig,
     model::AgentReport,
-    private_fs::{self, OwnerPolicy},
     report_contract,
+    state_store::{StateFile, StateReader, StateTransaction},
 };
 
 const MAX_ERROR_RESPONSE_BYTES: usize = 64 * 1024;
 
+#[cfg(all(test, target_os = "linux"))]
+#[path = "transport/tls_tests.rs"]
+mod tls_tests;
+
 #[derive(Clone)]
 pub struct Reporter {
-    client: Client,
+    identity: AgentIdentity,
+    client: SecureHttpClient,
     endpoint: String,
-    token: String,
+    token: Arc<SecretString>,
+    credential_revision: (Uuid, Uuid),
     // 仅 otlp feature 下读取；无该 feature 时保留字段以维持构造逻辑一致。
     #[cfg_attr(not(feature = "otlp"), allow(dead_code))]
     otlp_endpoint: Option<String>,
     #[cfg_attr(not(feature = "otlp"), allow(dead_code))]
-    otlp_token: Option<String>,
+    otlp_token: Option<Arc<SecretString>>,
 }
 
 impl Reporter {
@@ -43,38 +55,50 @@ impl Reporter {
     /// This never performs pairing or network I/O and is used while the
     /// pairing state lock protects the token/config snapshot from an
     /// overlapping browser-pairing commit.
-    pub(crate) fn for_existing_credential(config: &AgentConfig) -> anyhow::Result<Option<Self>> {
-        let token_path = config.state_dir.join("agent-token");
-        if !token_path.is_file() {
-            return Ok(None);
-        }
-        let token = read_secret(&token_path, "host token").with_context(|| {
-            format!(
-                "the stored host credential is unreadable or invalid; run `host-monitor pair \
-                 --server <url>` to authorize this host again ({})",
-                token_path.display()
-            )
-        })?;
-        Self::with_token(config, token).map(Some)
-    }
-
-    fn with_token(config: &AgentConfig, token: String) -> anyhow::Result<Self> {
-        let client = build_client(config)?;
-        Self::with_client_and_token(config, client, token)
-    }
-
-    fn with_client_and_token(
+    pub(crate) fn for_existing_credential(
         config: &AgentConfig,
-        client: Client,
-        token: String,
+        store: &StateTransaction,
+    ) -> anyhow::Result<Option<Self>> {
+        let Some(credential) = crate::pairing::HostCredentials::new(config, store).load()? else {
+            return Ok(None);
+        };
+        let client = build_client(config)?;
+        Self::with_client_and_credential(config, client, credential).map(Some)
+    }
+
+    pub fn credential_revision(&self) -> (Uuid, Uuid) {
+        self.credential_revision
+    }
+
+    pub fn identity(&self) -> &AgentIdentity {
+        &self.identity
+    }
+
+    fn validate_report_identity(&self, report: &AgentReport) -> anyhow::Result<()> {
+        self.identity
+            .ensure_matches(&crate::agent_identity::for_instance(&report.host.id)?)?;
+        Ok(())
+    }
+
+    fn with_client_and_credential(
+        config: &AgentConfig,
+        client: SecureHttpClient,
+        credential: CredentialSnapshot<(Uuid, Uuid)>,
     ) -> anyhow::Result<Self> {
-        if token.trim().is_empty() {
+        if credential.secret.expose().trim().is_empty() {
             bail!("the per-host token is empty");
         }
+        credential
+            .identity
+            .ensure_matches(&crate::agent_identity::for_instance(
+                credential.identity.instance_id(),
+            )?)?;
         Ok(Self {
+            identity: credential.identity,
             client,
             endpoint: config.endpoint.clone(),
-            token,
+            token: credential.secret,
+            credential_revision: credential.revision,
             otlp_endpoint: config.otlp_endpoint.clone(),
             otlp_token: config.otlp_token.clone(),
         })
@@ -83,58 +107,55 @@ impl Reporter {
     pub async fn send_host_monitoring(&self, report: &AgentReport) -> Result<(), SendError> {
         let (bounded, body) = report_contract::encode_report_body(report)
             .map_err(|error| SendError::Permanent(format!("invalid Agent report: {error}")))?;
+        // A different valid identity is not an ACK or permanent content rejection.
+        // Keep the record and current credential; never send it with another identity's token.
+        self.validate_report_identity(&bounded)
+            .map_err(|_| SendError::IdentityMismatch)?;
+        let headers = authenticated_headers(&self.token, "application/json")
+            .map_err(|_| SendError::Transient("invalid host authorization header".into()))?;
         let response = self
             .client
-            .post(&self.endpoint)
-            .bearer_auth(&self.token)
-            .header(reqwest::header::CONTENT_TYPE, "application/json")
-            .body(body)
-            .send()
+            .post_agent(&self.endpoint, headers, body)
             .await
             .map_err(|error| {
                 SendError::Transient(format!("Host Monitoring request failed: {error}"))
             })?;
-        let status = response.status();
         let content_type = response
-            .headers()
-            .get(reqwest::header::CONTENT_TYPE)
-            .and_then(|value| value.to_str().ok())
-            .map(str::to_owned);
-        let body = read_limited(response, MAX_ERROR_RESPONSE_BYTES, "Host Monitoring")
-            .await
-            .map_err(SendError::Transient)?;
-        validate_host_monitoring_ack(status, content_type.as_deref(), &body, &bounded)
+            .headers
+            .get(header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok());
+        validate_host_monitoring_ack(response.status, content_type, &response.body, &bounded)
     }
 
     #[cfg(feature = "otlp")]
     pub async fn send_otlp(&self, report: &AgentReport) -> anyhow::Result<()> {
         use prost::Message;
-
         let Some(endpoint) = &self.otlp_endpoint else {
             return Ok(());
         };
+        self.validate_report_identity(report)?;
         let request = crate::otlp::encode_report(report);
         let mut protobuf = Vec::with_capacity(request.encoded_len());
         request.encode(&mut protobuf)?;
         let mut encoder = GzEncoder::new(Vec::new(), Compression::fast());
         encoder.write_all(&protobuf)?;
         let body = encoder.finish()?;
-        let mut request = self
-            .client
-            .post(endpoint)
-            .header("content-type", "application/x-protobuf")
-            .header("content-encoding", "gzip")
-            .body(body);
-        if let Some(token) = &self.otlp_token {
-            request = request.bearer_auth(token);
-        }
-        let response = request.send().await?;
-        let status = response.status();
-        let body = read_limited(response, MAX_ERROR_RESPONSE_BYTES, "OTLP")
-            .await
-            .map_err(anyhow::Error::msg)?;
-        // OTLP 是可选的次要输出，调用方只做告警，不区分永久/暂时失败。
-        Ok(ensure_generic_success(status, &body, "OTLP")?)
+        let mut headers = if let Some(token) = &self.otlp_token {
+            authenticated_headers(token, "application/x-protobuf")?
+        } else {
+            let mut headers = header::HeaderMap::new();
+            headers.insert(
+                header::CONTENT_TYPE,
+                header::HeaderValue::from_static("application/x-protobuf"),
+            );
+            headers
+        };
+        headers.insert(
+            header::CONTENT_ENCODING,
+            header::HeaderValue::from_static("gzip"),
+        );
+        let response = self.client.post_agent(endpoint, headers, body).await?;
+        Ok(ensure_generic_success(response.status, "OTLP")?)
     }
 
     #[cfg(not(feature = "otlp"))]
@@ -143,47 +164,54 @@ impl Reporter {
     }
 }
 
-/// 有界读取远端响应。超限时立即停止，不先把整个响应收进内存。
-async fn read_limited(
-    mut response: reqwest::Response,
-    limit: usize,
-    target: &str,
-) -> Result<Vec<u8>, String> {
-    if response
-        .content_length()
-        .is_some_and(|length| length > limit as u64)
-    {
-        return Err(format!(
-            "{target} response exceeds the {} KiB limit",
-            limit / 1024
-        ));
-    }
-    let mut body = Vec::new();
-    loop {
-        let chunk = response
-            .chunk()
-            .await
-            .map_err(|error| format!("failed to read {target} response: {error}"))?;
-        let Some(chunk) = chunk else { break };
-        if body.len() + chunk.len() > limit {
-            return Err(format!(
-                "{target} response exceeds the {} KiB limit",
-                limit / 1024
-            ));
-        }
-        body.extend_from_slice(&chunk);
-    }
-    Ok(body)
+fn authenticated_headers(
+    token: &SecretString,
+    content_type: &'static str,
+) -> anyhow::Result<header::HeaderMap> {
+    let value = SecretString::new(format!("Bearer {}", token.expose()));
+    let mut value = header::HeaderValue::from_str(value.expose())
+        .map_err(|_| anyhow::anyhow!("invalid authorization header"))?;
+    value.set_sensitive(true);
+    let mut headers = header::HeaderMap::new();
+    headers.insert(header::AUTHORIZATION, value);
+    headers.insert(
+        header::CONTENT_TYPE,
+        header::HeaderValue::from_static(content_type),
+    );
+    Ok(headers)
 }
 
-pub(crate) fn build_client(config: &AgentConfig) -> anyhow::Result<Client> {
-    let mut builder = Client::builder()
-        .timeout(config.request_timeout())
-        .user_agent(format!("host-monitor/{}", env!("CARGO_PKG_VERSION")))
-        // Every Agent endpoint is an exact API address. Following a 307/308
-        // can replay report or pairing JSON to an unvalidated origin even if
-        // reqwest strips the Authorization header on the cross-origin hop.
-        .redirect(reqwest::redirect::Policy::none());
+/// A deliberately source-free diagnostic: backend errors can contain secrets
+/// or configured paths, so they must not be included in Display, Debug or chains.
+#[derive(Debug, thiserror::Error)]
+#[error(
+    "local TLS configuration is invalid; check identity format, password, CA certificates, file safety and the 1 MiB input limit"
+)]
+pub struct LocalTlsConfigurationError;
+
+/// Construct and discard the same transport used for delivery, without DNS,
+/// requests, credential locks, state creation or file repairs. Success validates
+/// local inputs only, not peer trust, expiry at handshake time or connectivity.
+pub fn validate_local_tls(config: &AgentConfig) -> Result<(), LocalTlsConfigurationError> {
+    build_client(config)
+        .map(|_| ())
+        .map_err(|_| LocalTlsConfigurationError)
+}
+
+/// Read-only, bounded credential-content check. False means empty/whitespace;
+/// missing and unsafe files are errors. This does not assert authorization or
+/// validate a multi-file Active binding, and does not acquire transaction locks.
+pub fn stored_credential_is_nonempty(config: &AgentConfig) -> std::io::Result<bool> {
+    let reader = StateReader::open(&config.state_dir)?;
+    let bytes = SecretBytes::new(reader.read(StateFile::Credential)?);
+    let text = std::str::from_utf8(bytes.expose()).map_err(|_| {
+        std::io::Error::new(std::io::ErrorKind::InvalidData, "credential is not UTF-8")
+    })?;
+    Ok(!text.trim().is_empty())
+}
+
+pub(crate) fn build_client(config: &AgentConfig) -> anyhow::Result<SecureHttpClient> {
+    let mut tls = TlsConfig::default();
     if config.tls_identity_password.is_some() && config.tls_identity_pkcs12.is_none() {
         bail!("tls_identity_password requires tls_identity_pkcs12");
     }
@@ -196,9 +224,12 @@ pub(crate) fn build_client(config: &AgentConfig) -> anyhow::Result<Client> {
             );
         }
         if let Some(path) = &config.tls_identity_pem {
-            let bytes = fs::read(path)
+            let bytes = crate::tls_input::read(path, crate::tls_input::TlsInput::Identity)
                 .with_context(|| format!("failed to read TLS identity {}", path.display()))?;
-            builder = builder.identity(Identity::from_pem(&bytes)?);
+            tls.identity = Some(
+                Identity::from_pem(bytes.expose())
+                    .map_err(|_| anyhow::anyhow!("invalid TLS PEM identity"))?,
+            );
         }
     }
     #[cfg(any(windows, target_os = "macos"))]
@@ -209,42 +240,59 @@ pub(crate) fn build_client(config: &AgentConfig) -> anyhow::Result<Client> {
             );
         }
         if let Some(path) = &config.tls_identity_pkcs12 {
-            let bytes = fs::read(path)
+            let bytes = crate::tls_input::read(path, crate::tls_input::TlsInput::Identity)
                 .with_context(|| format!("failed to read TLS identity {}", path.display()))?;
-            builder = builder.identity(Identity::from_pkcs12_der(
-                &bytes,
-                config.tls_identity_password.as_deref().unwrap_or(""),
-            )?);
+            tls.identity = Some(
+                Identity::from_pkcs12_der(
+                    bytes.expose(),
+                    config
+                        .tls_identity_password
+                        .as_deref()
+                        .map(SecretString::expose)
+                        .unwrap_or(""),
+                )
+                .map_err(|_| anyhow::anyhow!("invalid TLS PKCS#12 identity or password"))?,
+            );
         }
     }
     if let Some(path) = &config.tls_ca_pem {
-        let bytes =
-            fs::read(path).with_context(|| format!("failed to read TLS CA {}", path.display()))?;
-        builder = builder.add_root_certificate(Certificate::from_pem(&bytes)?);
+        let bytes = crate::tls_input::read(path, crate::tls_input::TlsInput::TrustAnchor)
+            .with_context(|| format!("failed to read TLS CA {}", path.display()))?;
+        let certificates = Certificate::from_pem_bundle(bytes.expose())
+            .map_err(|_| anyhow::anyhow!("invalid TLS CA certificate"))?;
+        anyhow::ensure!(
+            !certificates.is_empty(),
+            "TLS CA input contains no certificates"
+        );
+        for certificate in certificates {
+            tls.roots.push(certificate);
+        }
     }
-    Ok(builder.build()?)
+    Ok(SecureHttpClient::new(
+        config.request_timeout(),
+        ResponseBudget {
+            max_header_bytes: 64 * 1024,
+            max_body_bytes: MAX_ERROR_RESPONSE_BYTES,
+        },
+        tls,
+        format!("host-monitor/{}", env!("CARGO_PKG_VERSION")),
+    )?)
 }
 
-pub(crate) fn read_secret(path: &Path, kind: &str) -> anyhow::Result<String> {
-    let token = fs::read_to_string(path)
-        .with_context(|| format!("failed to read {kind} {}", path.display()))?;
+pub(crate) fn read_secret(store: &StateReader, kind: &str) -> anyhow::Result<SecretString> {
+    let path = store.path(StateFile::Credential);
+    let bytes = SecretBytes::new(
+        store
+            .read(StateFile::Credential)
+            .with_context(|| format!("failed to read {kind} {}", path.display()))?,
+    );
+    let token =
+        std::str::from_utf8(bytes.expose()).with_context(|| format!("{kind} is not UTF-8"))?;
     let token = token.trim().to_string();
     if token.is_empty() {
         bail!("{kind} {} is empty", path.display());
     }
-    Ok(token)
-}
-
-pub(crate) fn persist_private_value(path: &Path, token: &str, kind: &str) -> anyhow::Result<()> {
-    if token.trim().is_empty() {
-        bail!("refusing to persist an empty {kind}");
-    }
-    let parent = path
-        .parent()
-        .context("token path has no parent directory")?;
-    private_fs::ensure_private_directory(parent)?;
-    private_fs::write_atomic(path, token.trim().as_bytes(), OwnerPolicy::Parent(parent))
-        .with_context(|| format!("failed to persist {kind} {}", path.display()))
+    Ok(SecretString::new(token))
 }
 
 /// 上报失败的性质。判据是**要让同一份报文最终被接受，需要改变什么**：
@@ -253,9 +301,14 @@ pub(crate) fn persist_private_value(path: &Path, token: &str, kind: &str) -> any
 /// |---|---|---|
 /// | `Permanent`  | 报文内容本身（改不了） | 丢弃 |
 /// | `Unauthorized` | 服务端稳定 `unauthorized` 机器码确认凭据失效 | 需要创建新实例并再次配对 |
-/// | `Transient`  | 只需等待 | 退避重试 |
+/// | `IdentityMismatch` | 报告不属于当前凭据身份 | 保留原字节隔离，继续队列 |
+/// | `Transient`  | 等待网络或服务恢复 | 保留并退避重试 |
 #[derive(Debug, thiserror::Error)]
 pub enum SendError {
+    /// Local mismatch: preserve original bytes in quarantine; do not contact the
+    /// network, authorize deletion, or invalidate a newer credential.
+    #[error("report does not match the active Agent identity")]
+    IdentityMismatch,
     /// 服务端以严格当前 envelope 拒绝了报文内容本身（400/409/413）。重试必然
     /// 再次失败，继续入队只会让 spool 被必失败的数据占满并挤掉后续有效报文。
     #[error("{0}")]
@@ -265,7 +318,7 @@ pub enum SendError {
     /// 或替换凭据。代理/WAF 生成的未知 401 不得使用此变体。
     #[error("{0}")]
     Unauthorized(String),
-    /// 网络故障或服务端暂时不可用。重试有意义。
+    /// 网络故障或服务端暂时不可用，保留记录并退避重试。
     #[error("{0}")]
     Transient(String),
 }
@@ -302,15 +355,14 @@ fn validate_host_monitoring_ack(
     }
     let ack: AgentReportAck = serde_json::from_slice(body).map_err(|error| {
         SendError::Transient(format!(
-            "Host Monitoring returned HTTP {status} without a valid report acknowledgement: {error}"
+            "Host Monitoring returned HTTP {status} with an invalid acknowledgement at line {}, column {}",
+            error.line(), error.column()
         ))
     })?;
     if ack.host_id != report.host.id || ack.report_id != report.report_id {
-        return Err(SendError::Transient(format!(
-            "Host Monitoring acknowledgement identity mismatch: expected host {} report {}, got host {} \
-             report {}",
-            report.host.id, report.report_id, ack.host_id, ack.report_id
-        )));
+        return Err(SendError::Transient(
+            "Host Monitoring acknowledgement identity mismatch".into(),
+        ));
     }
     Ok(())
 }
@@ -337,10 +389,16 @@ pub fn classify_host_monitoring_response(
     let envelope = content_type
         .filter(|value| is_application_json(value))
         .and_then(|_| serde_json::from_slice::<ErrorEnvelope>(body).ok());
-    let detail: String = envelope
-        .as_ref()
-        .map(|error| error.message.chars().take(512).collect())
-        .unwrap_or_else(|| String::from_utf8_lossy(body).chars().take(512).collect());
+    // Even a valid envelope may reflect credentials in message/request_id.
+    // Only fixed, locally recognized labels are safe for durable diagnostics.
+    let detail = match envelope.as_ref().map(|error| error.code.as_str()) {
+        Some("bad_request") => "bad_request",
+        Some("conflict") => "conflict",
+        Some("payload_too_large") => "payload_too_large",
+        Some("unauthorized") => "unauthorized",
+        Some("agent_host_mismatch") => "agent_host_mismatch",
+        _ => "unrecognized error response",
+    };
     let message = format!("Host Monitoring rejected telemetry with HTTP {status}: {detail}");
     // 404/408/421/429 与 5xx 留作可重试：服务端重启、反代修复、限流退避之后，
     // 同一份报文仍可能被接受。
@@ -394,13 +452,12 @@ pub fn classify_host_monitoring_response(
 }
 
 #[cfg(feature = "otlp")]
-fn ensure_generic_success(status: StatusCode, body: &[u8], target: &str) -> Result<(), SendError> {
+fn ensure_generic_success(status: StatusCode, target: &str) -> Result<(), SendError> {
     if status.is_success() {
         return Ok(());
     }
-    let detail: String = String::from_utf8_lossy(body).chars().take(512).collect();
     Err(SendError::Transient(format!(
-        "{target} rejected telemetry with HTTP {status}: {detail}"
+        "{target} rejected telemetry with HTTP {status}"
     )))
 }
 
@@ -410,19 +467,51 @@ mod tests {
     use uuid::Uuid;
 
     use super::*;
-    use crate::model::{AgentHealth, CpuSnapshot, HostIdentity, MemorySnapshot, SystemSnapshot};
 
     #[test]
-    fn agent_api_client_never_follows_redirects() {
-        let client = build_client(&AgentConfig::default()).expect("build Agent API client");
-        let configuration = format!("{client:?}");
-        assert!(
-            configuration.contains("Policy(None)"),
-            "Agent API client unexpectedly permits redirects: {configuration}"
-        );
+    fn reflected_credentials_never_enter_response_error_messages() {
+        let marker = "reflected-private-credential";
+        let body = serde_json::to_vec(&serde_json::json!({
+            "code": "unauthorized", "message": marker,
+            "request_id": "req-test", "retryable": false,
+        }))
+        .unwrap();
+        let recognized = classify_host_monitoring_response(
+            StatusCode::UNAUTHORIZED,
+            Some("application/json"),
+            &body,
+        )
+        .unwrap_err();
+        assert!(recognized.is_unauthorized());
+        assert!(!format!("{recognized:?}/{recognized}").contains(marker));
+        for status in [
+            StatusCode::BAD_REQUEST,
+            StatusCode::UNAUTHORIZED,
+            StatusCode::INTERNAL_SERVER_ERROR,
+        ] {
+            let error =
+                classify_host_monitoring_response(status, Some("text/plain"), marker.as_bytes())
+                    .unwrap_err();
+            assert!(!format!("{error:?}/{error}").contains(marker));
+            #[cfg(feature = "otlp")]
+            {
+                let error = ensure_generic_success(status, "OTLP").unwrap_err();
+                assert!(!format!("{error:?}/{error}").contains(marker));
+            }
+        }
+        let ack = serde_json::json!({ "private-credential-field": marker }).to_string();
+        let error = validate_host_monitoring_ack(
+            StatusCode::ACCEPTED,
+            Some("application/json"),
+            ack.as_bytes(),
+            &report(),
+        )
+        .unwrap_err();
+        assert!(!format!("{error:?}/{error}").contains("private-credential"));
     }
+    use crate::model::{AgentHealth, CpuSnapshot, HostIdentity, MemorySnapshot, SystemSnapshot};
 
-    fn report() -> AgentReport {
+    pub(super) fn report() -> AgentReport {
         AgentReport {
             schema_version: 1,
             report_id: Uuid::new_v4().to_string(),
@@ -467,13 +556,18 @@ mod tests {
     #[test]
     fn persists_trimmed_host_token() {
         let directory = std::env::temp_dir().join(format!("host-monitor-token-{}", Uuid::new_v4()));
-        let path = directory.join("agent-token");
-        persist_private_value(&path, " secret-token\n", "host token").unwrap();
-        assert_eq!(read_secret(&path, "host token").unwrap(), "secret-token");
+        crate::state_store::StateTransaction::begin(&directory)
+            .unwrap()
+            .write(StateFile::Credential, " secret-token\n")
+            .unwrap();
+        let token = read_secret(&StateReader::open(&directory).unwrap(), "host token").unwrap();
+        assert_eq!(token.expose(), "secret-token");
+        assert_eq!(format!("{token:?}/{token}"), "[REDACTED]/[REDACTED]");
 
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
+            let path = directory.join("agent-token");
             assert_eq!(
                 fs::metadata(&path).unwrap().permissions().mode() & 0o777,
                 0o600
@@ -487,9 +581,118 @@ mod tests {
     }
 
     #[test]
+    fn reporter_rejects_credential_identity_from_another_product_or_contract() {
+        let config = AgentConfig::default();
+        let id = Uuid::new_v4().to_string();
+        for (product, contract) in [
+            (
+                "another-product",
+                crate::agent_identity::HOST_REPORT_CONTRACT,
+            ),
+            ("host-monitoring", "another-contract"),
+        ] {
+            let identity = AgentIdentity::new(
+                product,
+                &id,
+                sarmg_agent_runtime::ContractId::new(contract).unwrap(),
+            )
+            .unwrap();
+            let result = Reporter::with_client_and_credential(
+                &config,
+                build_client(&config).unwrap(),
+                CredentialSnapshot {
+                    identity,
+                    revision: (Uuid::new_v4(), Uuid::new_v4()),
+                    secret: Arc::new(SecretString::new("private-identity-token".into())),
+                },
+            );
+            let error = result
+                .err()
+                .expect("a matching instance ID alone cannot authorize this reporter");
+            let detail = format!("{error:?}/{error}");
+            assert!(!detail.contains("private-identity-token") && !detail.contains(&id));
+        }
+    }
+
+    #[test]
+    fn reporter_snapshots_share_redacted_secret_ownership() {
+        let config = AgentConfig {
+            otlp_token: Some(Arc::new(SecretString::new("private-otlp-marker".into()))),
+            ..AgentConfig::default()
+        };
+        let reporter = Reporter::with_client_and_credential(
+            &config,
+            build_client(&config).unwrap(),
+            CredentialSnapshot {
+                identity: crate::agent_identity::for_instance(&report().host.id).unwrap(),
+                revision: (Uuid::new_v4(), Uuid::new_v4()),
+                secret: Arc::new(SecretString::new("private-host-marker".into())),
+            },
+        )
+        .unwrap();
+        let snapshot = reporter.clone();
+        assert_eq!(reporter.identity(), snapshot.identity());
+        assert!(Arc::ptr_eq(
+            config.otlp_token.as_ref().unwrap(),
+            reporter.otlp_token.as_ref().unwrap()
+        ));
+        assert!(Arc::ptr_eq(&reporter.token, &snapshot.token));
+        assert_eq!(
+            reporter.credential_revision(),
+            snapshot.credential_revision()
+        );
+        assert!(Arc::ptr_eq(
+            reporter.otlp_token.as_ref().unwrap(),
+            snapshot.otlp_token.as_ref().unwrap()
+        ));
+        assert!(!format!("{:?}/{:?}", snapshot.token, snapshot.otlp_token).contains("marker"));
+        drop(reporter);
+        assert_eq!(snapshot.token.expose(), "private-host-marker");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn credential_reader_distinguishes_missing_from_unsafe_or_oversized_state() {
+        use std::os::unix::fs::{PermissionsExt, symlink};
+        let directory = std::env::temp_dir().join(format!("host-token-read-{}", Uuid::new_v4()));
+        assert!(
+            matches!(StateReader::open(&directory), Err(error) if error.kind() == std::io::ErrorKind::NotFound)
+        );
+        assert!(!directory.exists());
+        crate::private_fs::ensure_private_directory(&directory).unwrap();
+        let path = directory.join("agent-token");
+        symlink(directory.join("absent"), &path).unwrap();
+        assert!(
+            read_secret(&StateReader::open(&directory).unwrap(), "host token").is_err(),
+            "dangling links are not missing credentials"
+        );
+        fs::remove_file(&path).unwrap();
+        crate::state_store::StateTransaction::begin(&directory)
+            .unwrap()
+            .write(StateFile::Credential, "secret")
+            .unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+        assert!(read_secret(&StateReader::open(&directory).unwrap(), "host token").is_err());
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+        let file = fs::OpenOptions::new().write(true).open(&path).unwrap();
+        file.set_len((StateFile::Credential.max_bytes() + 1) as u64)
+            .unwrap();
+        assert!(
+            format!(
+                "{:#}",
+                read_secret(&StateReader::open(&directory).unwrap(), "host token").unwrap_err()
+            )
+            .contains("budget")
+        );
+        drop(file);
+        assert_eq!(fs::read_dir(&directory).unwrap().count(), 2);
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
     fn client_builder_rejects_unbound_identity_password() {
         let config = AgentConfig {
-            tls_identity_password: Some("secret".into()),
+            tls_identity_password: Some(Arc::new(SecretString::new("secret".into()))),
             ..AgentConfig::default()
         };
         let error = build_client(&config)

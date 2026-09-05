@@ -1,16 +1,10 @@
 use std::path::Path;
 
-#[cfg(not(windows))]
-use std::fs;
-
-#[cfg(windows)]
 use std::{ffi::OsStr, os::windows::ffi::OsStrExt};
 
-/// Atomically publish a fully-written same-directory temporary file. Windows
-/// requires MoveFileExW for replace-existing semantics; Unix rename already
-/// provides atomic replacement without a target-missing backup window.
+/// Windows-only atomic replacement with write-through semantics. Unix state
+/// and configuration publication are owned by Agent Foundation.
 pub(crate) fn replace(temporary: &Path, target: &Path) -> std::io::Result<()> {
-    #[cfg(windows)]
     {
         use windows_sys::Win32::Storage::FileSystem::{
             MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH, MoveFileExW,
@@ -28,10 +22,6 @@ pub(crate) fn replace(temporary: &Path, target: &Path) -> std::io::Result<()> {
             return Err(std::io::Error::last_os_error());
         }
         Ok(())
-    }
-    #[cfg(not(windows))]
-    {
-        fs::rename(temporary, target)
     }
 }
 

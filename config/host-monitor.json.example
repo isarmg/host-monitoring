@@ -1,5 +1,5 @@
 {
-  "application_version": "0.7.0",
+  "application_version": "0.8.0",
   "endpoint": "https://host-monitoring.example.com/api/v2/host-monitor/report",
   "pairing_endpoint": "https://host-monitoring.example.com/api/v2/host-monitor/pairing-requests",
   "otlp_endpoint": null,
@@ -13,6 +13,5 @@
   "tls_identity_pem": null,
   "tls_identity_pkcs12": null,
   "tls_identity_password": null,
-  "tls_ca_pem": null,
-  "allow_insecure_http": false
+  "tls_ca_pem": null
 }

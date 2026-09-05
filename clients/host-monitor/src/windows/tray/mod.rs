@@ -402,7 +402,8 @@ mod windows_tray {
             MAX_LOCAL_HTTP_BODY_BYTES, MAX_LOCAL_HTTP_HEAD_BYTES, ServiceAction, TrayCommand,
             advance_pipe_transfer, browser_url_matches_server_origin, constant_time_eq,
             deadline_wait_millis, encode_base64url, parse_tray_arguments, quote_windows_argument,
-            validate_activation_code, validate_browser_url, validate_server_base,
+            server_health::probe_server_connection, validate_activation_code, validate_browser_url,
+            validate_server_base,
         },
     };
     use serde::{Deserialize, Serialize};
@@ -495,8 +496,6 @@ mod windows_tray {
     const MAX_NDJSON_LINE_BYTES: usize = 16 * 1024;
     const MAX_NDJSON_TOTAL_BYTES: usize = 128 * 1024;
     const MAX_CHILD_STDERR_BYTES: usize = 64 * 1024;
-    const MAX_SERVER_HEALTH_BODY_BYTES: u64 = 16 * 1024;
-    const SERVER_HEALTH_TIMEOUT: Duration = Duration::from_secs(4);
     const PAIR_OPERATION_TIMEOUT: Duration = Duration::from_secs(20 * 60);
     const PAIR_BROKER_EXIT_GRACE: Duration = Duration::from_secs(2 * 60);
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;

@@ -15,8 +15,9 @@ pub async fn activate_pending_with_code(
 ) -> anyhow::Result<Option<Uuid>> {
     crate::tray_support::validate_activation_code(activation_code)?;
     let (activation_url, pairing_endpoint, report_endpoint, polling_secret) = {
-        let _lock = lock_state(config)?;
-        let state = load_state(config)?
+        let transaction = lock_state(config)?;
+        let store = &transaction;
+        let state = load_state(store)?
             .context("the pending pairing request disappeared before activation")?;
         match state {
             StoredPairingState::Pending {
@@ -67,27 +68,24 @@ pub async fn activate_pending_with_code(
     let endpoint_display = endpoint.as_str().to_string();
     let client = build_client(config)?;
     let request_id_text = request_id.to_string();
+    let mut headers = json_headers();
+    headers.insert(header::CACHE_CONTROL, header::HeaderValue::from_static("no-store"));
     let response = client
-        .post(endpoint)
-        .header(header::ACCEPT, "application/json")
-        .header(header::CACHE_CONTROL, "no-store")
-        .json(&ActivatePairingRequest {
+        .post_agent(endpoint.as_str(), headers, serde_json::to_vec(&ActivatePairingRequest {
             request_id: &request_id_text,
             activation_code,
-        })
-        .send()
+        })?)
         .await
         .context("failed to submit the one-time authorization key")?;
-    let status = response.status();
+    let status = response.status;
     let content_type = pairing_response_content_type(&response);
-    let body = read_limited(response, "pairing activation").await?;
+    let body = response.body;
     let activated_instance = if status == StatusCode::CONFLICT {
         None
     } else {
         ensure_pairing_status(
             status,
             &[StatusCode::OK],
-            &body,
             "submit the one-time authorization key",
         )?;
         let activated: ActivatePairingResponse = parse_pairing_json(
@@ -105,12 +103,13 @@ pub async fn activate_pending_with_code(
 
     // Network I/O never holds the credential lock. Reacquire and compare the
     // full pending transaction before allowing the caller to trust the result.
-    let _lock = lock_state(config)?;
-    let current = load_state(config)?.context("the pairing state disappeared after activation")?;
+    let transaction = lock_state(config)?;
+    let store = &transaction;
+    let current = load_state(store)?.context("the pairing state disappeared after activation")?;
     match current {
         StoredPairingState::Pending { .. } => {
             ensure_pending_is_current(
-                config,
+                store,
                 generation,
                 request_id,
                 &pairing_endpoint,

@@ -1,5 +1,6 @@
 use chrono::{DateTime, Utc};
 use host_protocol::{AgentPairingRequest, AgentReport, Capability, PairingStatus};
+use sarmg_admin_core::AdministratorStore;
 use sqlx::{Acquire, FromRow, Row, Sqlite, SqlitePool, Transaction, types::Json};
 use uuid::Uuid;
 
@@ -27,36 +28,6 @@ pub async fn retention_ready(pool: &SqlitePool) -> bool {
     .is_ok_and(|ready| ready == 1)
 }
 
-#[derive(Debug, Clone, sqlx::FromRow)]
-pub struct StoredUser {
-    pub user_id: String,
-    pub username: String,
-    pub password_hash: String,
-    pub active: bool,
-    pub session_version: i64,
-}
-
-pub async fn find_active_user_by_username(
-    pool: &SqlitePool,
-    username: &str,
-) -> anyhow::Result<Option<StoredUser>> {
-    let normalized = normalize_username(username)?;
-    let row = sqlx::query_as::<_, StoredUser>(
-        "SELECT user_id,username,password_hash,active,session_version FROM auth_users \
-         WHERE username=? AND active=true",
-    )
-    .bind(normalized)
-    .fetch_optional(pool)
-    .await?;
-    if let Some(user) = &row {
-        sarmg_admin_auth::require_canonical_administrator_username(&user.username)
-            .map_err(anyhow::Error::from)?;
-        sarmg_admin_auth::require_current_password_hash(&user.password_hash)
-            .map_err(anyhow::Error::from)?;
-    }
-    Ok(row)
-}
-
 pub fn normalize_username(username: &str) -> anyhow::Result<String> {
     sarmg_admin_auth::normalize_administrator_username(username).map_err(anyhow::Error::from)
 }
@@ -66,26 +37,19 @@ pub async fn ensure_admin_user(
     username: &str,
     password: Option<&str>,
 ) -> anyhow::Result<()> {
-    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM auth_users")
-        .fetch_one(pool)
-        .await?;
-    if count > 0 {
-        return validate_stored_administrator_users(pool).await;
+    let store = sarmg_admin_sqlite::SqliteAdministratorStore::new(pool.clone());
+    store.validate_all_administrators().await?;
+    let service = sarmg_admin_core::AdministratorService::new(store);
+    if service.store().administrator_count().await? == 0 {
+        let password = password.ok_or_else(|| {
+            anyhow::anyhow!(
+                "HOST_MONITORING_BOOTSTRAP_ADMIN_PASSWORD is required while no administrators exist"
+            )
+        })?;
+        service
+            .bootstrap_administrator(username, password, now_micros()?)
+            .await?;
     }
-    let password = password.ok_or_else(|| {
-        anyhow::anyhow!("HOST_MONITORING_BOOTSTRAP_ADMIN_PASSWORD is required while no users exist")
-    })?;
-    let normalized = normalize_username(username)?;
-    let password_hash = crate::auth::hash_password(password)?;
-    sqlx::query(
-        "INSERT INTO auth_users(user_id,username,password_hash,active,created_at) \
-         VALUES(?,?,?,true,datetime('now'))",
-    )
-    .bind(Uuid::new_v4().to_string())
-    .bind(normalized)
-    .bind(password_hash)
-    .execute(pool)
-    .await?;
     Ok(())
 }
 
@@ -94,37 +58,20 @@ pub async fn reset_admin_password(
     username: &str,
     password: &str,
 ) -> anyhow::Result<()> {
-    let normalized = normalize_username(username)?;
-    validate_stored_administrator_users(pool).await?;
-    let password_hash = crate::auth::hash_password(password)?;
-    let result = sqlx::query("UPDATE auth_users SET password_hash=? WHERE username=?")
-        .bind(password_hash)
-        .bind(normalized)
-        .execute(pool)
-        .await?;
-    anyhow::ensure!(
-        result.rows_affected() == 1,
-        "no existing administrator matched {username}"
-    );
-    Ok(())
+    let store = sarmg_admin_sqlite::SqliteAdministratorStore::new(pool.clone());
+    store.validate_all_administrators().await?;
+    sarmg_admin_core::AdministratorService::new(store)
+        .change_administrator_password(username, password, now_micros()?)
+        .await
+        .map_err(anyhow::Error::from)
 }
 
-/// Refuse to start with administrator identities or password hashes from any
-/// policy other than the current Foundation contract. Repair and migration
-/// deliberately belong outside this server repository.
-async fn validate_stored_administrator_users(pool: &SqlitePool) -> anyhow::Result<()> {
-    let rows = sqlx::query_as::<_, (String, String)>(
-        "SELECT username,password_hash FROM auth_users ORDER BY user_id",
-    )
-    .fetch_all(pool)
-    .await?;
-    for (username, password_hash) in rows {
-        sarmg_admin_auth::require_canonical_administrator_username(&username)
-            .map_err(anyhow::Error::from)?;
-        sarmg_admin_auth::require_current_password_hash(&password_hash)
-            .map_err(anyhow::Error::from)?;
-    }
-    Ok(())
+fn now_micros() -> anyhow::Result<u64> {
+    Ok(u64::try_from(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)?
+            .as_micros(),
+    )?)
 }
 
 async fn audit(

@@ -2,9 +2,13 @@
 //!
 //! The browser approves a pending request but never receives either secret.
 //! Both the future report bearer token and the independent polling secret are
-//! generated locally. Only their SHA-256 hashes leave this process.
+//! generated locally. Creation sends only their SHA-256 hashes; status polling
+//! exposes its secret in a sensitive Authorization header to the configured
+//! Server, and the activated bearer credential authenticates reports.
 
-use std::{fs, path::PathBuf};
+#[cfg(test)]
+use std::fs;
+use std::path::PathBuf;
 
 use anyhow::{Context, bail};
 use chrono::{TimeDelta, Utc};
@@ -14,20 +18,24 @@ use host_protocol::{
     AgentPairingRequest as CreatePairingRequest, AgentPairingResponse as CreatePairingResponse,
     AgentPairingStatusResponse as PairingStatusResponse, PairingStatus,
 };
-use reqwest::{StatusCode, header};
+use sarmg_agent_secure_http::{StatusCode, header};
 use uuid::Uuid;
 
 use crate::{
-    collectors::load_host_identity,
     config::AgentConfig,
     model::HostIdentity,
-    state_lock,
-    transport::{Reporter, build_client, persist_private_value},
+    state_store::{StateFile, StateReader, StateTransaction},
+    transport::{Reporter, build_client},
 };
 
 mod activation;
 mod client;
 mod commit;
+#[cfg(test)]
+mod credential_tests;
+mod credentials;
+pub(crate) use credentials::HostCredentials;
+use sarmg_agent_runtime::{CredentialAuthorization, CredentialStore};
 mod state;
 
 use activation::*;

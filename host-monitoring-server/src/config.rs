@@ -7,9 +7,9 @@ use std::{
 
 use clap::{Parser, Subcommand};
 
-use crate::auth::{Auth, CookieMode};
 use crate::retention::RetentionConfig;
 use crate::telemetry::TelemetryWriterConfig;
+use sarmg_admin_auth::AdministratorOriginMode;
 
 #[derive(Debug, Parser)]
 #[command(name = "host-monitoring-server", version, about)]
@@ -62,7 +62,7 @@ pub struct AdminResetPassword {
 pub struct ValidatedConfig {
     pub bind: SocketAddr,
     pub database_url: String,
-    pub auth: Auth,
+    pub administrator_origin: AdministratorOriginMode,
     pub bootstrap_admin_username: String,
     pub bootstrap_admin_password: Option<String>,
     pub telemetry: TelemetryWriterConfig,
@@ -90,14 +90,6 @@ impl ValidatedConfig {
         .map_err(|error| {
             anyhow::anyhow!("HOST_MONITORING_BOOTSTRAP_ADMIN_USERNAME is invalid: {error}")
         })?;
-        let idle_ttl = Duration::from_secs(parse_u64(
-            "HOST_MONITORING_SESSION_IDLE_TTL_SECONDS",
-            1_800,
-        )?);
-        let absolute_ttl = Duration::from_secs(parse_u64(
-            "HOST_MONITORING_SESSION_ABSOLUTE_TTL_SECONDS",
-            43_200,
-        )?);
         let telemetry = TelemetryWriterConfig::new(
             parse_usize("HOST_MONITORING_TELEMETRY_QUEUE_CAPACITY", 256)?,
             parse_usize("HOST_MONITORING_TELEMETRY_BATCH_SIZE", 64)?,
@@ -139,7 +131,7 @@ impl ValidatedConfig {
         Ok(Self {
             bind,
             database_url,
-            auth: Auth::new(idle_ttl, absolute_ttl, cookie_mode)?,
+            administrator_origin: cookie_mode,
             bootstrap_admin_username,
             bootstrap_admin_password: env::var("HOST_MONITORING_BOOTSTRAP_ADMIN_PASSWORD").ok(),
             telemetry,
@@ -256,14 +248,14 @@ fn parse_bool(name: &str, default: bool) -> anyhow::Result<bool> {
         .map_err(|_| anyhow::anyhow!("{name} must be true or false"))
 }
 
-fn cookie_mode(bind: SocketAddr, development: bool) -> anyhow::Result<CookieMode> {
+fn cookie_mode(bind: SocketAddr, development: bool) -> anyhow::Result<AdministratorOriginMode> {
     if development && !bind.ip().is_loopback() {
         anyhow::bail!("HOST_MONITORING_DEVELOPMENT requires a loopback HOST_MONITORING_BIND");
     }
     Ok(if development {
-        CookieMode::LoopbackDevelopment
+        AdministratorOriginMode::LoopbackDevelopmentHttp
     } else {
-        CookieMode::Production
+        AdministratorOriginMode::ProductionHttps
     })
 }
 
@@ -275,11 +267,11 @@ mod tests {
     fn insecure_development_cookie_mode_is_explicit_and_loopback_only() {
         assert_eq!(
             cookie_mode("127.0.0.1:18105".parse().unwrap(), false).unwrap(),
-            CookieMode::Production
+            AdministratorOriginMode::ProductionHttps
         );
         assert_eq!(
             cookie_mode("127.0.0.1:18105".parse().unwrap(), true).unwrap(),
-            CookieMode::LoopbackDevelopment
+            AdministratorOriginMode::LoopbackDevelopmentHttp
         );
         assert!(cookie_mode("0.0.0.0:18105".parse().unwrap(), true).is_err());
     }
@@ -307,7 +299,7 @@ mod tests {
 
     #[test]
     fn immutable_release_commands_require_an_explicit_root() {
-        let root = "/opt/isarmg/host-monitoring/releases/0.7.0";
+        let root = "/opt/isarmg/host-monitoring/releases/0.8.0";
         assert!(
             Cli::try_parse_from(["host-monitoring-server", "serve-release", "--root", root])
                 .is_ok()

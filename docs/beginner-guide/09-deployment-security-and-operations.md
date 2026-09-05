@@ -59,9 +59,8 @@ generation/journal 引擎本身不能证明它会识别本产品，所以当前�
 
 TLS 私钥、管理员密码、Session/CSRF、设备 credential、OTLP Token 和数据库都按 Secret/敏感数据管理。
 管理员身份是 canonical username，不是 email；role 只有 `admin`。日志与 support 包做字段级脱敏。只
-信任明确配置的代理和 CA；Agent 没有“关闭 TLS 证书校验”开关。持久配置虽可用
-`allow_insecure_http=true` 显式允许 report/OTLP 远程明文 HTTP，但 pairing 仍拒绝，生产基线必须为
-`false`；这不是证书错误的排障方案。
+信任明确配置的代理和 CA；Agent 没有“关闭 TLS 证书校验”开关。远程明文 HTTP 不受配置开放；
+report/OTLP/pairing 的生产基线固定为 HTTPS，HTTP 仅限 loopback。
 
 ## 9.9 不提供跨版本回滚
 

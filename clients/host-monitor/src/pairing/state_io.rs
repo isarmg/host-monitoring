@@ -1,31 +1,42 @@
 #[cfg(test)]
 fn persist_state(config: &AgentConfig, state: &StoredPairingState) -> anyhow::Result<()> {
-    let _lock = lock_state(config)?;
-    persist_state_unlocked(config, state)
+    let transaction = lock_state(config)?;
+    let store = &transaction;
+    persist_state_unlocked(store, state)
 }
 
-fn persist_state_unlocked(config: &AgentConfig, state: &StoredPairingState) -> anyhow::Result<()> {
-    let serialized = serde_json::to_string_pretty(state)?;
-    persist_private_value(&state_path(config), &serialized, "browser pairing state")
+fn persist_state_unlocked(
+    store: &StateTransaction,
+    state: &StoredPairingState,
+) -> anyhow::Result<()> {
+    let mut output = sarmg_agent_secret::SecretWriter::new(StateFile::Pairing.max_bytes())?;
+    serde_json::to_writer_pretty(&mut output, state)?;
+    let serialized = output.into_bytes();
+    store
+        .write(
+            StateFile::Pairing,
+            std::str::from_utf8(serialized.expose())?,
+        )
+        .context("failed to persist browser pairing state")
 }
 
 fn persist_active_binding_unlocked(
     config: &AgentConfig,
+    store: &StateTransaction,
     binding: &ActiveBinding,
 ) -> anyhow::Result<()> {
     validate_active_binding(config, binding)?;
-    persist_private_value(
-        &active_binding_path(config),
-        &serde_json::to_string_pretty(binding)?,
-        "active credential endpoint binding",
-    )
+    store
+        .write(StateFile::Binding, &serde_json::to_string_pretty(binding)?)
+        .context("failed to persist active binding")
 }
 
 fn load_current_active_binding_unlocked(
     config: &AgentConfig,
+    store: &StateReader,
     expected: &ActiveBinding,
 ) -> anyhow::Result<ActiveBinding> {
-    match load_active_binding(config)? {
+    match load_active_binding(config, store)? {
         Some(binding) if binding == *expected => Ok(binding),
         Some(_) => bail!("active binding does not match the current Active pairing state"),
         None => bail!("active binding is missing; purge local state and pair host-monitor again"),
@@ -37,11 +48,12 @@ fn compare_and_persist_creating(
     generation: Uuid,
     pairing_endpoint: &str,
     report_endpoint: &str,
-    polling_secret: &str,
+    polling_secret: &sarmg_agent_secret::SecretString,
     next: &StoredPairingState,
 ) -> anyhow::Result<()> {
-    let _lock = lock_state(config)?;
-    let current = load_state(config)?;
+    let transaction = lock_state(config)?;
+    let store = &transaction;
+    let current = load_state(store)?;
     if !matches!(
         current,
         Some(StoredPairingState::Creating {
@@ -53,11 +65,11 @@ fn compare_and_persist_creating(
         }) if current_generation == generation
             && current_pairing_endpoint == pairing_endpoint
             && current_report_endpoint == report_endpoint
-            && current_polling_secret == polling_secret
+            && current_polling_secret.expose() == polling_secret.expose()
     ) {
         return Err(PairingSuperseded.into());
     }
-    persist_state_unlocked(config, next)
+    persist_state_unlocked(store, next)
 }
 
 fn compare_and_persist_pending(
@@ -66,30 +78,31 @@ fn compare_and_persist_pending(
     request_id: Uuid,
     pairing_endpoint: &str,
     report_endpoint: &str,
-    polling_secret: &str,
+    polling_secret: &sarmg_agent_secret::SecretString,
     next: &StoredPairingState,
 ) -> anyhow::Result<()> {
-    let _lock = lock_state(config)?;
+    let transaction = lock_state(config)?;
+    let store = &transaction;
     ensure_pending_is_current(
-        config,
+        store,
         generation,
         request_id,
         pairing_endpoint,
         report_endpoint,
         polling_secret,
     )?;
-    persist_state_unlocked(config, next)
+    persist_state_unlocked(store, next)
 }
 
 fn ensure_pending_is_current(
-    config: &AgentConfig,
+    store: &StateReader,
     generation: Uuid,
     request_id: Uuid,
     pairing_endpoint: &str,
     report_endpoint: &str,
-    polling_secret: &str,
+    polling_secret: &sarmg_agent_secret::SecretString,
 ) -> anyhow::Result<()> {
-    let current = load_state(config)?;
+    let current = load_state(store)?;
     if !matches!(
         current,
         Some(StoredPairingState::Pending {
@@ -103,7 +116,7 @@ fn ensure_pending_is_current(
             && current_request_id == request_id
             && current_pairing_endpoint == pairing_endpoint
             && current_report_endpoint == report_endpoint
-            && current_polling_secret == polling_secret
+            && current_polling_secret.expose() == polling_secret.expose()
     ) {
         return Err(PairingSuperseded.into());
     }

@@ -10,7 +10,6 @@ use axum::{
 };
 use chrono::{DateTime, Utc};
 use host_monitoring_server::{
-    auth::{Auth, CookieMode},
     http::{AppState, router},
     model,
     store::{self, ReportStoreError, ReportWrite},
@@ -155,16 +154,15 @@ fn report_request(token: &str, report: &AgentReport) -> Request<Body> {
 }
 
 fn application(pool: SqlitePool, writer: TelemetryWriter) -> Router {
-    let auth = Auth::new(
-        Duration::from_secs(60),
-        Duration::from_secs(600),
-        CookieMode::LoopbackDevelopment,
-    )
-    .unwrap();
     router(
-        AppState::with_telemetry_writer(pool, auth, writer),
+        AppState::with_telemetry_writer(
+            pool,
+            sarmg_admin_auth::AdministratorOriginMode::LoopbackDevelopmentHttp,
+            writer,
+        ),
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("web"),
     )
+    .unwrap()
 }
 
 async fn assert_error_envelope(
@@ -286,6 +284,62 @@ async fn router_authentication_binding_body_and_validation_all_precede_enqueue()
     assert_eq!(accepted.status(), StatusCode::ACCEPTED);
     assert_eq!(writer.stats().enqueued, 1);
     task.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn foundation_shutdown_drains_the_writer_and_stops_retention() {
+    use host_monitoring_server::{
+        http::product_descriptor,
+        retention::{RetentionConfig, RetentionMaintenance},
+    };
+    use sarmg_server_runtime::{ServerRuntime, TaskCriticality, TaskState};
+    let database = TestDatabase::new().await;
+    let (host, token) = database.add_host("supervised").await;
+    let (writer, task) =
+        TelemetryWriter::start(database.pool.clone(), config(8, 4, 5, 10, 1000, 1000));
+    let (maintenance, retention_task) =
+        RetentionMaintenance::start(database.pool.clone(), RetentionConfig::production());
+    let runtime = ServerRuntime::builder(product_descriptor())
+        .register_background_task("writer", TaskCriticality::Critical, |shutdown| {
+            task.run_until(shutdown)
+        })
+        .register_background_task("retention", TaskCriticality::Degrading, |shutdown| {
+            retention_task.run_until(shutdown)
+        })
+        .build()
+        .await
+        .unwrap();
+    let handle = runtime.handle();
+    let running = tokio::spawn(runtime.run_until_shutdown());
+    writer
+        .submit(write(report(host, Uuid::new_v4(), Utc::now()), &token))
+        .await
+        .unwrap();
+    handle.shutdown();
+    tokio::time::timeout(Duration::from_secs(3), running)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(writer.is_closed());
+    assert!(!maintenance.is_running());
+    let diagnostic = handle.diagnostics().await;
+    assert!(diagnostic.health.live);
+    assert!(!diagnostic.health.ready);
+    assert!(
+        diagnostic
+            .tasks
+            .values()
+            .all(|task| task.state == TaskState::Stopped)
+    );
+}
+
+#[tokio::test]
+async fn dropping_a_task_owner_does_not_detach_the_writer() {
+    let database = TestDatabase::new().await;
+    let (writer, task) =
+        TelemetryWriter::start(database.pool.clone(), config(8, 4, 5, 10, 1000, 1000));
+    drop(task);
+    wait_until(|| writer.is_closed()).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -442,7 +496,7 @@ async fn router_overload_is_fast_bounded_and_closed_writer_is_retryable() {
     let app = application(database.pool.clone(), writer.clone());
     let readiness = app
         .clone()
-        .oneshot(Request::get("/health/ready").body(Body::empty()).unwrap())
+        .oneshot(Request::get("/readyz").body(Body::empty()).unwrap())
         .await
         .unwrap();
     assert_eq!(readiness.status(), StatusCode::OK);
@@ -500,12 +554,12 @@ async fn router_overload_is_fast_bounded_and_closed_writer_is_retryable() {
         .unwrap();
     assert_eq!(stored, 2, "timed-out queued work was not drained");
 
-    let readiness = app
+    let removed_health_route = app
         .clone()
         .oneshot(Request::get("/health/ready").body(Body::empty()).unwrap())
         .await
         .unwrap();
-    assert_eq!(readiness.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(removed_health_route.status(), StatusCode::NOT_FOUND);
 
     let after_close = app
         .oneshot(report_request(
