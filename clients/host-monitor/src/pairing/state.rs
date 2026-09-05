@@ -13,7 +13,7 @@ pub(crate) struct PairingStateVersion;
 pub(super) const PAIRING_STATE_VERSION: PairingStateVersion = PairingStateVersion;
 #[cfg(test)]
 pub(super) const PAIRING_STATE_FILE: &str = crate::state_store::StateFile::Pairing.name();
-#[cfg(test)]
+#[cfg(all(test, unix))]
 pub(super) const AUTH_STATE_FILE: &str = crate::state_store::StateFile::Authorization.name();
 #[cfg(test)]
 pub(super) const ACTIVE_BINDING_FILE: &str = crate::state_store::StateFile::Binding.name();

@@ -10,7 +10,9 @@ mod tests {
 
     use super::*;
     const MAX_PAIRING_STATE_BYTES: usize = StateFile::Pairing.max_bytes();
+    #[cfg(unix)]
     const MAX_ACTIVE_BINDING_BYTES: usize = StateFile::Binding.max_bytes();
+    #[cfg(unix)]
     const MAX_AUTH_STATE_BYTES: usize = StateFile::Authorization.max_bytes();
 
     // Deliberately incomplete authorization fixture for malformed-state tests.
@@ -58,7 +60,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn activating_commit_and_reporter_snapshot_stay_under_the_locked_directory() {
-        let base = std::env::temp_dir().join(format!("host-state-rebound-{}", Uuid::new_v4()));
+        let base = std::env::temp_dir().canonicalize().expect("physical test temporary directory").join(format!("host-state-rebound-{}", Uuid::new_v4()));
         fs::create_dir(&base).unwrap();
         let config = test_config(base.join("state"));
         let transaction = lock_state(&config).unwrap();
@@ -135,7 +137,7 @@ mod tests {
     #[test]
     fn local_state_readers_reject_oversized_and_linked_files_without_mutating_state() {
         use std::os::unix::fs::symlink;
-        let directory = std::env::temp_dir().join(format!("host-private-read-{}", Uuid::new_v4()));
+        let directory = std::env::temp_dir().canonicalize().expect("physical test temporary directory").join(format!("host-private-read-{}", Uuid::new_v4()));
         crate::private_fs::ensure_private_directory(&directory).unwrap();
         let config = test_config(directory.clone());
         type Reader = fn(&AgentConfig) -> anyhow::Result<()>;
@@ -299,7 +301,7 @@ mod tests {
 
     #[tokio::test]
     async fn create_rejects_cross_origin_activation_url_before_showing_or_persisting_it() {
-        let directory = std::env::temp_dir().join(format!(
+        let directory = std::env::temp_dir().canonicalize().expect("physical test temporary directory").join(format!(
             "host-monitoring-pairing-untrusted-activation-{}",
             Uuid::new_v4()
         ));
@@ -445,7 +447,7 @@ mod tests {
     #[test]
     fn journal_secret_snapshots_share_ownership_and_serialization_is_bounded() {
         let directory =
-            std::env::temp_dir().join(format!("host-secret-journal-{}", Uuid::new_v4()));
+            std::env::temp_dir().canonicalize().expect("physical test temporary directory").join(format!("host-secret-journal-{}", Uuid::new_v4()));
         let config = test_config(directory.clone());
         let secret = random_secret();
         let mut state = StoredPairingState::Creating {
@@ -488,7 +490,7 @@ mod tests {
 
     #[test]
     fn malformed_private_journal_does_not_quote_secret_in_error_chain() {
-        let directory = std::env::temp_dir().join(format!("host-secret-errors-{}", Uuid::new_v4()));
+        let directory = std::env::temp_dir().canonicalize().expect("physical test temporary directory").join(format!("host-secret-errors-{}", Uuid::new_v4()));
         let config = test_config(directory.clone());
         let transaction = lock_state(&config).unwrap();
         let malformed = format!(
@@ -830,7 +832,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn service_activation_commit_wins_the_post_response_race_idempotently() {
-        let directory = std::env::temp_dir().join(format!(
+        let directory = std::env::temp_dir().canonicalize().expect("physical test temporary directory").join(format!(
             "host-monitoring-activation-race-{}",
             Uuid::new_v4()
         ));
@@ -898,7 +900,7 @@ mod tests {
     #[test]
     fn pending_state_round_trips_privately() {
         let directory =
-            std::env::temp_dir().join(format!("host-monitoring-pairing-{}", Uuid::new_v4()));
+            std::env::temp_dir().canonicalize().expect("physical test temporary directory").join(format!("host-monitoring-pairing-{}", Uuid::new_v4()));
         let config = test_config(directory.clone());
         let state = StoredPairingState::Pending {
             version: PAIRING_STATE_VERSION,
@@ -935,7 +937,7 @@ mod tests {
     #[test]
     fn creating_state_round_trips_the_same_secrets_for_idempotent_retry() {
         let directory =
-            std::env::temp_dir().join(format!("host-monitoring-creating-{}", Uuid::new_v4()));
+            std::env::temp_dir().canonicalize().expect("physical test temporary directory").join(format!("host-monitoring-creating-{}", Uuid::new_v4()));
         let config = test_config(directory.clone());
         let bearer_secret = random_secret();
         let polling_secret = random_secret();
@@ -974,7 +976,7 @@ mod tests {
     #[tokio::test]
     async fn live_pending_request_cannot_be_silently_moved_to_another_server() {
         let directory =
-            std::env::temp_dir().join(format!("host-monitoring-pending-origin-{}", Uuid::new_v4()));
+            std::env::temp_dir().canonicalize().expect("physical test temporary directory").join(format!("host-monitoring-pending-origin-{}", Uuid::new_v4()));
         let mut config = test_config(directory.clone());
         crate::private_fs::ensure_private_directory(&directory).unwrap();
         let config_path = directory.join("config.json");
@@ -1019,7 +1021,7 @@ mod tests {
 
     #[tokio::test]
     async fn interrupted_create_cannot_be_silently_moved_to_another_server() {
-        let directory = std::env::temp_dir().join(format!(
+        let directory = std::env::temp_dir().canonicalize().expect("physical test temporary directory").join(format!(
             "host-monitoring-creating-origin-{}",
             Uuid::new_v4()
         ));
@@ -1054,7 +1056,7 @@ mod tests {
     #[test]
     fn explicit_replacement_rotates_same_origin_incomplete_state() {
         for phase in ["creating", "expired_pending"] {
-            let directory = std::env::temp_dir().join(format!(
+            let directory = std::env::temp_dir().canonicalize().expect("physical test temporary directory").join(format!(
                 "host-monitoring-same-origin-replace-{phase}-{}",
                 Uuid::new_v4()
             ));
@@ -1146,7 +1148,7 @@ mod tests {
     #[tokio::test]
     async fn confirmed_tray_replacement_can_replace_mismatched_incomplete_states() {
         for old_state in ["creating", "pending"] {
-            let directory = std::env::temp_dir().join(format!(
+            let directory = std::env::temp_dir().canonicalize().expect("physical test temporary directory").join(format!(
                 "host-monitoring-confirmed-replace-{old_state}-{}",
                 Uuid::new_v4()
             ));
@@ -1203,7 +1205,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn delayed_old_activation_cannot_overwrite_a_replacement_generation() {
         let directory =
-            std::env::temp_dir().join(format!("host-monitoring-delayed-active-{}", Uuid::new_v4()));
+            std::env::temp_dir().canonicalize().expect("physical test temporary directory").join(format!("host-monitoring-delayed-active-{}", Uuid::new_v4()));
         crate::private_fs::ensure_private_directory(&directory).unwrap();
         let old_instance_id = Uuid::new_v4();
         let (old_server, request_seen, release_response, old_thread) =
@@ -1286,7 +1288,7 @@ mod tests {
     #[tokio::test]
     async fn activating_journal_recovers_all_endpoint_bound_files() {
         for preexisting in [false, true] {
-            let directory = std::env::temp_dir().join(format!(
+            let directory = std::env::temp_dir().canonicalize().expect("physical test temporary directory").join(format!(
                 "host-monitoring-activating-recovery-{preexisting}-{}",
                 Uuid::new_v4()
             ));
@@ -1405,7 +1407,7 @@ mod tests {
 
     #[test]
     fn active_state_without_binding_is_rejected() {
-        let directory = std::env::temp_dir().join(format!(
+        let directory = std::env::temp_dir().canonicalize().expect("physical test temporary directory").join(format!(
             "host-monitoring-missing-binding-{}",
             Uuid::new_v4()
         ));
@@ -1457,7 +1459,7 @@ mod tests {
 
     #[test]
     fn mismatched_active_binding_is_never_silently_replaced() {
-        let directory = std::env::temp_dir().join(format!(
+        let directory = std::env::temp_dir().canonicalize().expect("physical test temporary directory").join(format!(
             "host-monitoring-binding-mismatch-{}",
             Uuid::new_v4()
         ));
@@ -1527,7 +1529,7 @@ mod tests {
 
     #[test]
     fn replacing_current_active_state_preserves_its_endpoint_binding() {
-        let directory = std::env::temp_dir().join(format!(
+        let directory = std::env::temp_dir().canonicalize().expect("physical test temporary directory").join(format!(
             "host-monitoring-binding-before-create-{}",
             Uuid::new_v4()
         ));
@@ -1588,7 +1590,7 @@ mod tests {
 
     #[test]
     fn run_keeps_the_current_credential_during_an_incomplete_pairing_attempt() {
-        let directory = std::env::temp_dir().join(format!(
+        let directory = std::env::temp_dir().canonicalize().expect("physical test temporary directory").join(format!(
             "host-monitoring-current-reporter-{}",
             Uuid::new_v4()
         ));
@@ -1719,7 +1721,7 @@ mod tests {
 
     #[test]
     fn local_inspection_does_not_create_a_lock_or_state_directory() {
-        let directory = std::env::temp_dir().join(format!(
+        let directory = std::env::temp_dir().canonicalize().expect("physical test temporary directory").join(format!(
             "host-monitoring-read-only-status-{}",
             Uuid::new_v4()
         ));
@@ -1735,7 +1737,7 @@ mod tests {
 
     #[test]
     fn local_inspection_does_not_publish_an_activating_credential() {
-        let directory = std::env::temp_dir().join(format!(
+        let directory = std::env::temp_dir().canonicalize().expect("physical test temporary directory").join(format!(
             "host-monitoring-read-only-activating-{}",
             Uuid::new_v4()
         ));
@@ -1772,7 +1774,7 @@ mod tests {
     #[test]
     fn activation_atomically_commits_server_identity_and_token() {
         let directory =
-            std::env::temp_dir().join(format!("host-monitoring-activation-{}", Uuid::new_v4()));
+            std::env::temp_dir().canonicalize().expect("physical test temporary directory").join(format!("host-monitoring-activation-{}", Uuid::new_v4()));
         let config = test_config(directory.clone());
         crate::private_fs::ensure_private_directory(&directory).unwrap();
         write_private_fixture(directory.join("host-id"), Uuid::new_v4().to_string()).unwrap();

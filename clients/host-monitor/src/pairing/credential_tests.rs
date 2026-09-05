@@ -3,7 +3,10 @@ use sarmg_agent_runtime::CredentialMutation;
 
 fn config() -> AgentConfig {
     AgentConfig {
-        state_dir: std::env::temp_dir().join(format!("host-credential-store-{}", Uuid::new_v4())),
+        state_dir: std::env::temp_dir()
+            .canonicalize()
+            .expect("physical test temporary directory")
+            .join(format!("host-credential-store-{}", Uuid::new_v4())),
         ..AgentConfig::default()
     }
 }

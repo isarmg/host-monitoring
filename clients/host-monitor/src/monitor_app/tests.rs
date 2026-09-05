@@ -139,8 +139,10 @@ fn process_sigterm_survives_an_unobserved_window() {
 
 #[test]
 fn pairing_activation_loads_the_server_assigned_identity() {
-    let directory =
-        std::env::temp_dir().join(format!("host-monitoring-active-host-{}", Uuid::new_v4()));
+    let directory = std::env::temp_dir()
+        .canonicalize()
+        .expect("physical test temporary directory")
+        .join(format!("host-monitoring-active-host-{}", Uuid::new_v4()));
     fs::create_dir_all(&directory).unwrap();
     #[cfg(unix)]
     {

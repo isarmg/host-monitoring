@@ -1671,10 +1671,13 @@ mod maintenance_resource_limit_tests {
 
     #[test]
     fn sparse_snapshot_is_rejected_after_only_limit_plus_one_bytes() {
-        let path = std::env::temp_dir().join(format!(
-            "host-monitoring-maintenance-sparse-snapshot-{}.json",
-            uuid::Uuid::new_v4()
-        ));
+        let path = std::env::temp_dir()
+            .canonicalize()
+            .expect("physical test temporary directory")
+            .join(format!(
+                "host-monitoring-maintenance-sparse-snapshot-{}.json",
+                uuid::Uuid::new_v4()
+            ));
         let file = std::fs::File::create(&path).unwrap();
         file.set_len(u64::try_from(MAX_ACL_SNAPSHOT_BYTES + 1).unwrap())
             .unwrap();

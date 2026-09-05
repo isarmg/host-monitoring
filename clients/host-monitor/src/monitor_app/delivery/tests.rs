@@ -15,7 +15,7 @@ mod tests {
             }
         }
         let directory = Directory(
-            std::env::temp_dir().join(format!("host-delivery-flight-{}", Uuid::new_v4())),
+            std::env::temp_dir().canonicalize().expect("physical test temporary directory").join(format!("host-delivery-flight-{}", Uuid::new_v4())),
         );
         fs::create_dir(&directory.0).unwrap();
         fs::set_permissions(&directory.0, fs::Permissions::from_mode(0o700)).unwrap();
@@ -204,7 +204,7 @@ mod tests {
     #[tokio::test]
     async fn cancelled_one_shot_retains_the_current_report_for_idempotent_retry() {
         let directory =
-            std::env::temp_dir().join(format!("host-monitoring-once-shutdown-{}", Uuid::new_v4()));
+            std::env::temp_dir().canonicalize().expect("physical test temporary directory").join(format!("host-monitoring-once-shutdown-{}", Uuid::new_v4()));
         let spool = Spool::open(&directory, 1024 * 1024).unwrap();
         let mut sampler = SystemSampler::new();
         let report = sampler.collect(transient_host_identity(Uuid::new_v4()), 10, 0);

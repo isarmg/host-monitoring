@@ -14,7 +14,10 @@ use std::{
 struct Certificates(PathBuf);
 impl Certificates {
     fn new() -> Self {
-        let path = std::env::temp_dir().join(format!("host-real-tls-{}", Uuid::new_v4()));
+        let path = std::env::temp_dir()
+            .canonicalize()
+            .expect("physical test temporary directory")
+            .join(format!("host-real-tls-{}", Uuid::new_v4()));
         fs::create_dir(&path).unwrap();
         fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).unwrap();
         let fixture = Self(path);

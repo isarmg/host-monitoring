@@ -165,7 +165,10 @@ mod tests {
 
     #[test]
     fn transaction_budgets_are_symmetric_and_rejections_preserve_committed_state() {
-        let path = std::env::temp_dir().join(format!("host-state-budget-{}", uuid::Uuid::new_v4()));
+        let path = std::env::temp_dir()
+            .canonicalize()
+            .expect("physical test temporary directory")
+            .join(format!("host-state-budget-{}", uuid::Uuid::new_v4()));
         let transaction = StateTransaction::begin(&path).unwrap();
         for file in [
             StateFile::Identity,
@@ -188,7 +191,10 @@ mod tests {
 
     #[test]
     fn transaction_and_read_only_capabilities_reject_unsafe_paths_and_links() {
-        let path = std::env::temp_dir().join(format!("host-state-links-{}", uuid::Uuid::new_v4()));
+        let path = std::env::temp_dir()
+            .canonicalize()
+            .expect("physical test temporary directory")
+            .join(format!("host-state-links-{}", uuid::Uuid::new_v4()));
         assert!(StateReader::open(&path).is_err());
         assert!(!path.exists());
         fs::create_dir(&path).unwrap();

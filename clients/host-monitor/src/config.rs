@@ -947,10 +947,13 @@ mod tests {
 
     #[test]
     fn failed_secret_serialization_preserves_the_saved_configuration() {
-        let directory = std::env::temp_dir().join(format!(
-            "host-config-secret-budget-{}",
-            uuid::Uuid::new_v4()
-        ));
+        let directory = std::env::temp_dir()
+            .canonicalize()
+            .expect("physical test temporary directory")
+            .join(format!(
+                "host-config-secret-budget-{}",
+                uuid::Uuid::new_v4()
+            ));
         fs::create_dir(&directory).unwrap();
         let path = directory.join("config.json");
         let mut config = AgentConfig {
@@ -977,10 +980,13 @@ mod tests {
 
     #[test]
     fn invalid_configuration_diagnostics_do_not_echo_secret_values_or_keys() {
-        let directory = std::env::temp_dir().join(format!(
-            "host-config-secret-errors-{}",
-            uuid::Uuid::new_v4()
-        ));
+        let directory = std::env::temp_dir()
+            .canonicalize()
+            .expect("physical test temporary directory")
+            .join(format!(
+                "host-config-secret-errors-{}",
+                uuid::Uuid::new_v4()
+            ));
         fs::create_dir(&directory).unwrap();
         let path = directory.join("config.json");
         for field in [
@@ -1016,8 +1022,10 @@ mod tests {
     #[test]
     fn configuration_persistence_preserves_service_mode_and_rejects_links_and_public_files() {
         use std::os::unix::fs::{MetadataExt, PermissionsExt, symlink};
-        let directory =
-            std::env::temp_dir().join(format!("host-config-safety-{}", uuid::Uuid::new_v4()));
+        let directory = std::env::temp_dir()
+            .canonicalize()
+            .expect("physical test temporary directory")
+            .join(format!("host-config-safety-{}", uuid::Uuid::new_v4()));
         fs::create_dir(&directory).unwrap();
         fs::set_permissions(&directory, fs::Permissions::from_mode(0o750)).unwrap();
         let path = directory.join("config.json");
@@ -1058,8 +1066,10 @@ mod tests {
 
     #[test]
     fn configuration_budget_applies_to_reads_and_writes_without_truncation() {
-        let directory =
-            std::env::temp_dir().join(format!("host-config-budget-{}", uuid::Uuid::new_v4()));
+        let directory = std::env::temp_dir()
+            .canonicalize()
+            .expect("physical test temporary directory")
+            .join(format!("host-config-budget-{}", uuid::Uuid::new_v4()));
         let path = directory.join("config.json");
         assert!(persist_private_config(&path, &vec![b'x'; MAX_CONFIG_BYTES]).is_err());
         assert!(!directory.exists());
@@ -1118,10 +1128,13 @@ mod tests {
 
     #[test]
     fn explicit_missing_or_non_regular_config_is_lenient_only_for_status() {
-        let root = std::env::temp_dir().join(format!(
-            "host-monitor-explicit-config-{}",
-            uuid::Uuid::new_v4()
-        ));
+        let root = std::env::temp_dir()
+            .canonicalize()
+            .expect("physical test temporary directory")
+            .join(format!(
+                "host-monitor-explicit-config-{}",
+                uuid::Uuid::new_v4()
+            ));
         let directory = root.join("directory-config");
         fs::create_dir_all(&directory).unwrap();
         let missing = root.join("missing-config.json");

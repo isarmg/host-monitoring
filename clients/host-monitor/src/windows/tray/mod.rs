@@ -355,10 +355,13 @@ mod cross_platform_tests {
 
     #[test]
     fn tray_preferences_reader_stops_after_the_size_limit_sentinel() {
-        let path = std::env::temp_dir().join(format!(
-            "host-monitoring-tray-preferences-bounds-{}.json",
-            uuid::Uuid::new_v4()
-        ));
+        let path = std::env::temp_dir()
+            .canonicalize()
+            .expect("physical test temporary directory")
+            .join(format!(
+                "host-monitoring-tray-preferences-bounds-{}.json",
+                uuid::Uuid::new_v4()
+            ));
         let file = std::fs::File::create(&path).unwrap();
         file.set_len((MAX_TRAY_PREFERENCES_BYTES + 8 * 1024) as u64)
             .unwrap();

@@ -4,9 +4,11 @@ use host_monitor::{
 };
 use uuid::Uuid;
 
-fn otlp_test_config(endpoint: String) -> (AgentConfig, std::path::PathBuf) {
-    let state_dir =
-        std::env::temp_dir().join(format!("host-monitoring-otlp-live-{}", Uuid::new_v4()));
+fn otlp_test_config(endpoint: String) -> (AgentConfig, std::path::PathBuf, Uuid) {
+    let state_dir = std::env::temp_dir()
+        .canonicalize()
+        .expect("physical test temporary directory")
+        .join(format!("host-monitoring-otlp-live-{}", Uuid::new_v4()));
     std::fs::create_dir_all(&state_dir).expect("create OTLP test state directory");
     #[cfg(unix)]
     {
@@ -65,12 +67,12 @@ fn otlp_test_config(endpoint: String) -> (AgentConfig, std::path::PathBuf) {
     config.state_dir = state_dir.clone();
     config.endpoint = report_endpoint.into();
     config.otlp_endpoint = Some(endpoint);
-    (config, state_dir)
+    (config, state_dir, instance_id)
 }
 
 #[test]
 fn otlp_fixture_satisfies_the_current_active_binding_contract() {
-    let (config, state_dir) = otlp_test_config("http://127.0.0.1:4318/v1/metrics".into());
+    let (config, state_dir, _) = otlp_test_config("http://127.0.0.1:4318/v1/metrics".into());
     Reporter::new(&config).expect("current OTLP fixture must construct a reporter");
     std::fs::remove_dir_all(state_dir).expect("remove OTLP test state directory");
 }
@@ -107,16 +109,14 @@ async fn collector_accepts_the_agent_otlp_protobuf() {
     let Some(endpoint) = otlp_endpoint("collector_accepts_the_agent_otlp_protobuf") else {
         return;
     };
-    let (config, state_dir) = otlp_test_config(endpoint);
+    let (config, state_dir, instance_id) = otlp_test_config(endpoint);
     let reporter = Reporter::new(&config).expect("build OTLP test client");
     let report = AgentReport {
         schema_version: 1,
         report_id: Uuid::new_v4().to_string(),
         collected_at: chrono::Utc::now(),
         host: HostIdentity {
-            id: Uuid::parse_str("00000000-0000-4000-8000-000000000001")
-                .unwrap()
-                .to_string(),
+            id: instance_id.to_string(),
             os: "linux".into(),
             os_version: None,
             kernel_version: None,
@@ -176,7 +176,7 @@ async fn collector_accepts_a_fully_populated_report_with_every_device_type() {
     else {
         return;
     };
-    let (config, state_dir) = otlp_test_config(endpoint);
+    let (config, state_dir, instance_id) = otlp_test_config(endpoint);
     let reporter = Reporter::new(&config).expect("build OTLP test client");
 
     let network = |name: &str, rx: u32, tx: u32| NetworkSnapshot {
@@ -216,9 +216,7 @@ async fn collector_accepts_a_fully_populated_report_with_every_device_type() {
         report_id: Uuid::new_v4().to_string(),
         collected_at: chrono::Utc::now(),
         host: HostIdentity {
-            id: Uuid::parse_str("00000000-0000-4000-8000-000000000002")
-                .unwrap()
-                .to_string(),
+            id: instance_id.to_string(),
             os: "linux".into(),
             os_version: Some("6.1.0".into()),
             kernel_version: Some("6.1.0-generic".into()),

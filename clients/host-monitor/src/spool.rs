@@ -141,14 +141,20 @@ mod tests {
 
     #[test]
     fn invalid_limits_do_not_create_state_or_session_lock() {
-        let path = std::env::temp_dir().join(format!("host-session-limits-{}", Uuid::new_v4()));
+        let path = std::env::temp_dir()
+            .canonicalize()
+            .expect("physical test temporary directory")
+            .join(format!("host-session-limits-{}", Uuid::new_v4()));
         assert!(Spool::open(&path, 0).is_err());
         assert!(!path.exists());
     }
 
     #[test]
     fn spool_clones_keep_the_delivery_session_but_do_not_block_pairing() {
-        let path = std::env::temp_dir().join(format!("host-session-lifetime-{}", Uuid::new_v4()));
+        let path = std::env::temp_dir()
+            .canonicalize()
+            .expect("physical test temporary directory")
+            .join(format!("host-session-lifetime-{}", Uuid::new_v4()));
         let spool = Spool::open(&path, 1024 * 1024).unwrap();
         let clone = spool.clone();
         drop(spool);
@@ -172,7 +178,10 @@ mod tests {
 
     #[test]
     fn spool_creation_uses_the_sessions_anchored_state_directory() {
-        let root = std::env::temp_dir().join(format!("host-session-anchor-{}", Uuid::new_v4()));
+        let root = std::env::temp_dir()
+            .canonicalize()
+            .expect("physical test temporary directory")
+            .join(format!("host-session-anchor-{}", Uuid::new_v4()));
         fs::create_dir(&root).unwrap();
         let path = root.join("state");
         let session = Arc::new(AgentSession::open(&path).unwrap());

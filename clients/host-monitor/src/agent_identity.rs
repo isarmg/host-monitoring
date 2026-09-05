@@ -72,8 +72,10 @@ mod tests {
             fs,
             os::unix::fs::{PermissionsExt, symlink},
         };
-        let root =
-            std::env::temp_dir().join(format!("host-typed-identity-{}", uuid::Uuid::new_v4()));
+        let root = std::env::temp_dir()
+            .canonicalize()
+            .expect("physical test temporary directory")
+            .join(format!("host-typed-identity-{}", uuid::Uuid::new_v4()));
         struct Cleanup(std::path::PathBuf);
         impl Drop for Cleanup {
             fn drop(&mut self) {

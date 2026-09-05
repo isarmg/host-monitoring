@@ -595,8 +595,10 @@ mod tests {
 
     #[test]
     fn spool_inspection_does_not_create_state_or_remove_quarantines() {
-        let directory =
-            std::env::temp_dir().join(format!("host-spool-diagnostics-{}", Uuid::new_v4()));
+        let directory = std::env::temp_dir()
+            .canonicalize()
+            .expect("physical test temporary directory")
+            .join(format!("host-spool-diagnostics-{}", Uuid::new_v4()));
         fs::create_dir(&directory).unwrap();
         let mut config = AgentConfig::default();
         config.state_dir = directory.join("state");
@@ -667,10 +669,13 @@ mod tests {
 
     #[test]
     fn host_inspection_rejects_noncanonical_uuid_text() {
-        let directory = std::env::temp_dir().join(format!(
-            "host-monitoring-diagnostic-host-{}",
-            Uuid::new_v4()
-        ));
+        let directory = std::env::temp_dir()
+            .canonicalize()
+            .expect("physical test temporary directory")
+            .join(format!(
+                "host-monitoring-diagnostic-host-{}",
+                Uuid::new_v4()
+            ));
         fs::create_dir_all(&directory).unwrap();
         #[cfg(unix)]
         {
@@ -703,8 +708,10 @@ mod tests {
     #[test]
     fn identity_diagnostics_reject_unsafe_state_without_creating_or_repairing_it() {
         use std::os::unix::fs::{PermissionsExt, symlink};
-        let directory =
-            std::env::temp_dir().join(format!("host-identity-safety-{}", Uuid::new_v4()));
+        let directory = std::env::temp_dir()
+            .canonicalize()
+            .expect("physical test temporary directory")
+            .join(format!("host-identity-safety-{}", Uuid::new_v4()));
         let mut config = AgentConfig::default();
         config.state_dir = directory.clone();
         assert_eq!(

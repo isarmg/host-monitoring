@@ -1,5 +1,6 @@
 //! Product TLS file selection; safety and the byte ceiling belong to Foundation.
 
+#[cfg(unix)]
 use anyhow::Context;
 use sarmg_agent_secret::SecretBytes;
 use sarmg_agent_secure_http::MAX_TLS_INPUT_BYTES;
@@ -49,7 +50,10 @@ mod tests {
     struct Directory(std::path::PathBuf);
     impl Directory {
         fn new() -> Self {
-            let path = std::env::temp_dir().join(format!("host-tls-input-{}", Uuid::new_v4()));
+            let path = std::env::temp_dir()
+                .canonicalize()
+                .expect("physical test temporary directory")
+                .join(format!("host-tls-input-{}", Uuid::new_v4()));
             fs::create_dir(&path).unwrap();
             fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).unwrap();
             Self(path)

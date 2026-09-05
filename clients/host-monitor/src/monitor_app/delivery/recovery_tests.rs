@@ -5,7 +5,10 @@ use std::os::unix::fs::PermissionsExt;
 struct Fixture(AgentConfig);
 impl Fixture {
     fn new() -> Self {
-        let path = std::env::temp_dir().join(format!("host-recovery-{}", Uuid::new_v4()));
+        let path = std::env::temp_dir()
+            .canonicalize()
+            .expect("physical test temporary directory")
+            .join(format!("host-recovery-{}", Uuid::new_v4()));
         fs::create_dir(&path).unwrap();
         fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).unwrap();
         let mut config = AgentConfig::default();

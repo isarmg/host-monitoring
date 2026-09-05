@@ -9,10 +9,13 @@ struct Fixture {
 
 impl Fixture {
     fn new() -> Self {
-        let root = std::env::temp_dir().join(format!(
-            "host-monitor-explicit-config-integration-{}",
-            Uuid::new_v4()
-        ));
+        let root = std::env::temp_dir()
+            .canonicalize()
+            .expect("physical test temporary directory")
+            .join(format!(
+                "host-monitor-explicit-config-integration-{}",
+                Uuid::new_v4()
+            ));
         fs::create_dir_all(&root).unwrap();
         let state_dir = root.join("state");
         Self { root, state_dir }

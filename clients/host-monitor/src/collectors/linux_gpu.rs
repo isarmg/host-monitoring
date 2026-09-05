@@ -503,10 +503,13 @@ mod tests {
     impl TestTree {
         fn new() -> Self {
             let id = TEST_ID.fetch_add(1, Ordering::Relaxed);
-            let base = std::env::temp_dir().join(format!(
-                "host-monitoring-linux-gpu-test-{}-{id}",
-                std::process::id()
-            ));
+            let base = std::env::temp_dir()
+                .canonicalize()
+                .expect("physical test temporary directory")
+                .join(format!(
+                    "host-monitoring-linux-gpu-test-{}-{id}",
+                    std::process::id()
+                ));
             let drm = base.join("drm");
             fs::create_dir_all(&drm).unwrap();
             Self { base, drm }

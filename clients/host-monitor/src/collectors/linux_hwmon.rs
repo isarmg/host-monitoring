@@ -535,10 +535,13 @@ mod tests {
     impl TestTree {
         fn new() -> Self {
             let sequence = NEXT_TREE.fetch_add(1, Ordering::Relaxed);
-            let path = std::env::temp_dir().join(format!(
-                "host-monitoring-linux-hwmon-{}-{sequence}",
-                std::process::id()
-            ));
+            let path = std::env::temp_dir()
+                .canonicalize()
+                .expect("physical test temporary directory")
+                .join(format!(
+                    "host-monitoring-linux-hwmon-{}-{sequence}",
+                    std::process::id()
+                ));
             fs::create_dir(&path).expect("create isolated hwmon test root");
             Self(path)
         }
@@ -656,7 +659,9 @@ mod tests {
         symlink(&device, tree.path().join("hwmon0")).unwrap();
         symlink(&device, tree.path().join("hwmon1")).unwrap();
 
-        let outside = std::env::temp_dir();
+        let outside = std::env::temp_dir()
+            .canonicalize()
+            .expect("physical test temporary directory");
         symlink(outside, tree.path().join("hwmon2")).unwrap();
 
         let result = collect_from(tree.path());

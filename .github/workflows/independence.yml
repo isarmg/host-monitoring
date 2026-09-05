@@ -20,8 +20,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if git grep -n -E \
-              'UNION_|X-Union-|[Uu]nion[Cc]|PluginManifest|ProcessContext|sarmg-platform|sarmg_platform' \
+          # The current SQLite _sarmg_platform_metadata table is not a runtime dependency.
+          if git grep -n -P \
+              'UNION_|X-Union-|[Uu]nion[Cc]|PluginManifest|ProcessContext|sarmg-platform|sarmg_platform(?!_metadata\b)' \
               -- . ':(exclude).github/**'; then
             exit 1
           fi

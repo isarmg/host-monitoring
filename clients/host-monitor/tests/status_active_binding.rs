@@ -12,8 +12,10 @@ struct Fixture {
 
 impl Fixture {
     fn new(mismatched_binding: bool) -> Self {
-        let root =
-            std::env::temp_dir().join(format!("host-monitoring-status-binding-{}", Uuid::new_v4()));
+        let root = std::env::temp_dir()
+            .canonicalize()
+            .expect("physical test temporary directory")
+            .join(format!("host-monitoring-status-binding-{}", Uuid::new_v4()));
         let state_dir = root.join("state");
         let config_path = root.join("config.json");
         fs::create_dir_all(&state_dir).unwrap();

@@ -82,7 +82,7 @@ mod tests {
 
     #[test]
     fn existing_preferences_can_be_atomically_replaced() {
-        let directory = std::env::temp_dir().join(format!(
+        let directory = std::env::temp_dir().canonicalize().expect("physical test temporary directory").join(format!(
             "host-monitoring-tray-preferences-{}",
             random_secret()
         ));

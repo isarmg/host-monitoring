@@ -555,7 +555,10 @@ mod tests {
 
     #[test]
     fn persists_trimmed_host_token() {
-        let directory = std::env::temp_dir().join(format!("host-monitor-token-{}", Uuid::new_v4()));
+        let directory = std::env::temp_dir()
+            .canonicalize()
+            .expect("physical test temporary directory")
+            .join(format!("host-monitor-token-{}", Uuid::new_v4()));
         crate::state_store::StateTransaction::begin(&directory)
             .unwrap()
             .write(StateFile::Credential, " secret-token\n")
@@ -654,7 +657,10 @@ mod tests {
     #[test]
     fn credential_reader_distinguishes_missing_from_unsafe_or_oversized_state() {
         use std::os::unix::fs::{PermissionsExt, symlink};
-        let directory = std::env::temp_dir().join(format!("host-token-read-{}", Uuid::new_v4()));
+        let directory = std::env::temp_dir()
+            .canonicalize()
+            .expect("physical test temporary directory")
+            .join(format!("host-token-read-{}", Uuid::new_v4()));
         assert!(
             matches!(StateReader::open(&directory), Err(error) if error.kind() == std::io::ErrorKind::NotFound)
         );
