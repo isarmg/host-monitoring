@@ -1,5 +1,8 @@
 # Host Monitoring 主机监控
 
+管理 Web 已支持新建实例邀请、一次性激活码、取消邀请和设备配对激活。
+使用说明见 [实例创建与配对](docs/instance-management.md)。
+
 Host Monitoring `0.8.0` 是一个独立的主机遥测产品，仓库同时包含本地 Web 状态页、共享网络协议和
 跨平台 `host-monitor`。服务端使用本地管理员用户名/密码和 SQLite；Agent 只读采集主机状态，通过配对
 取得凭据，并默认经 HTTPS 发送有界报告。只有持久 Agent 配置显式启用高风险

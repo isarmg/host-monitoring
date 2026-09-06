@@ -144,7 +144,6 @@ CREATE TABLE agent_instance_invites (
     activation_code_hash  TEXT NOT NULL UNIQUE,
     display_name          TEXT NOT NULL,
     status                TEXT NOT NULL DEFAULT 'pending',
-    expires_at            TEXT NOT NULL,
     created_at            TEXT NOT NULL,
     activated_at          TEXT,
     cancelled_at          TEXT

@@ -1040,7 +1040,7 @@ dependencies = [
 
 [[package]]
 name = "host-monitor"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1072,12 +1072,13 @@ dependencies = [
 
 [[package]]
 name = "host-monitoring-server"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "anyhow",
  "axum",
  "chrono",
  "clap",
+ "futures-util",
  "host-monitor",
  "host-protocol",
  "http-body-util",
@@ -1110,7 +1111,7 @@ dependencies = [
 
 [[package]]
 name = "host-protocol"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "chrono",
  "serde",

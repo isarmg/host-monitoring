@@ -102,7 +102,6 @@ pub enum CreateInviteResult {
 pub async fn create_invite(
     pool: &SqlitePool,
     display_name: &str,
-    expires_in_minutes: i64,
     actor: &str,
 ) -> anyhow::Result<(CreateInviteResult, Option<String>)> {
     let invite_id = Uuid::new_v4();
@@ -110,20 +109,18 @@ pub async fn create_invite(
     let activation_code = format!("uci_{}", Uuid::new_v4().simple());
     let activation_hash = crate::token_hash(&activation_code);
     let created_at = Utc::now();
-    let expires_at = created_at + chrono::Duration::minutes(expires_in_minutes);
     let mut tx = pool.begin().await?;
     let row = sqlx::query(
         r#"INSERT INTO agent_instance_invites(
-               invite_id,instance_id,activation_code_hash,display_name,expires_at,created_at
-           ) VALUES(?,?,?,?,?,?)
+               invite_id,instance_id,activation_code_hash,display_name,created_at
+           ) VALUES(?,?,?,?,?)
            ON CONFLICT (instance_id) WHERE status='pending' DO NOTHING
-           RETURNING invite_id,instance_id,display_name,status,expires_at,created_at"#,
+           RETURNING invite_id,instance_id,display_name,status,created_at"#,
     )
     .bind(invite_id)
     .bind(instance_id)
     .bind(&activation_hash)
     .bind(display_name)
-    .bind(expires_at)
     .bind(created_at)
     .fetch_optional(&mut *tx)
     .await?;
@@ -135,7 +132,7 @@ pub async fn create_invite(
         &mut tx,
         "monitoring.agent_instance.invite.create",
         &instance_id.to_string(),
-        Some(&format!("invite_id={invite_id}; expires_at={expires_at}")),
+        Some(&format!("invite_id={invite_id}")),
         actor,
     )
     .await?;
@@ -147,14 +144,11 @@ pub async fn create_invite(
 }
 
 pub async fn list_invites(pool: &SqlitePool) -> anyhow::Result<Vec<AgentInstanceSummary>> {
-    let now = Utc::now();
     let rows = sqlx::query(
-        r#"SELECT invite_id,instance_id,display_name,expires_at,created_at,
-                  CASE WHEN status='pending' AND expires_at <= ? THEN 'expired' ELSE status END AS status
+        r#"SELECT invite_id,instance_id,display_name,created_at,status
            FROM agent_instance_invites
            ORDER BY created_at DESC LIMIT 200"#,
     )
-    .bind(now)
     .fetch_all(pool)
     .await?;
     rows.iter().map(agent_instance).collect()
@@ -211,7 +205,6 @@ fn agent_instance(row: &sqlx::sqlite::SqliteRow) -> anyhow::Result<AgentInstance
         instance_id: row.try_get::<Uuid, _>("instance_id")?.to_string(),
         display_name: row.try_get("display_name")?,
         status: row.try_get("status")?,
-        expires_at: row.try_get("expires_at")?,
         created_at: row.try_get("created_at")?,
     })
 }
@@ -402,7 +395,7 @@ pub async fn activate(
         return Ok(ActivateResult::NotFound);
     };
     let invite = sqlx::query(
-        "SELECT invite_id,instance_id,display_name,status,expires_at FROM agent_instance_invites \
+        "SELECT invite_id,instance_id,display_name,status FROM agent_instance_invites \
          WHERE activation_code_hash=?",
     )
     .bind(activation_hash)
@@ -434,9 +427,7 @@ pub async fn activate(
         return Ok(ActivateResult::Conflict);
     }
     let now = Utc::now();
-    if pairing.try_get::<DateTime<Utc>, _>("expires_at")? <= now
-        || invite.try_get::<DateTime<Utc>, _>("expires_at")? <= now
-    {
+    if pairing.try_get::<DateTime<Utc>, _>("expires_at")? <= now {
         tx.rollback().await?;
         return Ok(ActivateResult::Expired);
     }

@@ -20,7 +20,7 @@
 
 Host Monitoring 用一个本地控制面接收多台主机的 CPU、内存、磁盘、网络和平台传感器。每台主机运行
 `host-monitor`，Agent 只发起出站连接，不监听公网端口；服务端负责 invite/配对/激活、报告验证、raw
-存储、内部聚合和管理员 Session。当前 React 页面只展示 Host 列表 JSON，不是完整可视化或配对控制台。
+存储、内部聚合和管理员 Session。React 页面提供主机列表、采集详情、实例邀请和配对激活；尚不是完整图表控制台。
 
 “只读采集”表示 Agent 不以监控为理由修改系统配置。安装器仍需要平台权限创建服务账户、安装服务和
 保护本地状态，因此运行时最小权限与安装时权限要分开理解。
@@ -108,7 +108,7 @@ host-monitor run --config /etc/host-monitor/config.json
 ```
 
 - `probe` 只验证本地采集。
-- `pair` 创建或恢复配对请求并轮询 active；当前 React 页面未实现 activation UI。
+- `pair` 创建或恢复配对请求并轮询 active；打开返回的激活链接，在管理 Web 核对设备并输入一次性码。
 - `once` 采集并投递一次。
 - `doctor` 默认只读检查；显式 delivery 模式才进行端到端发送。
 - `run` 是长期服务模式。
@@ -122,9 +122,9 @@ host-monitor run --config /etc/host-monitor/config.json
 credential。Agent 轮询到 active 后原子写入状态，再切换 active binding。网络中断时恢复同一请求，不会
 静默生成另一套身份；明确替换未完成请求必须由用户确认。
 
-当前代码的重要缺口是：`clients/web/src/App.tsx` 没有 invite 创建、activation code 输入或
-`/activate/{request_id}` 页面。开发者不能只凭后端路由和 Agent 打印的 activation URL 宣称浏览器配对已
-交付；补齐 React 流程及正负测试后，才可按 UI 工作流验收。
+管理 Web 已补齐邀请创建、一次性激活码、设备核对、激活和取消邀请，Server 提供
+`/activate/{request_id}` 的页面入口。浏览器模拟故障和隔离真实后端测试分别验证 UI 与接口流程；
+这不替代真实设备采集器验收。详见 [实例管理](../instance-management.md)。
 
 设备凭据、TLS 私钥、OTLP Token 和 spool 都是主机敏感数据，不能提交、打印或放在宽权限目录。
 

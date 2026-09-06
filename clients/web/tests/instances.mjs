@@ -1,0 +1,96 @@
+import assert from "node:assert/strict";
+import { chromium, firefox, expect } from "@playwright/test";
+import AxeBuilder from "@axe-core/playwright";
+import { preview } from "vite";
+
+const session = { authenticated: true, user_id: "A".repeat(43), username: "admin", role: "admin", csrf_token: "A".repeat(43) };
+const inviteId = "018f1f4b-7a5d-7b5f-8d31-123456789abc";
+const pairId = "018f1f4b-7a5d-7b5f-8d31-123456789abd";
+const instanceId = "018f1f4b-7a5d-7b5f-8d31-123456789abe";
+const code = "uci_" + "a".repeat(32);
+const server = await preview({ preview: { host: "127.0.0.1", port: 0, strictPort: true } });
+try {
+  for (const engine of [chromium, firefox]) {
+    const browser = await engine.launch();
+    try {
+      const context = await browser.newContext({ viewport: { width: 360, height: 740 } });
+      const page = await context.newPage();
+      const errors = []; let invitation = null; let creates = 0; let activations = 0; let release;
+      page.on("pageerror", error => errors.push(error.message));
+      await page.route("**/api/v2/**", async route => {
+        const request = route.request(); const path = new URL(request.url()).pathname;
+        if (request.method() !== "GET") assert.equal(request.headers()["x-csrf-token"], session.csrf_token);
+        if (path.endsWith("/monitoring/hosts")) return route.fulfill({ json: { hosts: [], total: 0, limit: 50, offset: 0 } });
+        if (path.endsWith("/agent-instances")) {
+          if (request.method() === "POST") {
+            creates++; assert.deepEqual(Object.keys(request.postDataJSON()),["display_name"]);
+            if (creates === 1) return route.fulfill({ status: 503, headers: { "x-request-id": "invite-123" }, json: { code: "service_unavailable", retryable: true, message: "SECRET", request_id: "invite-123" } });
+            await new Promise(done => { release = done; });
+            invitation = { request_id: inviteId, instance_id: instanceId, display_name: request.postDataJSON().display_name,
+              status: "pending", created_at: "2026-09-05T00:00:00Z" };
+            return route.fulfill({ status: 201, json: { ...invitation, activation_code: code } });
+          }
+          return route.fulfill({ json: invitation ? [invitation] : [] });
+        }
+        if (path.endsWith(`/agent-instances/${inviteId}`)) { invitation.status = "cancelled"; return route.fulfill({ status: 204 }); }
+        if (path.endsWith(`/pairing-requests/${pairId}`)) return route.fulfill({ json: {
+          request_id: pairId, os: "linux", arch: "x86_64", agent_version: "0.8.0", status: activations ? "active" : "waiting", expires_at: "2099-01-01T00:00:00Z",
+        } });
+        if (path.endsWith("/activate-admin")) {
+          assert.deepEqual(request.postDataJSON(), { request_id: pairId, activation_code: code });
+          activations++; invitation.status = "active";
+          return route.fulfill({ json: { instance_id: instanceId, status: "active" } });
+        }
+        return route.fulfill({ json: session });
+      });
+      await page.goto(`http://127.0.0.1:${server.httpServer.address().port}`);
+      await expect(page.getByRole("button", { name: "邀请与配对管理", exact: true })).toHaveCount(0);
+      await page.getByRole("button", { name: "新建实例", exact: true }).click();
+      await expect(page.getByLabel("有效期（分钟）")).toHaveCount(0);
+      const instanceName = page.getByLabel("实例名称", { exact: true });
+      for (const character of ["a", "中", "😀"]) {
+        await instanceName.fill(character.repeat(32));
+        assert.equal(await instanceName.evaluate(input => input.checkValidity()), true);
+      }
+      await instanceName.fill("名".repeat(33));
+      assert.equal(await instanceName.evaluate(input => input.checkValidity()), false);
+      await page.getByLabel("实例名称", { exact: true }).fill("测试 Agent");
+      await page.getByRole("button", { name: "创建实例", exact: true }).click();
+      await expect(page.getByRole("alert")).toContainText("invite-123");
+      await expect(page.locator("body")).not.toContainText("SECRET");
+      await page.getByRole("button", { name: "创建实例", exact: true }).click();
+      await expect.poll(() => typeof release).toBe("function");
+      await page.getByRole("dialog").locator("form").evaluate(form => form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })));
+      await page.keyboard.press("Escape"); await expect(page.getByRole("dialog")).toBeVisible();
+      assert.equal(creates, 2); release();
+      await expect(page.getByLabel("配对码")).toHaveValue(code);
+      await expect(page.getByRole("dialog")).toContainText("不设有效期");
+      for (const theme of ["light", "dark"]) {
+        await page.evaluate(theme => { document.documentElement.dataset.theme = theme; }, theme);
+        assert.deepEqual((await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa", "wcag21aa"]).analyze()).violations, []);
+      }
+      assert.equal(await page.evaluate(() => JSON.stringify({ ...localStorage, ...sessionStorage }).includes("uci_")), false);
+      await page.getByRole("button", { name: "已保存，关闭" }).click();
+      await expect(page.getByLabel("配对码")).toHaveCount(0);
+      await page.getByRole("button", { name: "取消配对", exact: true }).click();
+      await page.getByRole("button", { name: "Confirm", exact: true }).click();
+      await expect(page.getByRole("cell", { name: "已取消", exact: true })).toBeVisible();
+      // A new trusted invitation models the independent Agent pairing request.
+      invitation.status = "pending";
+      await page.goto(`http://127.0.0.1:${server.httpServer.address().port}/activate/${pairId}`);
+      await expect(page.getByRole("dialog", { name: "激活 Agent 配对" })).toBeVisible();
+      await expect(page.getByLabel("配对请求 ID")).toHaveValue(pairId);
+      await page.getByRole("button", { name: "读取配对请求" }).click();
+      await expect(page.getByRole("region", { name: "待核对设备" })).toContainText("linux / x86_64");
+      await page.getByLabel("配对码", { exact: true }).fill(code);
+      await page.getByRole("button", { name: "确认设备并激活" }).click();
+      await expect(page.getByRole("dialog")).toHaveCount(0);
+      await expect(page.getByRole("cell", { name: "已配对", exact: true })).toBeVisible();
+      assert.equal(activations, 1);
+      assert.ok(!page.url().includes(code));
+      assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
+      assert.deepEqual(errors, []);
+      console.log(`${engine.name()}: invite/create/failure/single submit/one-time code/cancel/deep-link/device confirmation/activation passed`);
+    } finally { await browser.close(); }
+  }
+} finally { await new Promise(done => server.httpServer.close(done)); }

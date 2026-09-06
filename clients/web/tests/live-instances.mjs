@@ -1,0 +1,76 @@
+import assert from "node:assert/strict";
+import { chromium, expect } from "@playwright/test";
+import { randomBytes, randomUUID, createHash } from "node:crypto";
+import { withLocalServer } from "./local-server.mjs";
+
+await withLocalServer({ prefix: "HOST_MONITORING", binary: "../../target/debug/host-monitoring-server",
+  extraEnv: { HOST_MONITORING_DEVELOPMENT: "true" } }, async ({ base, password }) => {
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage(); const errors = [];
+    page.on("pageerror", error => errors.push(error.message));
+    const polling = randomBytes(32).toString("base64url");
+    const pairingResponse = await fetch(base + "/api/v2/host-monitor/pairing-requests", {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({
+        host: { id: randomUUID(), os: "linux", os_version: "test", kernel_version: "test", arch: "x86_64", agent_version: "0.9.0" },
+        token_hash: randomBytes(32).toString("hex"), polling_secret_hash: createHash("sha256").update(polling).digest("hex"),
+      }),
+    });
+    assert.ok(pairingResponse.ok, "Pairing admission: "+(pairingResponse.ok?"ok":(await pairingResponse.json()).code));
+    const pairing = await pairingResponse.json();
+    const activationUrl = new URL(pairing.activation_url, base);
+    assert.equal(activationUrl.origin, base);
+    assert.equal((await page.goto(activationUrl.href)).status(), 200);
+    await page.getByLabel("Username", { exact: true }).fill("admin");
+    await page.getByLabel("Password", { exact: true }).fill(password);
+    await page.getByRole("button", { name: "Sign in", exact: true }).click();
+    await expect(page.getByLabel("配对请求 ID")).toHaveValue(pairing.request_id);
+    await page.getByRole("dialog").getByRole("button", { name: "取消", exact: true }).click();
+    await page.getByRole("button", { name: "新建实例", exact: true }).click();
+    await page.getByRole("dialog", { name: "新建 Agent 实例" }).getByLabel("实例名称", { exact: true }).fill("真实后端测试主机");
+    await page.getByRole("button", { name: "创建实例", exact: true }).click();
+    const code = await page.getByLabel("配对码").inputValue();
+    assert.match(code, /^uci_[0-9a-f]{32}$/);
+    await page.getByRole("button", { name: "已保存，关闭" }).click();
+    await page.goto(activationUrl.href);
+    await page.getByRole("button", { name: "读取配对请求" }).click();
+    await expect(page.getByRole("region", { name: "待核对设备" })).toContainText("linux / x86_64");
+    await page.getByLabel("配对码", { exact: true }).fill(code);
+    await page.getByRole("button", { name: "确认设备并激活" }).click();
+    await expect(page.getByRole("dialog")).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "选择实例 真实后端测试主机", exact: true })).toBeVisible();
+    const poll = await fetch(`${base}/api/v2/host-monitor/pairing-requests/${pairing.request_id}/status`, { method: "POST", headers: { authorization: `Pairing ${polling}` } });
+    assert.equal(poll.status, 200);
+    assert.equal((await poll.json()).status, "active");
+    await page.reload();
+    await expect(page.getByRole("button", { name: "邀请与配对管理", exact: true })).toHaveCount(0);
+    await expect(page.getByRole("cell", { name: "已配对", exact: true })).toBeVisible();
+    assert.equal(await page.getByLabel("配对码").count(), 0);
+    await page.getByRole("button", { name: "新建实例", exact: true }).click();
+    await page.getByRole("dialog", { name: "新建 Agent 实例" }).getByLabel("实例名称", { exact: true }).fill("待取消测试实例");
+    await page.getByRole("button", { name: "创建实例", exact: true }).click();
+    await expect(page.getByLabel("配对码")).toBeVisible();
+    await page.getByRole("button", { name: "已保存，关闭" }).click();
+    await page.getByRole("button", { name: "取消配对", exact: true }).click();
+    await page.getByRole("button", { name: "Confirm", exact: true }).click();
+    await expect(page.getByRole("cell", { name: "已取消", exact: true })).toBeVisible();
+    await page.getByRole("button", { name: "选择实例 真实后端测试主机", exact: true }).click();
+    await expect(page.getByRole("heading", { name: "真实后端测试主机", exact: true })).toBeVisible();
+    const left = await page.getByRole("complementary", { name: "监控实例" }).boundingBox();
+    const right = await page.getByRole("region", { name: "实例详情与设置" }).boundingBox();
+    assert.ok(left.x + left.width < right.x);
+    await page.getByLabel("实例名称", { exact: true }).fill("修改后的监控实例");
+    await page.getByRole("button", { name: "保存设置", exact: true }).click();
+    await expect(page.getByRole("button", { name: "选择实例 修改后的监控实例", exact: true })).toBeVisible();
+    await page.getByRole("button", { name: "切换到深色模式", exact: true }).click();
+    await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+    await page.getByRole("button", { name: "切换到浅色模式", exact: true }).click();
+    await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+    await page.screenshot({ path: "/tmp/host-instance-workspace.png", fullPage: true });
+    await page.getByRole("button", { name: "删除实例", exact: true }).click();
+    await page.getByRole("button", { name: "Confirm", exact: true }).click();
+    await expect(page.getByRole("button", { name: "选择实例 修改后的监控实例", exact: true })).toHaveCount(0);
+    assert.deepEqual(errors, []);
+    console.log("Real Host backend: pairing/deep link/cancel/select/two-column layout/save/delete/theme toggle passed");
+  } finally { await browser.close(); }
+});

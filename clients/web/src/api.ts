@@ -185,7 +185,7 @@ function isPositiveSafeInteger(value: unknown): value is number {
   return Number.isSafeInteger(value) && (value as number) >= 1;
 }
 
-function isUuid(value: unknown): value is string {
+export function isUuid(value: unknown): value is string {
   return (
     typeof value === "string" &&
     /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(
@@ -208,3 +208,33 @@ export function errorEnvelope(error: unknown): ErrorEnvelope | undefined {
   if (!isApiClientError(error) || !isErrorEnvelope(error.envelope)) return undefined;
   return error.envelope;
 }
+
+export type AgentInstance = {
+  request_id: string; instance_id: string; display_name: string;
+  status: "pending" | "active" | "cancelled";
+  created_at: string;
+};
+export type CreatedInstance = AgentInstance & { activation_code: string };
+const INSTANCE_KEYS = ["request_id", "instance_id", "display_name", "status", "created_at"];
+function instanceFields(value: Record<string, unknown>): boolean {
+  return isUuid(value.request_id) && isUuid(value.instance_id) && isText(value.display_name)
+    && ["pending", "active", "cancelled"].includes(String(value.status))
+    && isUtcTimestamp(value.created_at);
+}
+export function isInstances(value: unknown): value is AgentInstance[] {
+  return Array.isArray(value) && value.length <= 200 && value.every(item => isRecordWithExactKeys(item, INSTANCE_KEYS) && instanceFields(item));
+}
+export function isCreatedInstance(value: unknown): value is CreatedInstance {
+  return isRecordWithExactKeys(value, [...INSTANCE_KEYS, "activation_code"]) && instanceFields(value)
+    && value.status === "pending" && typeof value.activation_code === "string" && /^uci_[0-9a-f]{32}$/.test(value.activation_code);
+}
+export type PairingSummary = { request_id: string; os: string; arch: string; agent_version: string; status: "waiting" | "active" | "denied" | "expired"; expires_at: string };
+export function isPairingSummary(value: unknown): value is PairingSummary {
+  return isRecordWithExactKeys(value, ["request_id", "os", "arch", "agent_version", "status", "expires_at"])
+    && isUuid(value.request_id) && isText(value.os) && isText(value.arch) && isText(value.agent_version)
+    && ["waiting", "active", "denied", "expired"].includes(String(value.status)) && isUtcTimestamp(value.expires_at);
+}
+export function isActivation(value: unknown): value is { instance_id: string; status: "active" } {
+  return isRecordWithExactKeys(value, ["instance_id", "status"]) && isUuid(value.instance_id) && value.status === "active";
+}
+export function isNoContent(value: unknown): value is undefined { return value === undefined; }

@@ -17,8 +17,8 @@ use std::os::unix::fs::OpenOptionsExt;
 
 pub const APPLICATION: &str = "host-monitoring";
 pub const APPLICATION_VERSION: &str = env!("CARGO_PKG_VERSION");
-pub const SCHEMA_REVISION: i64 = 2;
-pub const SCHEMA_SHA256: &str = "11f6078a4a4f560c4e41e6617f8bbd9a446c310bd618dbb823f60f04e99ad18f";
+pub const SCHEMA_REVISION: i64 = 3;
+pub const SCHEMA_SHA256: &str = "233c8b12e9b09bc8a4f3dfa57309e5bc268de0aa958e8e0eb45555d75f94c410";
 
 const CURRENT_SCHEMA_SQL: &str = include_str!("../../schema/generated/current_schema.sql");
 

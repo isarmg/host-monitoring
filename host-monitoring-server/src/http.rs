@@ -1,3 +1,6 @@
+#[path = "../../foundation/platform_router.rs"]
+mod foundation_platform;
+
 use std::{
     collections::HashMap,
     net::SocketAddr,
@@ -25,7 +28,7 @@ use sarmg_admin_auth::AdministratorOriginMode;
 use sarmg_admin_core::AdministratorService;
 use sarmg_admin_sqlite::SqliteAdministratorStore;
 use tokio::sync::Mutex;
-use tower_http::services::ServeDir;
+use tower_http::services::{ServeDir, ServeFile};
 
 use crate::{
     error::{Error, FoundationErrorEnvelope, Result, database, framework_envelope},
@@ -247,7 +250,7 @@ pub fn router(
     state: AppState,
     static_dir: PathBuf,
 ) -> std::result::Result<Router, sarmg_admin_core::Error> {
-    let platform = sarmg_server_runtime::platform_router(
+    let platform = foundation_platform::platform_router(
         state.runtime.clone(),
         "host-monitoring",
         state.administrator_origin,
@@ -306,6 +309,10 @@ pub fn router(
         .merge(product)
         .route("/api", any(api_not_found))
         .route("/api/{*path}", any(api_not_found))
+        .route_service(
+            "/activate/{request_id}",
+            axum::routing::get_service(ServeFile::new(static_dir.join("index.html"))),
+        )
         .fallback_service(ServeDir::new(static_dir))
         .layer(middleware::from_fn(normalize_api_errors)))
 }
@@ -379,11 +386,10 @@ async fn create_instance(
     state
         .pairing_admission
         .check_invite_account(&principal.subject)?;
-    let (name, expires) = request.validated()?;
-    let (result, activation_code) =
-        store::create_invite(&state.pool, &name, expires, &principal.subject)
-            .await
-            .map_err(database)?;
+    let name = request.validated()?;
+    let (result, activation_code) = store::create_invite(&state.pool, &name, &principal.subject)
+        .await
+        .map_err(database)?;
     match result {
         store::CreateInviteResult::Created(summary) => {
             let mut response = (
@@ -962,6 +968,47 @@ mod tests {
                 .status(),
             StatusCode::UNAUTHORIZED
         );
+    }
+
+    #[tokio::test]
+    async fn activation_deep_link_serves_the_web_entry_without_exposing_admin_api() {
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::write(
+            directory.path().join("index.html"),
+            "<html>activation app</html>",
+        )
+        .unwrap();
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        store::initialize_empty(&pool).await.unwrap();
+        let app = router(
+            AppState::new(pool, AdministratorOriginMode::LoopbackDevelopmentHttp),
+            directory.path().to_owned(),
+        )
+        .unwrap();
+        let response = app
+            .clone()
+            .oneshot(
+                Request::get("/activate/00000000-0000-4000-8000-000000000001")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(body_bytes(response).await, b"<html>activation app</html>");
+        let response = app
+            .oneshot(
+                Request::get("/api/v2/monitoring/agent-instances")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
     }
 
     #[tokio::test]

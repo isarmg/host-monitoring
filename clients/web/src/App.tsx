@@ -1,7 +1,11 @@
-import { createSarmgAdminApplication, errorRequestId, useAdminApplication } from "@sarmg/admin-shell";
-import { Button, EmptyState, ErrorState, LoadingState, StatusBadge, Table } from "@sarmg/admin-ui";
+import { createSarmgAdminApplication, errorRequestId, useAdminApplication } from "../shell/index.js";
+import { Button, EmptyState, ErrorState, LoadingState } from "@sarmg/admin-ui";
 import { useEffect, useState } from "react";
 import { CURRENT_API_PREFIX, administratorApi, isHostListResponse, type HostListResponse } from "./api";
+import { Instances } from "./Instances";
+import { HostDetails } from "./HostDetails";
+import { HostsTable } from "./HostsTable";
+import { HeaderNavigation, InstanceHeaderActions } from "../shell/index.js";
 
 function HostsPage() {
   const { client } = useAdminApplication();
@@ -9,6 +13,13 @@ function HostsPage() {
   const [failure, setFailure] = useState<{ requestId?: string } | null>(null);
   const [generation, setGeneration] = useState(0);
   const [offset, setOffset] = useState(0);
+  const [selected, setSelected] = useState<string | null>(null);
+  const [createSignal, setCreateSignal] = useState(0);
+  const [page, setPage] = useState(() => window.location.hash === "#monitor" ? "monitor" : "instances");
+  useEffect(() => {
+    const changed = () => setPage(window.location.hash === "#monitor" ? "monitor" : "instances");
+    window.addEventListener("hashchange", changed); return () => window.removeEventListener("hashchange", changed);
+  }, []);
   useEffect(() => {
     const controller = new AbortController();
     setResponse(null); setFailure(null);
@@ -18,35 +29,26 @@ function HostsPage() {
     return () => controller.abort();
   }, [client, offset, generation]);
   const refresh = () => setGeneration(value => value + 1);
-  return <section id="hosts"><h1>主机监控</h1>
-    <Button onClick={refresh} disabled={response === null && failure === null}>刷新</Button>
-    {failure ? <ErrorState requestId={failure.requestId} onRetry={refresh}>无法加载主机列表</ErrorState>
-      : response === null ? <LoadingState>正在加载主机…</LoadingState>
-      : <>
-        {response.hosts.length === 0 ? <EmptyState>暂无主机</EmptyState>
-          : <Table aria-label="受监控主机"><caption>主机状态与采集数据</caption>
-            <thead><tr><th scope="col">名称</th><th scope="col">状态</th><th scope="col">CPU</th><th scope="col">内存</th><th scope="col">详情</th></tr></thead>
-            <tbody>{response.hosts.map(host => <tr key={host.id}><th scope="row">{host.name}</th>
-              <td><StatusBadge status={host.status} /></td>
-              <td>{host.cpu_usage_percent === null ? "不可用" : `${host.cpu_usage_percent.toFixed(1)}%`}</td>
-              <td>{host.memory_usage_percent === null ? "不可用" : `${host.memory_usage_percent.toFixed(1)}%`}</td>
-              <td><details><summary>完整采集信息</summary><dl>{Object.entries(host).map(([key, value]) =>
-                <div key={key}><dt>{key}</dt><dd>{key === "capabilities"
-                  ? host.capabilities.map(capability => <p key={capability.name}>{capability.name}: {capability.available ? "可用" : "不可用"} · {capability.source} {capability.error_kind} {capability.message}</p>)
-                  : value === null ? "不可用" : String(value)}</dd></div>
-              )}</dl></details></td></tr>)}</tbody>
-          </Table>}
-        <nav aria-label="主机分页"><Button disabled={offset === 0} onClick={() => setOffset(Math.max(0, offset - 50))}>上一页</Button>
-          <span>共 {response.total} 台</span>
-          <Button disabled={response.offset + response.hosts.length >= response.total} onClick={() => setOffset(offset + 50)}>下一页</Button>
-        </nav>
-      </>}
+  const host = response?.hosts.find(item => item.id === selected) ?? response?.hosts[0];
+  return <section id="hosts"><InstanceHeaderActions create={() => { window.location.hash = "instances"; setCreateSignal(value => value + 1); }} refresh={refresh} refreshing={response === null && failure === null} /><HeaderNavigation label="监控页面">{[["instances","实例"],["monitor","实时监控"]].map(([id,name]) => <Button key={id} aria-pressed={page === id} onClick={() => { window.location.hash = id; }}>{name}</Button>)}</HeaderNavigation><h1 className="sarmg-visually-hidden">主机监控</h1>
+      {failure && <ErrorState requestId={failure.requestId} onRetry={refresh}>无法加载主机列表</ErrorState>}
+      <div hidden={page !== "instances"}>
+      <Instances openCreateSignal={createSignal} refreshSignal={generation} hostsChanged={refresh} />
+      <section aria-label="监控实例"><h2>已配对主机</h2>{response === null ? failure ? <EmptyState>请重试加载实例列表</EmptyState> : <LoadingState>正在加载主机…</LoadingState> : <HostsTable hosts={response.hosts} select={id => { setSelected(id); window.location.hash = "monitor"; }} />}</section>
+      {response && <nav className="sarmg-instance-toolbar" aria-label="主机分页"><Button disabled={offset === 0} onClick={() => setOffset(Math.max(0, offset - 50))}>上一页</Button>
+        <span>共 {response.total} 台</span><Button disabled={response.offset + response.hosts.length >= response.total} onClick={() => setOffset(offset + 50)}>下一页</Button>
+      </nav>}
+      </div>
+      {page === "monitor" && <section aria-label="实时监控内容">
+      {response === null ? failure ? <EmptyState>请重试加载实例列表</EmptyState> : <LoadingState>正在加载主机…</LoadingState>
+        : host ? <HostDetails key={host.id} host={host} changed={refresh} /> : <EmptyState>暂无主机，请点击“新建实例”并完成配对。</EmptyState>}
+      </section>}
   </section>;
 }
 
 export default createSarmgAdminApplication({
-  product: { name: "Host Monitoring", version: "0.8.0" },
+  product: { name: "Host Monitoring" },
   client: administratorApi,
-  navigation: [{ label: "主机", href: "#hosts" }],
+  navigation: [],
   routes: <HostsPage />,
 });

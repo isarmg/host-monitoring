@@ -35,7 +35,7 @@
 | HOST-024 | Server ingest 严格验证和事务写入 | telemetry writer、SQLite | 核心 | 高 | 不可信 Agent 数据可污染库或整批丢失 | size、单位、timestamp、rollback |
 | HOST-025 | 数据保留与有界清理 | retention config、maintenance task | 保障 | 中 | 数据库无限增长；删得过激则趋势数据消失 | 时间边界、批量、锁竞争 |
 | HOST-026 | 管理 API 提供 Host 分页列表、latest 详情和仍保留 raw 标量历史 | `http.rs::{list_hosts,host_detail,host_history}`、`store.rs::{list_hosts,get_host,history}` | 核心 | 高 | 采集虽仍落库，但管理员无法读取当前状态或 raw 历史 | 空集、1..1000 分页、from/to、乱序、权限；确认不混入 aggregate |
-| HOST-027 | React/Vite 最小管理员状态页：登录/恢复/登出和严格 Host 列表 JSON | `clients/web/src/App.tsx`、`api.ts`、Foundation admin hook/Vite/TS baseline | 建议保留 | 中 | API 保留，但仓库没有任何内置浏览器状态视图；删除不影响 Agent 摄取 | 精确工具链、clean build、auth、Host list guard、退出清空；不得以详情/图表/配对 UI 验收 |
+| HOST-027 | React/Vite 管理页：登录/恢复/登出、Host 列表与详情、实例邀请和配对激活 | `clients/web/src/App.tsx`、`api.ts`、Foundation admin hook/Vite/TS baseline | 建议保留 | 中 | API 保留，但仓库没有任何内置浏览器状态视图；删除不影响 Agent 摄取 | 精确工具链、clean build、auth、Host list guard、退出清空；新增实例/配对见 `clients/web/tests/instances.mjs` 与 `live-instances.mjs`；不得据此宣称图表完整 |
 | HOST-028 | SQLite 当前 Schema identity/doctor | 产品文件预检/DDL/锁、`sarmg-sqlite`、`sarmg-schema-identity` | 保障 | 高 | 错库/漂移库可被误用 | wrong SHA/version、sidecar、corruption、连接 PRAGMA |
 | HOST-029 | Server 单实例和 maintenance lock | runtime lock、数据库锁 | 保障 | 高 | 双 Server 可重复清理/写入并破坏一致性 | 双启动、维护冲突 |
 | HOST-030 | source-bound release 与 Web fingerprint | package script、release manifest | 开发运维 | 高 | 二进制和 Web 可能混代，来源不可证明 | missing/extra/tamper/relocate |
@@ -138,12 +138,12 @@
 | 功能 | 当前实现 | 取舍/限制 |
 |---|---|---|
 | 管理身份 | 本地 canonical username、当前 Argon2id、随机 Session/CSRF、Foundation 精确登录与 Session 形状 | 固定 `role=admin`，默认 username `admin`；没有 email、viewer/operator/RBAC，也不依赖中央账户或共享 Session |
-| 配对 | invite、一次性 code、Agent request/poll、管理员或 Agent 激活端点、分维度限流 | React 页面尚未实现 invite/activation 交互；不能称为已完成的浏览器审批体验 |
+| 配对 | invite、一次性 code、Agent request/poll、管理员或 Agent 激活端点、分维度限流 | React 已提供邀请创建、一次性码、取消和设备核对后激活；真实设备采集仍须独立验收 |
 | 报告 API | `/api/v2/host-monitor` 当前协议 | 不注册任何平行版本或 alias |
 | API 错误 | Foundation `ErrorEnvelope`：`code/message/retryable/request_id?/details?` | 所有 `/api` 非 2xx（含 extractor/404/405）使用同一严格顶层结构 |
 | 写入 | 有界队列、单 writer、batch、savepoint | 单库单活进程，不是分布式写集群 |
 | 历史 | raw 标量历史查询、内部 UTC 小时聚合、两级保留 | 公开 history 只读 raw；聚合没有读 API，不是任意时序查询引擎 |
-| Web | Foundation 管理员 client/hook + Host 列表 exact guard，编译进发行物 | 当前仅登录/退出和列表 JSON；没有详情、图表、pairing、变更或 audit 页面 |
+| Web | Foundation 管理员 client/hook + Host 列表 exact guard，编译进发行物 | 当前提供主机列表、采集详情及实例邀请/配对；图表和 audit 等界面仍未补齐 |
 | 诊断 | health/readiness、doctor、事务内 audit 写入 | 不提供数据库修复或 audit 读取 API |
 | 发布 | source-bound binary、全树 manifest、固定目录 | 同版本不可原地覆盖 |
 | 平台 | 仅 `x86_64-unknown-linux-gnu` 构建、发行和运行 | 不提供 ARM Linux、musl、Windows 或 macOS Server；跨平台只属于 Agent |
@@ -195,7 +195,7 @@ Token 是敏感数据。管理员操作和遥测不应记录 Secret。只有当�
 |---|---|---|---|
 | 安装 | 原生包创建服务、账户、配置和状态边界 | 安装不可变 Server release | package 生命周期测试、release verify |
 | 采集验证 | `probe` 读取当前平台指标 | 无网络参与 | 有界报告摘要与分类错误 |
-| 配对 | 保存 pending、轮询并原子提交 binding；Tray 可提交 code | invite/request/activation 事务与 credential 发放 | API/数据库状态、`status` active；当前没有可验收的 React 审批页 |
+| 配对 | 保存 pending、轮询并原子提交 binding；Tray 可提交 code | invite/request/activation 事务与 credential 发放 | 浏览器创建/核对/激活、真实 Server 状态与 Agent 协议轮询均有隔离验收；不替代真实设备采集 |
 | 日常报告 | 采集 -> spool -> HTTPS batch | 认证 -> queue -> writer -> commit | `once`/服务日志、latest 时间 |
 | 历史查询 | 无 | latest 详情和 raw 标量 history；内部 hourly aggregate 不公开 | 管理 API；当前 Web 只显示列表 JSON，无图表 |
 | 诊断 | `status`/`doctor`/delivery doctor | health/readiness/doctor | 机器可读结果、request/report ID |
@@ -220,7 +220,7 @@ Token 是敏感数据。管理员操作和遥测不应记录 Secret。只有当�
 | 能力 | 当前保证 | 明确边界 |
 |---|---|---|
 | Pending 持久化 | 网络中断恢复同一请求 | 不静默生成多套身份 |
-| 管理员授权 | 管理 API 创建 invite；code 可由管理端点或受信 Agent/Tray 提交 | 当前 React 页面没有创建 invite 或激活 UI；设备必须持有管理员提供的一次性 code |
+| 管理员授权 | 管理 API 创建 invite；code 可由管理端点或受信 Agent/Tray 提交 | 当前 React 页面可创建 invite 并提交激活；设备绑定需要管理员提供的一次性 code |
 | 一次性 Secret | 只用于请求激活 | 不是长期报告 credential |
 | Active binding | 临时文件、sync、原子替换 | 不从半写文件“尽量恢复” |
 | 撤销 | Server 拒绝后续报告 | Agent 不无界重试被撤销 credential |

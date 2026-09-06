@@ -143,6 +143,54 @@ async fn pending_pairings_are_capped_per_device_without_breaking_idempotent_retr
 }
 
 #[tokio::test]
+async fn cancelled_code_cannot_authorize_a_new_pairing() {
+    let path = database_path();
+    let pool = open_database(&path).await;
+    store::initialize_empty(&pool).await.unwrap();
+    let (result, code) = store::create_invite(&pool, "Cancel me", "admin")
+        .await
+        .unwrap();
+    let store::CreateInviteResult::Created(invite) = result else {
+        panic!("create failed")
+    };
+    let code = code.unwrap();
+    assert!(matches!(
+        store::cancel_invite(&pool, Uuid::parse_str(&invite.request_id).unwrap(), "admin")
+            .await
+            .unwrap(),
+        store::CancelInviteResult::Cancelled
+    ));
+    let pairing = AgentPairingRequest {
+        host: host(Uuid::new_v4(), "linux"),
+        token_hash: token_hash("device-secret"),
+        polling_secret_hash: token_hash("polling-secret"),
+    };
+    let store::CreatePairingResult::Ready { request_id, .. } =
+        store::create_pairing(&pool, &pairing).await.unwrap()
+    else {
+        panic!("pair failed")
+    };
+    assert!(matches!(
+        store::activate(&pool, request_id, &token_hash(&code), "admin")
+            .await
+            .unwrap(),
+        store::ActivateResult::Conflict
+    ));
+    let columns: Vec<String> =
+        sqlx::query_scalar("SELECT name FROM pragma_table_info('agent_instance_invites')")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+    assert!(!columns.iter().any(|name| name == "expires_at"));
+    assert_eq!(
+        store::list_invites(&pool).await.unwrap()[0].status,
+        "cancelled"
+    );
+    pool.close().await;
+    std::fs::remove_file(path).unwrap();
+}
+
+#[tokio::test]
 async fn current_sqlite_supports_pair_activate_report_remark_and_delete() {
     let path = database_path();
     let pool = open_database(&path).await;
@@ -150,13 +198,22 @@ async fn current_sqlite_supports_pair_activate_report_remark_and_delete() {
         .await
         .expect("initialize current schema");
 
-    let (invite_result, activation_code) = store::create_invite(&pool, "Server One", 15, "admin")
+    let (invite_result, activation_code) = store::create_invite(&pool, "Server One", "admin")
         .await
         .expect("create invite");
     let store::CreateInviteResult::Created(invite) = invite_result else {
         panic!("fresh database unexpectedly rejected an invite");
     };
     let activation_code = activation_code.expect("created invite has an activation code");
+    // Code age is not an authorization deadline; only explicit cancel/use invalidates it.
+    sqlx::query("UPDATE agent_instance_invites SET created_at='2000-01-01T00:00:00Z'")
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        store::list_invites(&pool).await.unwrap()[0].status,
+        "pending"
+    );
     let instance_id = Uuid::parse_str(&invite.instance_id).expect("canonical instance id");
 
     let agent_token = "agent-token-for-sqlite-regression";

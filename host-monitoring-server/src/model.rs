@@ -22,11 +22,10 @@ use crate::error::{Error, Result};
 #[serde(deny_unknown_fields)]
 pub struct CreateAgentInstanceRequest {
     pub display_name: Option<String>,
-    pub expires_in_minutes: Option<i64>,
 }
 
 impl CreateAgentInstanceRequest {
-    pub fn validated(self) -> Result<(String, i64)> {
+    pub fn validated(self) -> Result<String> {
         let display_name = self
             .display_name
             .as_deref()
@@ -34,13 +33,8 @@ impl CreateAgentInstanceRequest {
             .trim()
             .to_owned();
         validate_required("display_name", &display_name, 255)?;
-        let expires = self.expires_in_minutes.unwrap_or(15);
-        if !(5..=1440).contains(&expires) {
-            return Err(Error::BadRequest(
-                "expires_in_minutes must be between 5 and 1440".into(),
-            ));
-        }
-        Ok((display_name, expires))
+        validate_instance_name(&display_name)?;
+        Ok(display_name)
     }
 }
 
@@ -54,7 +48,63 @@ impl UpdateMonitoringRemarkRequest {
     pub fn validated(self) -> Result<String> {
         let value = self.remark.trim().to_owned();
         validate_required("remark", &value, 255)?;
+        validate_instance_name(&value)?;
         Ok(value)
+    }
+}
+
+fn validate_instance_name(value: &str) -> Result<()> {
+    if value.chars().count() > 32 {
+        return Err(Error::BadRequest(
+            "instance name must contain at most 32 characters".into(),
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod instance_name_tests {
+    use super::*;
+
+    #[test]
+    fn instance_creation_has_no_expiration_option() {
+        assert!(
+            serde_json::from_value::<CreateAgentInstanceRequest>(
+                serde_json::json!({"display_name":"new","expires_in_minutes":15})
+            )
+            .is_err()
+        );
+        assert!(
+            serde_json::from_value::<CreateAgentInstanceRequest>(
+                serde_json::json!({"display_name":"new"})
+            )
+            .unwrap()
+            .validated()
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn create_and_rename_limit_names_to_32_unicode_characters() {
+        for character in ["a", "中", "😀"] {
+            for count in [32, 33] {
+                let name = character.repeat(count);
+                assert_eq!(
+                    CreateAgentInstanceRequest {
+                        display_name: Some(name.clone()),
+                    }
+                    .validated()
+                    .is_ok(),
+                    count == 32
+                );
+                assert_eq!(
+                    UpdateMonitoringRemarkRequest { remark: name }
+                        .validated()
+                        .is_ok(),
+                    count == 32
+                );
+            }
+        }
     }
 }
 
@@ -64,7 +114,6 @@ pub struct AgentInstanceSummary {
     pub instance_id: String,
     pub display_name: String,
     pub status: String,
-    pub expires_at: DateTime<Utc>,
     pub created_at: DateTime<Utc>,
 }
 
