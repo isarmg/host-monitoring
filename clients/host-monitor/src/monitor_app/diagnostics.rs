@@ -647,7 +647,22 @@ mod tests {
                 .unwrap()
                 .map(|entry| {
                     let entry = entry.unwrap();
-                    (entry.file_name(), fs::read(entry.path()).unwrap())
+                    let metadata = entry.metadata().unwrap();
+                    // Windows byte-range locks also exclude reads. Check the
+                    // empty coordination file's metadata while its owner lives;
+                    // continue comparing every report/quarantine byte exactly.
+                    let bytes = if entry.file_name() == "spool.instance.lock" {
+                        assert_eq!(metadata.len(), 0);
+                        None
+                    } else {
+                        Some(fs::read(entry.path()).unwrap())
+                    };
+                    (
+                        entry.file_name(),
+                        metadata.len(),
+                        metadata.modified().unwrap(),
+                        bytes,
+                    )
                 })
                 .collect::<Vec<_>>();
             entries.sort();
