@@ -1,3 +1,5 @@
+import { displayLabel } from "./display-labels";
+import { t, getLocale } from "../shell/i18n.js";
 import { InstanceNameField } from "../shell/index.js";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { Button, Dialog, ErrorState, FormField, TextField, Table, EmptyState, LoadingState, ConfirmDangerDialog } from "@sarmg/admin-ui";
@@ -6,7 +8,7 @@ import { isActivation, isCreatedInstance, isInstances, isNoContent, isPairingSum
   type AgentInstance, type CreatedInstance, type PairingSummary } from "./api";
 
 const instancesPath = "/api/v2/monitoring/agent-instances";
-const labels = { pending: "待配对", active: "已配对", cancelled: "已取消" };
+const labels = { pending: t("待配对", "Awaiting pairing"), active: t("已配对", "Paired"), cancelled: t("已取消", "Cancelled") };
 type Failure = { requestId?: string };
 
 // Business request lifetime only; authentication and CSRF stay in Foundation.
@@ -50,19 +52,19 @@ export function Instances({ hostsChanged, openCreateSignal = 0, refreshSignal = 
     setActivation(null);
     if (window.location.pathname.startsWith("/activate/")) window.history.replaceState(null, "", "/#instances");
   }
-  return <section aria-labelledby="instances-heading"><h2 id="instances-heading">实例配对状态</h2>
-    <p>新建实例后获得配对码，不设有效期；成功配对后失效，也可在配对前自行取消。</p>
+  return <section aria-labelledby="instances-heading"><h2 id="instances-heading">{t("实例配对状态", "Instance pairing status")}</h2>
+    <p>{t("新建实例后获得配对码，不设有效期；成功配对后失效，也可在配对前自行取消。", "Creating an instance gives you a pairing code without an expiry. It is invalidated after successful pairing and can be cancelled before pairing.")}</p>
 
-    {failure ? <ErrorState requestId={failure.requestId} onRetry={refresh}>无法加载实例</ErrorState>
-      : rows === null ? <LoadingState>正在加载实例…</LoadingState>
-      : rows.length === 0 ? <EmptyState>暂无实例</EmptyState>
-      : <Table aria-label="Agent 实例"><caption>最近 200 条实例；配对码仅创建时显示</caption><thead><tr><th scope="col">名称</th><th scope="col">状态</th><th scope="col">创建时间</th><th scope="col">实例 ID</th><th scope="col">操作</th></tr></thead>
+    {failure ? <ErrorState requestId={failure.requestId} onRetry={refresh}>{t("无法加载实例", "Unable to load instances")}</ErrorState>
+      : rows === null ? <LoadingState>{t("正在加载实例…", "Loading instances…")}</LoadingState>
+      : rows.length === 0 ? <EmptyState>{t("暂无实例", "No instances yet")}</EmptyState>
+      : <Table aria-label={t("客户端 实例", "Agent instances")}><caption>{t("最近 200 条实例；配对码仅创建时显示", "Most recent 200 instances; pairing codes are shown only at creation")}</caption><thead><tr><th scope="col">{t("名称", "Name")}</th><th scope="col">{t("状态", "Status")}</th><th scope="col">{t("创建时间", "Created at")}</th><th scope="col">{t("实例标识", "Instance ID")}</th><th scope="col">{t("操作", "Actions")}</th></tr></thead>
         <tbody>{rows.map(row => <tr key={row.request_id}><th scope="row">{row.display_name}</th><td>{labels[row.status]}</td>
-          <td>{new Date(row.created_at).toLocaleString()}</td><td>{row.instance_id}</td><td>{row.status === "pending" && <Button onClick={() => setCancelling(row)}>取消配对</Button>}</td></tr>)}</tbody></Table>}
+          <td>{new Date(row.created_at).toLocaleString(getLocale())}</td><td>{row.instance_id}</td><td>{row.status === "pending" && <Button onClick={() => setCancelling(row)}>{t("取消配对", "Cancel pairing")}</Button>}</td></tr>)}</tbody></Table>}
     {creating && <CreateInstance close={() => setCreating(false)} changed={refresh} />}
     {cancelling && <CancelInstance instance={cancelling} close={() => setCancelling(null)} changed={() => { setCancelling(null); refresh(); }} />}
     {activation !== null && <ActivateInstance initialId={activation} close={closeActivation} changed={() => {
-      closeActivation(); refresh(); hostsChanged(); notify("配对已激活，等待 Agent 确认并上报监控数据。");
+      closeActivation(); refresh(); hostsChanged(); notify(t("配对已激活，等待 客户端 确认并上报监控数据。", "Pairing activated; waiting for agent confirmation and monitoring reports."));
     }} />}
   </section>;
 }
@@ -79,29 +81,29 @@ function CreateInstance({ close, changed }: { close(): void; changed(): void }) 
       if (!signal.aborted) { setResult(value); changed(); }
     });
   }
-  return <Dialog title="新建 Agent 实例" onClose={() => { if (action.idle()) close(); }}>
+  return <Dialog title={t("新建 客户端 实例", "Create agent instance")} onClose={() => { if (action.idle()) close(); }}>
     {result ? <div>
-      <p role="status">实例已创建：{result.display_name}</p>
-      <p>配对码仅显示这一次。关闭或刷新后无法找回，请安全保存并只用于可信设备。请勿放入网址、日志或分享给他人。</p>
-      <FormField label="配对码"><TextField readOnly value={result.activation_code} autoComplete="off" onFocus={event => event.currentTarget.select()} /></FormField>
-      <p>配对码不设有效期，配对成功或手动取消后失效。由 Agent 发起配对后，打开其提供的链接，核对设备信息并输入此码。</p>
-      <Button onClick={close}>已保存，关闭</Button>
+      <p role="status">{t("实例已创建：", "Instance created:")}{result.display_name}</p>
+      <p>{t("配对码仅显示这一次。关闭或刷新后无法找回，请安全保存并只用于可信设备。请勿放入网址、日志或分享给他人。", "This code is shown only once and cannot be recovered after closing or refreshing. Store it securely and use it only with trusted devices. Do not put it in URLs, logs or share it with others.")}</p>
+      <FormField label={t("配对码", "Pairing code")}><TextField readOnly value={result.activation_code} autoComplete="off" onFocus={event => event.currentTarget.select()} /></FormField>
+      <p>{t("配对码不设有效期，配对成功或手动取消后失效。由 客户端 发起配对后，打开其提供的链接，核对设备信息并输入此码。", "The code has no expiry and is invalidated by successful pairing or manual cancellation. After the agent requests pairing, open its link, verify the device and enter this code.")}</p>
+      <Button onClick={close}>{t("已保存，关闭", "Saved; close")}</Button>
     </div> : <form onSubmit={submit} aria-busy={action.pending}>
-      {action.failure && <ErrorState requestId={action.failure.requestId}>创建未能确认。请先刷新实例核对状态；丢失配对码的实例可取消后重新创建，不要重复提交。</ErrorState>}
-      <FormField label="实例名称"><InstanceNameField name="display_name" required title="实例名称最多 32 个字符" readOnly={action.pending} data-sarmg-initial-focus /></FormField>
-      <p>实例名称最多 32 个字符。</p>
-      <div className="sarmg-actions"><Button disabled={action.pending} onClick={close}>取消</Button><Button type="submit" disabled={action.pending}>{action.pending ? "正在创建…" : "创建实例"}</Button></div>
+      {action.failure && <ErrorState requestId={action.failure.requestId}>{t("创建未能确认。请先刷新实例核对状态；丢失配对码的实例可取消后重新创建，不要重复提交。", "Creation could not be confirmed. Refresh and check first. If the code is lost, cancel the instance and create a new one; do not submit twice.")}</ErrorState>}
+      <FormField label={t("实例名称", "Instance name")}><InstanceNameField name="display_name" required title={t("实例名称最多 32 个字符", "Instance names may contain up to 32 characters")} readOnly={action.pending} data-sarmg-initial-focus /></FormField>
+      <p>{t("实例名称最多 32 个字符。", "Instance names may contain up to 32 characters.")}</p>
+      <div className="sarmg-actions"><Button disabled={action.pending} onClick={close}>{t("取消", "Cancel")}</Button><Button type="submit" disabled={action.pending}>{action.pending ? t("正在创建…", "Creating…") : t("创建实例", "Create instance")}</Button></div>
     </form>}
   </Dialog>;
 }
 
 function CancelInstance({ instance, close, changed }: { instance: AgentInstance; close(): void; changed(): void }) {
   const { client } = useAdminApplication(); const action = useAction();
-  return <ConfirmDangerDialog title="取消配对" description={`取消 ${instance.display_name} 的实例后，其配对码将不可再用。`}
+  return <ConfirmDangerDialog title={t("取消配对", "Cancel pairing")} description={t("取消 {0} 的实例后，其配对码将不可再用。", "Cancelling the instance {0} permanently invalidates its pairing code.", [instance.display_name])}
     pending={action.pending} onClose={() => { if (action.idle()) close(); }} onConfirm={() => void action.run(async signal => {
       await client.request(`${instancesPath}/${instance.request_id}`, isNoContent, { method: "DELETE", signal });
       if (!signal.aborted) changed();
-    })}>{action.failure && <ErrorState requestId={action.failure.requestId}>取消未能确认，请刷新实例核对状态。</ErrorState>}</ConfirmDangerDialog>;
+    })}>{action.failure && <ErrorState requestId={action.failure.requestId}>{t("取消未能确认，请刷新实例核对状态。", "Cancellation could not be confirmed. Refresh and check the instance state.")}</ErrorState>}</ConfirmDangerDialog>;
 }
 
 function ActivateInstance({ initialId, close, changed }: { initialId: string; close(): void; changed(): void }) {
@@ -129,19 +131,19 @@ function ActivateInstance({ initialId, close, changed }: { initialId: string; cl
       }
     });
   }
-  return <Dialog title="激活 Agent 配对" onClose={() => { if (action.idle()) close(); }}>
+  return <Dialog title={t("激活 客户端 配对", "Activate agent pairing")} onClose={() => { if (action.idle()) close(); }}>
     <form onSubmit={submit} aria-busy={action.pending}>
-      <p>填写 Agent 提供的配对请求 ID（不是实例 ID），读取并核对设备信息后，输入新建实例时取得的一次性配对码。</p>
-      {action.failure && <ErrorState requestId={action.failure.requestId}>请求未能确认。请检查设备请求是否超时及配对状态；配对码本身不设有效期，输入框已清空。不要盲目重试激活。</ErrorState>}
-      <FormField label="配对请求 ID"><TextField required value={id} maxLength={36} readOnly={action.pending} data-sarmg-initial-focus
+      <p>{t("填写 客户端 提供的配对请求标识（不是实例标识），读取并核对设备信息后，输入新建实例时取得的一次性配对码。", "Enter the pairing request ID provided by the agent (not the instance ID). Read and verify the device, then enter the one-time code from instance creation.")}</p>
+      {action.failure && <ErrorState requestId={action.failure.requestId}>{t("请求未能确认。请检查设备请求是否超时及配对状态；配对码本身不设有效期，输入框已清空。不要盲目重试激活。", "The request could not be confirmed. Check request timeout and pairing state. The code itself has no expiry; the input has been cleared. Do not blindly retry activation.")}</ErrorState>}
+      <FormField label={t("配对请求标识", "Pairing request ID")}><TextField required value={id} maxLength={36} readOnly={action.pending} data-sarmg-initial-focus
         pattern="[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}"
         onChange={event => { setId(event.target.value); setDetails(null); }} /></FormField>
-      {details && <section aria-label="待核对设备"><p>系统：{details.os} / {details.arch}</p>
-        <p>配对状态：{details.status}；设备请求会话截止：{new Date(details.expires_at).toLocaleString()}（不是配对码有效期）</p></section>}
-      {details?.status === "waiting" && <FormField label="配对码"><TextField name="activation_code" type="password" required maxLength={256} autoComplete="off" readOnly={action.pending} /></FormField>}
-      <div className="sarmg-actions"><Button disabled={action.pending} onClick={close}>取消</Button>
-        {details && <Button disabled={action.pending} onClick={() => void action.run(inspect)}>刷新配对状态</Button>}
-        <Button type="submit" disabled={action.pending || (details !== null && details.status !== "waiting")}>{action.pending ? "正在处理…" : details ? "确认设备并激活" : "读取配对请求"}</Button>
+      {details && <section aria-label={t("待核对设备", "Device to verify")}><p>{t("系统：", "System:")}{details.os} / {details.arch}</p>
+        <p>{t("配对状态：", "Pairing status:")}{displayLabel(details.status)}{t("；设备请求会话截止：", "; device request session deadline:")}{new Date(details.expires_at).toLocaleString(getLocale())}{t("（不是配对码有效期）", "(not the pairing code expiry)")}</p></section>}
+      {details?.status === "waiting" && <FormField label={t("配对码", "Pairing code")}><TextField name="activation_code" type="password" required maxLength={256} autoComplete="off" readOnly={action.pending} /></FormField>}
+      <div className="sarmg-actions"><Button disabled={action.pending} onClick={close}>{t("取消", "Cancel")}</Button>
+        {details && <Button disabled={action.pending} onClick={() => void action.run(inspect)}>{t("刷新配对状态", "Refresh pairing status")}</Button>}
+        <Button type="submit" disabled={action.pending || (details !== null && details.status !== "waiting")}>{action.pending ? t("正在处理…", "Processing…") : details ? t("确认设备并激活", "Confirm device and activate") : t("读取配对请求", "Read pairing request")}</Button>
       </div>
     </form>
   </Dialog>;

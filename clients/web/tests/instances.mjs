@@ -13,7 +13,7 @@ try {
   for (const engine of [chromium, firefox]) {
     const browser = await engine.launch();
     try {
-      const context = await browser.newContext({ viewport: { width: 360, height: 740 } });
+      const context = await browser.newContext({ locale: "zh-CN",  viewport: { width: 360, height: 740 } });
       const page = await context.newPage();
       const errors = []; let invitation = null; let creates = 0; let activations = 0; let release;
       page.on("pageerror", error => errors.push(error.message));
@@ -73,13 +73,13 @@ try {
       await page.getByRole("button", { name: "已保存，关闭" }).click();
       await expect(page.getByLabel("配对码")).toHaveCount(0);
       await page.getByRole("button", { name: "取消配对", exact: true }).click();
-      await page.getByRole("button", { name: "Confirm", exact: true }).click();
+      await page.getByRole("button", { name: "确认", exact: true }).click();
       await expect(page.getByRole("cell", { name: "已取消", exact: true })).toBeVisible();
       // A new trusted invitation models the independent Agent pairing request.
       invitation.status = "pending";
       await page.goto(`http://127.0.0.1:${server.httpServer.address().port}/activate/${pairId}`);
-      await expect(page.getByRole("dialog", { name: "激活 Agent 配对" })).toBeVisible();
-      await expect(page.getByLabel("配对请求 ID")).toHaveValue(pairId);
+      await expect(page.getByRole("dialog", { name: "激活 客户端 配对" })).toBeVisible();
+      await expect(page.getByLabel("配对请求标识")).toHaveValue(pairId);
       await page.getByRole("button", { name: "读取配对请求" }).click();
       await expect(page.getByRole("region", { name: "待核对设备" })).toContainText("linux / x86_64");
       await page.getByLabel("配对码", { exact: true }).fill(code);

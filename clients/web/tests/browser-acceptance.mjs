@@ -1,3 +1,4 @@
+import { checkWebLanguage } from "./language.mjs";
 import { checkHeaderActions, checkHeaderLogout } from "./header-actions.mjs";
 import assert from "node:assert/strict";
 import { chromium, firefox } from "@playwright/test";
@@ -23,7 +24,7 @@ try {
   for (const engine of [chromium, firefox]) {
     const browser = await engine.launch();
     try {
-      const context = await browser.newContext({ viewport: { width: 360, height: 740 } });
+      const context = await browser.newContext({ locale: "zh-CN",  viewport: { width: 360, height: 740 } });
       const page = await context.newPage();
       const errors = [];
       const requested = [];
@@ -66,13 +67,14 @@ try {
       assert.ok(requested.includes(50));
       await page.getByText("完整采集信息").click();
       assert.equal(await page.getByText("agent_version", { exact: true }).count(), 0);
-      await page.getByText("registered_at", { exact: true }).waitFor();
+      await page.getByText("注册时间", { exact: true }).waitFor();
       for (const theme of ["light", "dark"]) {
         if (await page.locator("html").getAttribute("data-theme") !== theme) await page.getByRole("button", { name: /切换到.*模式/ }).click();
         const result = await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa", "wcag21aa"]).analyze();
         assert.deepEqual(result.violations, []);
         assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
       }
+      await checkWebLanguage(page, {"routes":[["instances","Instances"],["monitor","Live monitoring"]],"names":["验收主机","测试主机"]});
       await checkHeaderLogout(page, session.csrf_token);
       assert.deepEqual(errors, []);
       console.log(`${engine.name()}: current Host build, pagination, full details and mobile light/dark WCAG AA passed`);
