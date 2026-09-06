@@ -113,6 +113,9 @@ async fn serve(release_root: Option<&std::path::Path>) -> anyhow::Result<()> {
             "HOST_MONITORING_DEVELOPMENT is enabled; using an insecure loopback-only session cookie"
         );
     }
+    let signals = sarmg_server_runtime::ProcessSignals::install()?;
+    let listeners = sarmg_server_runtime::BoundListeners::bind([config.bind])?;
+    let transport = sarmg_server_runtime::HttpServer::new(listeners, signals);
     let application_lock = ApplicationLock::acquire(&config.database_url)?;
     let pool = store::open_or_initialize(&application_lock.database_url()).await?;
     store::ensure_admin_user(
@@ -121,7 +124,6 @@ async fn serve(release_root: Option<&std::path::Path>) -> anyhow::Result<()> {
         config.bootstrap_admin_password.as_deref(),
     )
     .await?;
-    let listener = tokio::net::TcpListener::bind(config.bind).await?;
     let (_, retention_maintenance) = RetentionMaintenance::start(pool.clone(), config.retention);
     let (telemetry, telemetry_writer) = TelemetryWriter::start(pool.clone(), config.telemetry);
     let health_pool = pool.clone();
@@ -163,7 +165,7 @@ async fn serve(release_root: Option<&std::path::Path>) -> anyhow::Result<()> {
     );
     tracing::info!(bind=%config.bind, "host-monitoring server ready");
     runtime
-        .serve(listener, router(state, config.static_dir)?)
+        .serve(transport, router(state, config.static_dir)?)
         .await?;
     Ok(())
 }

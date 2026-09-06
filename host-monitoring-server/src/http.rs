@@ -122,7 +122,7 @@ pub fn product_descriptor() -> sarmg_server_runtime::ProductDescriptor {
     sarmg_server_runtime::ProductDescriptor {
         id: "host-monitoring".into(),
         version: env!("CARGO_PKG_VERSION").into(),
-        foundation_revision: "1e889d08fa69fcf2b5fffe45e8cc42b68218f4f1".into(),
+        foundation_revision: "77e7ad7af8e1bf62432bd6bdd8fa9aff54cb39d1".into(),
         profile: "server-control-plane".into(),
         capabilities: vec![
             "admin-persistent".into(),
