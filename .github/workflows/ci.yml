@@ -71,10 +71,10 @@ jobs:
             echo 'Host components must use the authoritative workspace protocol path.' >&2
             exit 1
           fi
-          cargo pkgid --locked -p host-monitor | grep -F '#0.8.0'
+          cargo pkgid --locked -p host-monitor | grep -F '#0.9.0'
           cargo pkgid --locked -p host-monitoring-server \
-            | grep -F '#0.8.0'
-          cargo pkgid --locked -p host-protocol | grep -F '#host-protocol@0.8.0'
+            | grep -F '#0.9.0'
+          cargo pkgid --locked -p host-protocol | grep -F '#host-protocol@0.9.0'
       - name: Check Server and protocol
         run: >-
           cargo check --locked --target x86_64-unknown-linux-gnu

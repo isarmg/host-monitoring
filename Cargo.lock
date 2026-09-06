@@ -2530,7 +2530,7 @@ dependencies = [
 [[package]]
 name = "sarmg-agent-error"
 version = "0.6.0"
-source = "git+https://github.com/isarmg/sarmg-foundation-agent.git?rev=a5b3158aa62af8189dd909500758cee649898e5c#a5b3158aa62af8189dd909500758cee649898e5c"
+source = "git+https://github.com/isarmg/sarmg-foundation-agent.git?rev=c7537cdbf22ee69298e93ec91b048f90de8fde40#c7537cdbf22ee69298e93ec91b048f90de8fde40"
 dependencies = [
  "serde",
  "serde_json",
@@ -2540,7 +2540,7 @@ dependencies = [
 [[package]]
 name = "sarmg-agent-fs-safety"
 version = "0.6.0"
-source = "git+https://github.com/isarmg/sarmg-foundation-agent.git?rev=a5b3158aa62af8189dd909500758cee649898e5c#a5b3158aa62af8189dd909500758cee649898e5c"
+source = "git+https://github.com/isarmg/sarmg-foundation-agent.git?rev=c7537cdbf22ee69298e93ec91b048f90de8fde40#c7537cdbf22ee69298e93ec91b048f90de8fde40"
 dependencies = [
  "getrandom 0.4.3",
  "rustix",
@@ -2550,7 +2550,7 @@ dependencies = [
 [[package]]
 name = "sarmg-agent-runtime"
 version = "0.6.0"
-source = "git+https://github.com/isarmg/sarmg-foundation-agent.git?rev=a5b3158aa62af8189dd909500758cee649898e5c#a5b3158aa62af8189dd909500758cee649898e5c"
+source = "git+https://github.com/isarmg/sarmg-foundation-agent.git?rev=c7537cdbf22ee69298e93ec91b048f90de8fde40#c7537cdbf22ee69298e93ec91b048f90de8fde40"
 dependencies = [
  "async-trait",
  "getrandom 0.4.3",
@@ -2566,7 +2566,7 @@ dependencies = [
 [[package]]
 name = "sarmg-agent-secret"
 version = "0.6.0"
-source = "git+https://github.com/isarmg/sarmg-foundation-agent.git?rev=a5b3158aa62af8189dd909500758cee649898e5c#a5b3158aa62af8189dd909500758cee649898e5c"
+source = "git+https://github.com/isarmg/sarmg-foundation-agent.git?rev=c7537cdbf22ee69298e93ec91b048f90de8fde40#c7537cdbf22ee69298e93ec91b048f90de8fde40"
 dependencies = [
  "zeroize",
 ]
@@ -2574,7 +2574,7 @@ dependencies = [
 [[package]]
 name = "sarmg-agent-secure-http"
 version = "0.6.0"
-source = "git+https://github.com/isarmg/sarmg-foundation-agent.git?rev=a5b3158aa62af8189dd909500758cee649898e5c#a5b3158aa62af8189dd909500758cee649898e5c"
+source = "git+https://github.com/isarmg/sarmg-foundation-agent.git?rev=c7537cdbf22ee69298e93ec91b048f90de8fde40#c7537cdbf22ee69298e93ec91b048f90de8fde40"
 dependencies = [
  "hickory-resolver",
  "ipnet",
