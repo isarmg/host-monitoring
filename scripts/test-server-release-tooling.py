@@ -8,6 +8,7 @@ import re
 import stat
 import tempfile
 import unittest
+from unittest.mock import MagicMock, patch
 from pathlib import Path
 
 
@@ -20,12 +21,35 @@ SPEC.loader.exec_module(PACKAGE)
 
 
 class ReleaseToolingTests(unittest.TestCase):
+    def test_readiness_requires_current_endpoint_and_exact_ready_response(self) -> None:
+        for status, body, expected in [
+            (200, b'{"ready":true}', True),
+            (200, b'{"ready":false}', False),
+            (200, b'<html>SPA fallback</html>', False),
+            (204, b'', False),
+            (503, b'{"ready":true}', False),
+        ]:
+            with self.subTest(status=status, body=body):
+                response = MagicMock()
+                response.__enter__.return_value = response
+                response.status = status
+                response.read.return_value = body
+                with patch.object(PACKAGE.urllib.request, "urlopen", return_value=response) as request:
+                    self.assertEqual(PACKAGE.server_is_ready(18104), expected)
+                    request.assert_called_once_with("http://127.0.0.1:18104/readyz", timeout=1)
+
+    def test_readiness_retries_connection_errors_and_timeouts(self) -> None:
+        for error in [PACKAGE.urllib.error.URLError("not started"), TimeoutError()]:
+            with self.subTest(error=error):
+                with patch.object(PACKAGE.urllib.request, "urlopen", side_effect=error):
+                    self.assertFalse(PACKAGE.server_is_ready(18104))
+
     def test_release_readme_is_package_local_and_chinese(self) -> None:
         repository = SCRIPT.parent.parent
         readme = repository / PACKAGE.RELEASE_README
         text = readme.read_text(encoding="utf-8")
         self.assertGreater(len(text.encode("utf-8")), 10_000)
-        self.assertIn("Host Monitoring Server 0.9.2 发行包部署手册", text)
+        self.assertIn("Host Monitoring Server 0.9.3 发行包部署手册", text)
         self.assertIn("bin/host-monitoring-server", text)
         self.assertIn("systemd/host-monitoring-server.service", text)
         self.assertIn("RELEASE-MANIFEST.json", text)

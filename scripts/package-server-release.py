@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build and publish one immutable, source-bound Host Monitoring 0.7 archive."""
+"""Build and publish one immutable, source-bound Host Monitoring archive."""
 
 from __future__ import annotations
 
@@ -20,7 +20,7 @@ from typing import NoReturn
 
 
 APPLICATION = "host-monitoring-server"
-VERSION = "0.9.2"
+VERSION = "0.9.3"
 TARGET = "x86_64-unknown-linux-gnu"
 TAG = f"v{VERSION}"
 RELEASE_README = Path("docs/server-release-readme.md")
@@ -222,6 +222,16 @@ def verify_bound_command_boundary(root: Path, temporary: Path) -> None:
     )
 
 
+def server_is_ready(port: int) -> bool:
+    try:
+        with urllib.request.urlopen(
+            f"http://127.0.0.1:{port}/readyz", timeout=1
+        ) as response:
+            return response.status == 200 and response.read(128) == b'{"ready":true}'
+    except (urllib.error.URLError, TimeoutError):
+        return False
+
+
 def relocated_smoke(extracted: Path, temporary: Path) -> None:
     state = temporary / "smoke-state/db"
     state.mkdir(parents=True)
@@ -259,13 +269,7 @@ def relocated_smoke(extracted: Path, temporary: Path) -> None:
             for _ in range(180):
                 if process.poll() is not None:
                     break
-                try:
-                    with urllib.request.urlopen(
-                        f"http://127.0.0.1:{port}/health/live", timeout=1
-                    ) as response:
-                        ready = response.status == 200
-                except (urllib.error.URLError, TimeoutError):
-                    pass
+                ready = server_is_ready(port)
                 if ready:
                     break
                 time.sleep(0.1)
