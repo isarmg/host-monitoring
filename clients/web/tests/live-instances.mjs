@@ -12,7 +12,7 @@ await withLocalServer({ prefix: "HOST_MONITORING", binary: "../../target/debug/h
     const polling = randomBytes(32).toString("base64url");
     const pairingResponse = await fetch(base + "/api/v2/host-monitor/pairing-requests", {
       method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({
-        host: { id: randomUUID(), os: "linux", os_version: "test", kernel_version: "test", arch: "x86_64", agent_version: "0.9.1" },
+        host: { id: randomUUID(), os: "linux", os_version: "test", kernel_version: "test", arch: "x86_64", agent_version: "0.9.2" },
         token_hash: randomBytes(32).toString("hex"), polling_secret_hash: createHash("sha256").update(polling).digest("hex"),
       }),
     });

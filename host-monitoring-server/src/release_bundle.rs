@@ -278,7 +278,7 @@ fn validate_exact_layout(expected: &HashMap<PathBuf, ReleaseEntry>) -> anyhow::R
                 );
                 let extension = path.extension().and_then(|value| value.to_str());
                 ensure!(
-                    matches!(extension, Some("js" | "css")),
+                    matches!(extension, Some("js" | "css" | "woff2")),
                     "release contains an unexpected compiled asset type: {}",
                     path.display()
                 );
@@ -567,6 +567,11 @@ mod tests {
                     0o444,
                 ),
                 ("web/assets/app.css", b"body{}".as_slice(), 0o444),
+                (
+                    "web/assets/MapleMonoNormalNL-Regular.woff2",
+                    b"wOF2font-fixture".as_slice(),
+                    0o444,
+                ),
             ] {
                 fs::write(root.join(path), contents).unwrap();
                 fs::set_permissions(root.join(path), fs::Permissions::from_mode(mode)).unwrap();
@@ -589,6 +594,7 @@ mod tests {
                 "systemd/host-monitoring-server.service",
                 "web/assets/app.css",
                 "web/assets/app.js",
+                "web/assets/MapleMonoNormalNL-Regular.woff2",
                 "web/index.html",
             ] {
                 let bytes = fs::read(root.join(path)).unwrap();
@@ -664,7 +670,34 @@ mod tests {
         let fixture = Fixture::new();
         let report = verify_release_with_options(&fixture.root, false, false).unwrap();
         assert_eq!(report.application, APPLICATION);
-        assert_eq!(report.files, 6);
+        assert_eq!(report.files, 7);
+    }
+
+    #[test]
+    fn compiled_fonts_remain_bound_to_hashes_paths_and_allowed_types() {
+        let fixture = Fixture::new();
+        let font = fixture
+            .root
+            .join("web/assets/MapleMonoNormalNL-Regular.woff2");
+        fs::set_permissions(&font, fs::Permissions::from_mode(0o644)).unwrap();
+        fs::write(&font, b"wOF2changed-font").unwrap();
+        fs::set_permissions(&font, fs::Permissions::from_mode(0o444)).unwrap();
+        assert!(verify_release_with_options(&fixture.root, false, false).is_err());
+
+        let fixture = Fixture::new();
+        for path in ["web/assets/run.sh", "web/assets/font.ttf", "web/font.woff2"] {
+            let mut manifest = fixture.manifest();
+            manifest.entries.push(ReleaseEntry::File {
+                path: path.to_owned(),
+                mode: "0444".to_owned(),
+                size: 1,
+                sha256: "a".repeat(64),
+            });
+            manifest
+                .entries
+                .sort_by(|left, right| left.path().cmp(right.path()));
+            assert!(validate_exact_layout(&parse_entries(&manifest.entries).unwrap()).is_err());
+        }
     }
 
     #[test]

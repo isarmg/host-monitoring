@@ -5,7 +5,7 @@ PATH=/usr/sbin:/usr/bin:/sbin:/bin
 export PATH
 
 service_name=host-monitor.service
-package_version=0.9.1
+package_version=0.9.2
 
 systemd_is_running() {
   [ -d /run/systemd/system ]
@@ -34,9 +34,9 @@ disable_for_remove() {
 }
 
 # Debian uses the literal `upgrade <new-version>` ABI even when reinstalling
-# the exact same package. Accept only 0.9.0. RPM uses a positive remaining
+# the exact same package. Accept only the current package version. RPM uses a positive remaining
 # instance count for replacement; the new postinstall has already validated
-# the exact 0.9.1 ownership markers before the pre-remove scriptlet can run.
+# the exact 0.9.2 ownership markers before the pre-remove scriptlet can run.
 case "${1:-}" in
   upgrade)
     [ "$#" -eq 2 ] && [ "$2" = "$package_version" ] ||
