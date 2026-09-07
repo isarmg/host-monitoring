@@ -32,9 +32,7 @@ identity 算法。Host Monitoring 仍独立拥有账户记录、登录准入、S
 ```text
 protocol/                  host-protocol：Client/Server 唯一共享 wire contract
 host-monitoring-server/    Axum 管理/Client API、SQLite 写入与保留策略
-clients/web/               React/Vite 状态页源码；当前只含管理员认证与 Host 列表
-clients/host-monitor/      桌面 daemon/CLI、移动宿主库、采集器和持久 spool
-clients/host-monitor/packaging/    Linux、Windows、macOS 安装资产和生命周期测试
+clients/web/               React/Vite 管理 Web：管理员认证、实例、主机详情与配对
 config/                    可提交的当前配置样例；不存放生产 Secret
 deploy/                    Server 当前 systemd 源资产
 scripts/                   发行打包、manifest 和供应链门禁
@@ -42,7 +40,7 @@ scripts/                   发行打包、manifest 和供应链门禁
 
 ## 快速验证
 
-完整 workspace/Server 门禁必须在 x86_64 GNU/Linux 执行；其他系统只运行对应 Client 目标门禁：
+本仓库的 workspace/Server 门禁必须在 x86_64 GNU/Linux 执行；其他系统须在独立 Client 仓库运行对应目标门禁：
 
 ```bash
 cargo +1.98.0 fmt --all -- --check
