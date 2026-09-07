@@ -3,16 +3,16 @@
 ## 9.1 生产拓扑
 
 Server 只部署在 x86_64 glibc Linux，使用 root 持有的不可变版本目录，专用服务账户读取 0600 环境并写
-独立 SQLite 状态；默认回环监听，由可信 TLS reverse proxy 暴露。Agent 使用各平台服务管理器和受保护
+独立 SQLite 状态；默认回环监听，由可信 TLS reverse proxy 暴露。Client 使用各平台服务管理器和受保护
 本地状态，仅出站访问 Server。内置管理页是与 Server 同包的 React/Vite 页面，并通过 Foundation
-admin-only username Session 合同访问 API。Windows Service 与 macOS LaunchDaemon 都是 Agent，不是
+admin-only username Session 合同访问 API。Windows Service 与 macOS LaunchDaemon 都是 Client，不是
 Server 部署方式。
 
 ## 9.2 上线前证据
 
 保存代码 tag/revision、归档与 checksum、manifest verification、工具链、测试结果、配置摘要和全新部署计划。
 不要保存 Secret 本身。正式包从干净 annotated tag 在 x86_64 glibc Linux 构建，不能从开发工作树手工
-复制 binary，也不能把 Agent 的其他平台产物改名为 Server 制品。
+复制 binary，也不能把 Client 的其他平台产物改名为 Server 制品。
 
 ## 9.3 Server 上线顺序
 
@@ -24,7 +24,7 @@ Server 部署方式。
    修复或转换命令。
 6. 启动后检查 readiness、静态资源、登录和写入 smoke。
 
-## 9.4 Agent 上线顺序
+## 9.4 Client 上线顺序
 
 通过原生包安装，校验配置/状态权限，运行 `probe`，完成显式配对，再运行 `once`，最后启用长期服务。
 不要把一台 Host 的 state directory 制作进镜像或批量复制。
@@ -33,13 +33,13 @@ Server 部署方式。
 
 Server 应关注 readiness、认证失败、配对准入、429/503、SQLite/WAL、磁盘和 inode。当前产品没有
 metrics API，也没有暴露 writer queue 深度/延迟或 retention backlog；这些项目只能通过有限日志、HTTP
-结果与数据库离线观察间接判断，不能在监控配置里引用不存在的指标。Agent 关注服务状态、采集错误、
+结果与数据库离线观察间接判断，不能在监控配置里引用不存在的指标。Client 关注服务状态、采集错误、
 spool 容量/最老条目、TLS、认证撤销和系统时钟。
 
 ## 9.6 当前没有备份、恢复或迁移流程
 
 产品不实现 backup/restore/migration，`sarmg-upgrade` 当前也没有 Host Monitoring 转换边。通用
-generation/journal 引擎本身不能证明它会识别本产品，所以当前不得用它制作或恢复 Host 数据。Agent 本地
+generation/journal 引擎本身不能证明它会识别本产品，所以当前不得用它制作或恢复 Host 数据。Client 本地
 身份若丢失，只能通过新的 invite/pairing 建立全新当前身份；这不恢复历史数据。需要备份/恢复时，应先在
 外部仓定义精确输入身份、SQLite WAL 一致性、锁、输出 identity、失败原子性和验证证据，再实现并发布
 具体 edge；在此之前运维清单必须标记“不支持”。
@@ -59,7 +59,7 @@ generation/journal 引擎本身不能证明它会识别本产品，所以当前�
 
 TLS 私钥、管理员密码、Session/CSRF、设备 credential、OTLP Token 和数据库都按 Secret/敏感数据管理。
 管理员身份是 canonical username，不是 email；role 只有 `admin`。日志与 support 包做字段级脱敏。只
-信任明确配置的代理和 CA；Agent 没有“关闭 TLS 证书校验”开关。远程明文 HTTP 不受配置开放；
+信任明确配置的代理和 CA；Client 没有“关闭 TLS 证书校验”开关。远程明文 HTTP 不受配置开放；
 report/OTLP/pairing 的生产基线固定为 HTTPS，HTTP 仅限 loopback。
 
 ## 9.9 不提供跨版本回滚

@@ -15,8 +15,8 @@ pub enum Error {
     Unauthorized,
     #[error("forbidden")]
     Forbidden,
-    #[error("agent credential does not belong to the reported host")]
-    AgentHostMismatch,
+    #[error("client credential does not belong to the reported host")]
+    ClientHostMismatch,
     #[error("{0}")]
     NotFound(String),
     #[error("{0}")]
@@ -54,7 +54,7 @@ impl IntoResponse for Error {
         let status = match &self {
             Self::BadRequest(_) => StatusCode::BAD_REQUEST,
             Self::Unauthorized => StatusCode::UNAUTHORIZED,
-            Self::Forbidden | Self::AgentHostMismatch => StatusCode::FORBIDDEN,
+            Self::Forbidden | Self::ClientHostMismatch => StatusCode::FORBIDDEN,
             Self::NotFound(_) => StatusCode::NOT_FOUND,
             Self::Conflict(_) => StatusCode::CONFLICT,
             Self::UnsupportedMediaType(_) => StatusCode::UNSUPPORTED_MEDIA_TYPE,
@@ -79,7 +79,7 @@ impl IntoResponse for Error {
             Self::BadRequest(_) => ErrorEnvelope::new(HttpStatus::BadRequest, message),
             Self::Unauthorized => ErrorEnvelope::new(HttpStatus::Unauthorized, message),
             Self::Forbidden => ErrorEnvelope::new(HttpStatus::Forbidden, message),
-            Self::AgentHostMismatch => product_envelope("agent_host_mismatch", message, false),
+            Self::ClientHostMismatch => product_envelope("client_host_mismatch", message, false),
             Self::NotFound(_) => ErrorEnvelope::new(HttpStatus::NotFound, message),
             Self::Conflict(_) => ErrorEnvelope::new(HttpStatus::Conflict, message),
             Self::UnsupportedMediaType(_) => {
@@ -171,7 +171,7 @@ mod tests {
 
     #[tokio::test]
     async fn errors_use_the_strict_foundation_envelope() {
-        let response = Error::AgentHostMismatch.into_response();
+        let response = Error::ClientHostMismatch.into_response();
         assert_eq!(response.status(), StatusCode::FORBIDDEN);
         assert!(
             response
@@ -183,8 +183,8 @@ mod tests {
         assert_eq!(
             serde_json::from_slice::<serde_json::Value>(&body).unwrap(),
             json!({
-                "code": "agent_host_mismatch",
-                "message": "agent credential does not belong to the reported host",
+                "code": "client_host_mismatch",
+                "message": "client credential does not belong to the reported host",
                 "retryable": false
             })
         );
@@ -194,7 +194,7 @@ mod tests {
     #[tokio::test]
     async fn retryable_errors_carry_header_and_machine_details() {
         let response = Error::RateLimited {
-            message: "agent report rate exceeded",
+            message: "client report rate exceeded",
             retry_after: 3,
         }
         .into_response();
@@ -205,7 +205,7 @@ mod tests {
             serde_json::from_slice::<serde_json::Value>(&body).unwrap(),
             json!({
                 "code": "too_many_requests",
-                "message": "agent report rate exceeded",
+                "message": "client report rate exceeded",
                 "retryable": true,
                 "details": {"retry_after_seconds": 3}
             })

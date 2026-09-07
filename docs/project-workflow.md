@@ -7,10 +7,10 @@ Host Monitoring
 ├─ Server
 │  ├─ 验证发行树/配置/当前 Schema
 │  ├─ Foundation admin 用户名登录与 Session/CSRF
-│  ├─ Agent 邀请、配对请求与一次性激活
+│  ├─ Client 邀请、配对请求与一次性激活
 │  ├─ 报告限流 -> 有界队列 -> 单 SQLite writer
 │  └─ 原始报告 -> 小时聚合 -> 分层保留
-├─ Desktop Agent
+├─ Desktop Client
 │  ├─ 读取当前配置并取得状态锁
 │  ├─ 采集 CPU/内存/磁盘/网络/传感器
 │  ├─ 本地有界 spool
@@ -19,7 +19,7 @@ Host Monitoring
 │  └─ 宿主快照 -> 合约收敛 -> JSON payload
 └─ Delivery
    ├─ Server：x86_64 GNU/Linux 不可变 tar release
-   └─ Agent
+   └─ Client
       ├─ Linux deb/rpm + systemd
       ├─ Windows x86_64 Service + Tray + MSI
       └─ macOS LaunchDaemon + pkg
@@ -50,10 +50,10 @@ primitive 检查已有 username 与完整 Argon2id 参数。`doctor` 检查 Sche
 ```text
 {username,password} -> Foundation username 规范化 + Argon2id 校验 -> SQLite Session + CSRF
   -> 受保护管理 API 创建 invite 并返回一次性 activation code
-  -> Agent 创建含 token/polling-secret 摘要的 pairing request
-  -> code 经 Agent 激活端点或管理员激活端点提交
+  -> Client 创建含 token/polling-secret 摘要的 pairing request
+  -> code 经 Client 激活端点或管理员激活端点提交
   -> Server 在一个事务中绑定 invite/request/Host/credential
-  -> Agent 轮询到 active 后原子提交 active-binding.json
+  -> Client 轮询到 active 后原子提交 active-binding.json
 ```
 
 来源、设备、请求/邀请和管理员账户分别拥有有界准入预算；TCP peer 是来源事实，默认不信任 forwarded
@@ -73,9 +73,9 @@ Session 与 CSRF 仅保存在该 client 的内存闭包。当前页面只请求 
 响应 guard 仍属于产品。仓库当前没有 invite 创建/取消、激活、备注修改、删除、详情或历史的 React
 交互，也没有 `/activate/{request_id}` 专用页面；这些管理 API 的存在不能被写成已完成的浏览器工作流。
 
-## 4. Agent 采集与投递
+## 4. Client 采集与投递
 
-长驻 Agent 读取严格 `application_version=0.8.0` 配置并锁定 state directory，初始化 host identity、
+长驻 Client 读取严格 `application_version=0.8.0` 配置并锁定 state directory，初始化 host identity、
 采集器和 spool 后才报告服务 ready。按基础/慢速周期生成报告，周期加入受限 jitter；报告先入 spool，
 再通过当前 `/api/v2/host-monitor/report` 投递。关机信号停止新采集，并尽力收敛已拥有工作。
 
@@ -86,9 +86,9 @@ Session 与 CSRF 仅保存在该 client 的内存闭包。当前页面只请求 
 writer 停止、总等待超时或写入失败返回 503；两者带 `Retry-After: 1`。客户端断开不会取消已经入队、
 归 writer 所有的工作。
 
-所有 `/api` 失败都输出 Foundation 当前 `ErrorEnvelope`。Agent 只有在严格 JSON、正确 Content-Type、
+所有 `/api` 失败都输出 Foundation 当前 `ErrorEnvelope`。Client 只有在严格 JSON、正确 Content-Type、
 状态码/机器码一致且 `retryable=false` 时才作永久 spool/凭据裁决：`401 + unauthorized` 进入重新授权，
-`403 + agent_host_mismatch` 只永久丢弃该错误 Host 的报告。代理/WAF 的文本或非合同响应保持可重试，
+`403 + client_host_mismatch` 只永久丢弃该错误 Host 的报告。代理/WAF 的文本或非合同响应保持可重试，
 不得改变凭据。
 
 ## 6. 聚合与保留
@@ -130,7 +130,7 @@ build.rs 拒绝非 x86_64-unknown-linux-gnu
 ```
 
 归档没有 migration、backup 或 restore。版本目录不可覆盖，也没有 `current` 链接；不生成 ARM Linux、
-musl、Windows 或 macOS Server 归档。Windows Agent 的 MSVC 构建继续由独立 CI 矩阵负责。
+musl、Windows 或 macOS Server 归档。Windows Client 的 MSVC 构建继续由独立 CI 矩阵负责。
 
 ## 9. 维护流程
 

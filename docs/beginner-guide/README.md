@@ -8,7 +8,7 @@
 3. [Rust、遥测与协议基础](03-rust-telemetry-and-protocol-basics.md)
 4. [服务端请求、登录与配对链路](04-server-request-login-and-pairing.md)
 5. [采集、Spool 与投递可靠性](05-collection-spool-and-delivery.md)
-6. [Agent 的 Linux、Windows、macOS 与移动宿主](06-platforms-and-packaging.md)
+6. [Client 的 Linux、Windows、macOS 与移动宿主](06-platforms-and-packaging.md)
 7. [当前报告协议、写入与保留](07-current-report-contract.md)
 8. [测试、调试与安全变更方法](08-testing-debugging-and-change-workflow.md)
 9. [部署、安全与生产运维](09-deployment-security-and-operations.md)
@@ -19,10 +19,10 @@
 ## 1. 产品解决什么问题
 
 Host Monitoring 用一个本地控制面接收多台主机的 CPU、内存、磁盘、网络和平台传感器。每台主机运行
-`host-monitor`，Agent 只发起出站连接，不监听公网端口；服务端负责 invite/配对/激活、报告验证、raw
+`host-monitor`，Client 只发起出站连接，不监听公网端口；服务端负责 invite/配对/激活、报告验证、raw
 存储、内部聚合和管理员 Session。React 页面提供主机列表、采集详情、实例邀请和配对激活；尚不是完整图表控制台。
 
-“只读采集”表示 Agent 不以监控为理由修改系统配置。安装器仍需要平台权限创建服务账户、安装服务和
+“只读采集”表示 Client 不以监控为理由修改系统配置。安装器仍需要平台权限创建服务账户、安装服务和
 保护本地状态，因此运行时最小权限与安装时权限要分开理解。
 
 ## 2. 三个核心 crate 与 Web
@@ -49,13 +49,13 @@ clients/web
   └─ React/Vite 最小状态页：管理员认证与 Host 列表（Server 仅 x86_64 GNU/Linux）
 ```
 
-协议 crate 是唯一 wire contract，Server 和 Agent 都通过 workspace path 使用它，不能复制一份 DTO
+协议 crate 是唯一 wire contract，Server 和 Client 都通过 workspace path 使用它，不能复制一份 DTO
 到另一仓库或用网络 Git 依赖形成自依赖。
 
 ## 3. 开发环境
 
 仓库固定 Rust `1.98.0`。服务端 Web 还需要其 lockfile 对应的 Node/npm。完整 workspace 命令只在
-x86_64 GNU/Linux 运行；Windows/macOS CI 保留并单独验证 Agent：
+x86_64 GNU/Linux 运行；Windows/macOS CI 保留并单独验证 Client：
 
 ```bash
 rustup toolchain install 1.98.0
@@ -64,7 +64,7 @@ cargo +1.98.0 test --workspace --locked --target x86_64-unknown-linux-gnu
 cd clients/web && npm ci && npm run build
 ```
 
-跨平台 Agent 安装包需要额外工具：Linux nFPM 与 systemd 测试环境，Windows WiX 4/PowerShell，macOS
+跨平台 Client 安装包需要额外工具：Linux nFPM 与 systemd 测试环境，Windows WiX 4/PowerShell，macOS
 `pkgbuild`、`productbuild` 与 `launchctl` 相关工具。普通业务修改不需要在单机上模拟全部平台，CI
 矩阵会在真实目标系统验证。
 
@@ -85,7 +85,7 @@ cargo run --target x86_64-unknown-linux-gnu -p host-monitoring-server -- serve
 ```
 
 开发模式仍应绑定回环。正式 source-bound 二进制拒绝 `serve`，只接受固定发行树的 `serve-release`。
-Server 不提供 ARM Linux、musl、Windows 或 macOS 构建；这些平台描述均只适用于 Agent。
+Server 不提供 ARM Linux、musl、Windows 或 macOS 构建；这些平台描述均只适用于 Client。
 
 这里的 `admin` 是默认 username，Foundation 固定的是 `role=admin`，并非要求 username 只能叫 admin。
 当前登录 JSON 只有 `{username,password}`；成功 Session 只有
@@ -93,7 +93,7 @@ Server 不提供 ARM Linux、musl、Windows 或 macOS 构建；这些平台描�
 Server trim ASCII whitespace、转 ASCII 小写后要求 3..64 字节 canonical 值：首尾字母/数字、字符仅
 `[a-z0-9._-]`，禁止 `@`。不要再配置邮箱或期待 email alias。
 
-## 5. 运行 Agent 的学习顺序
+## 5. 运行 Client 的学习顺序
 
 从 `config/host-monitor.json.example` 复制到受保护路径，修改服务端 HTTPS 地址和 state directory。
 常用命令：
@@ -116,10 +116,10 @@ host-monitor run --config /etc/host-monitor/config.json
 
 ## 6. 配对为什么分阶段
 
-管理员管理 API 先创建 invite 并得到一次性 activation code。Agent 生成 bearer/polling secret，只把摘要
-随 pairing request 发送，并保存 pending。code 可由受信 Tray/Agent 调用公开 activation 端点提交，也可由
+管理员管理 API 先创建 invite 并得到一次性 activation code。Client 生成 bearer/polling secret，只把摘要
+随 pairing request 发送，并保存 pending。code 可由受信 Tray/Client 调用公开 activation 端点提交，也可由
 已登录管理员调用受保护 activation 端点提交；Server 在一个事务中绑定 invite、request、Host 与
-credential。Agent 轮询到 active 后原子写入状态，再切换 active binding。网络中断时恢复同一请求，不会
+credential。Client 轮询到 active 后原子写入状态，再切换 active binding。网络中断时恢复同一请求，不会
 静默生成另一套身份；明确替换未完成请求必须由用户确认。
 
 管理 Web 已补齐邀请创建、一次性激活码、设备核对、激活和取消邀请，Server 提供
@@ -130,7 +130,7 @@ credential。Agent 轮询到 active 后原子写入状态，再切换 active bin
 
 ## 7. 报告如何可靠送达
 
-采集器生成 `AgentReport` 后进入有界磁盘 spool。投递器对可重试网络/服务错误保留批次，对协议错误或
+采集器生成 `ClientReport` 后进入有界磁盘 spool。投递器对可重试网络/服务错误保留批次，对协议错误或
 明确永久拒绝避免无限重试。服务端验证身份、报告 ID 和字段边界后，将报告放入有界内存队列；单一
 SQLite writer 批量事务写入，每个报告使用 savepoint 隔离。只有事务提交成功才返回 `202 Accepted`。
 
@@ -143,7 +143,7 @@ SQLite writer 批量事务写入，每个报告使用 savepoint 隔离。只有�
 ## 9. 修改代码的检查表
 
 - 报告字段：先改 `host-protocol`，再改两端和契约测试。
-- Agent 状态：保持排他创建、原子替换、权限与单实例锁。
+- Client 状态：保持排他创建、原子替换、权限与单实例锁。
 - 服务端写入：不能绕过有界队列让每个请求直接争用 SQLite。
 - 保留策略：必须保持“先幂等聚合、后有界删除、永不删除 latest”。
 - 平台安装：修改脚本时同时运行安装、卸载、回滚、purge 和 PE/WiX/LaunchDaemon 静态测试。
@@ -152,8 +152,8 @@ SQLite writer 批量事务写入，每个报告使用 savepoint 隔离。只有�
 ## 10. 术语
 
 - **OTLP**：OpenTelemetry Protocol，可选的遥测额外导出目标。
-- **spool**：Agent 本地有界持久重试队列。
-- **pairing**：invite、一次性 code、Agent request/poll 与原子 credential 绑定组成的流程。
+- **spool**：Client 本地有界持久重试队列。
+- **pairing**：invite、一次性 code、Client request/poll 与原子 credential 绑定组成的流程。
 - **savepoint**：SQLite 事务内部隔离单条报告失败的检查点。
 - **移动宿主 contract**：当前只是 Rust library API；仓库没有稳定 C ABI/FFI 包装、移动 UI 或 APK/IPA。
 - **fail closed**：不能证明当前身份、安全路径或数据完整时拒绝运行。

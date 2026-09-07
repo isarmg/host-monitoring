@@ -1,7 +1,7 @@
 //! Current JSON wire types shared by the remote host-monitor and Host worker.
 //!
 //! This crate deliberately contains no collection, validation, persistence, or HTTP logic. The
-//! Agent owns construction at platform boundaries and the Host worker owns trust-boundary
+//! Client owns construction at platform boundaries and the Host worker owns trust-boundary
 //! validation; both sides use these exact DTOs so their wire representations cannot drift
 //! independently even though they live in separately versioned repositories.
 

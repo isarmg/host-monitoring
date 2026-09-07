@@ -1,6 +1,6 @@
 # 本地管理服务
 
-仅启动 Host Monitoring Server 及其管理 Web，不自动安装或启动采集 Agent。
+仅启动 Host Monitoring Server 及其管理 Web，不自动安装或启动采集 Client。
 开发服务监听 `http://127.0.0.1:18105`，使用当前认证和 loopback HTTP Cookie。
 不用于生产部署，不修改系统服务，也不占用 Sunshine 的 18104 端口。
 

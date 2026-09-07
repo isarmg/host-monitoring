@@ -3,44 +3,44 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Deserializer, Serialize, de};
 
-/// Current schema emitted by the Agent and accepted by the Server.
-pub const AGENT_REPORT_SCHEMA_VERSION: u16 = 1;
+/// Current schema emitted by the Client and accepted by the Server.
+pub const CLIENT_REPORT_SCHEMA_VERSION: u16 = 1;
 
 /// Maximum compact JSON request body accepted by the report endpoint.
-pub const AGENT_REPORT_MAX_BODY_BYTES: usize = 512 * 1024;
-pub const AGENT_REPORT_MIN_INTERVAL_SECONDS: f64 = 0.1;
-pub const AGENT_REPORT_MAX_INTERVAL_SECONDS: u64 = 3600;
+pub const CLIENT_REPORT_MAX_BODY_BYTES: usize = 512 * 1024;
+pub const CLIENT_REPORT_MIN_INTERVAL_SECONDS: f64 = 0.1;
+pub const CLIENT_REPORT_MAX_INTERVAL_SECONDS: u64 = 3600;
 /// Collection bounds are wire-contract limits, not merely Server implementation details.
-pub const AGENT_REPORT_MAX_CAPABILITIES: usize = 256;
-pub const AGENT_REPORT_MAX_CPU_CORES: usize = 4096;
-pub const AGENT_REPORT_MAX_NETWORKS: usize = 1024;
-pub const AGENT_REPORT_MAX_DISKS: usize = 1024;
-pub const AGENT_REPORT_MAX_TEMPERATURES: usize = 4096;
-pub const AGENT_REPORT_MAX_GPUS: usize = 128;
+pub const CLIENT_REPORT_MAX_CAPABILITIES: usize = 256;
+pub const CLIENT_REPORT_MAX_CPU_CORES: usize = 4096;
+pub const CLIENT_REPORT_MAX_NETWORKS: usize = 1024;
+pub const CLIENT_REPORT_MAX_DISKS: usize = 1024;
+pub const CLIENT_REPORT_MAX_TEMPERATURES: usize = 4096;
+pub const CLIENT_REPORT_MAX_GPUS: usize = 128;
 
 /// Text limits use UTF-8 bytes, matching JSON trust-boundary validation.
-pub const AGENT_REPORT_MAX_HOST_OS_BYTES: usize = 64;
-pub const AGENT_REPORT_MAX_HOST_VERSION_BYTES: usize = 128;
-pub const AGENT_REPORT_MAX_HOST_ARCH_BYTES: usize = 64;
-pub const AGENT_REPORT_MAX_AGENT_VERSION_BYTES: usize = 128;
-pub const AGENT_REPORT_MAX_CAPABILITY_NAME_BYTES: usize = 128;
-pub const AGENT_REPORT_MAX_CAPABILITY_SOURCE_BYTES: usize = 128;
-pub const AGENT_REPORT_MAX_CAPABILITY_MESSAGE_BYTES: usize = 1024;
-pub const AGENT_REPORT_MAX_NETWORK_NAME_BYTES: usize = 255;
-pub const AGENT_REPORT_MAX_DISK_NAME_BYTES: usize = 1024;
-pub const AGENT_REPORT_MAX_MOUNT_POINT_BYTES: usize = 4096;
-pub const AGENT_REPORT_MAX_FILE_SYSTEM_BYTES: usize = 128;
-pub const AGENT_REPORT_MAX_TEMPERATURE_ID_BYTES: usize = 255;
-pub const AGENT_REPORT_MAX_TEMPERATURE_LABEL_BYTES: usize = 255;
-pub const AGENT_REPORT_MAX_TEMPERATURE_SOURCE_BYTES: usize = 64;
-pub const AGENT_REPORT_MAX_GPU_ID_BYTES: usize = 255;
-pub const AGENT_REPORT_MAX_GPU_VENDOR_BYTES: usize = 64;
-pub const AGENT_REPORT_MAX_GPU_NAME_BYTES: usize = 255;
-pub const AGENT_REPORT_MAX_GPU_SOURCE_BYTES: usize = 64;
+pub const CLIENT_REPORT_MAX_HOST_OS_BYTES: usize = 64;
+pub const CLIENT_REPORT_MAX_HOST_VERSION_BYTES: usize = 128;
+pub const CLIENT_REPORT_MAX_HOST_ARCH_BYTES: usize = 64;
+pub const CLIENT_REPORT_MAX_CLIENT_VERSION_BYTES: usize = 128;
+pub const CLIENT_REPORT_MAX_CAPABILITY_NAME_BYTES: usize = 128;
+pub const CLIENT_REPORT_MAX_CAPABILITY_SOURCE_BYTES: usize = 128;
+pub const CLIENT_REPORT_MAX_CAPABILITY_MESSAGE_BYTES: usize = 1024;
+pub const CLIENT_REPORT_MAX_NETWORK_NAME_BYTES: usize = 255;
+pub const CLIENT_REPORT_MAX_DISK_NAME_BYTES: usize = 1024;
+pub const CLIENT_REPORT_MAX_MOUNT_POINT_BYTES: usize = 4096;
+pub const CLIENT_REPORT_MAX_FILE_SYSTEM_BYTES: usize = 128;
+pub const CLIENT_REPORT_MAX_TEMPERATURE_ID_BYTES: usize = 255;
+pub const CLIENT_REPORT_MAX_TEMPERATURE_LABEL_BYTES: usize = 255;
+pub const CLIENT_REPORT_MAX_TEMPERATURE_SOURCE_BYTES: usize = 64;
+pub const CLIENT_REPORT_MAX_GPU_ID_BYTES: usize = 255;
+pub const CLIENT_REPORT_MAX_GPU_VENDOR_BYTES: usize = 64;
+pub const CLIENT_REPORT_MAX_GPU_NAME_BYTES: usize = 255;
+pub const CLIENT_REPORT_MAX_GPU_SOURCE_BYTES: usize = 64;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct AgentReport {
+pub struct ClientReport {
     pub schema_version: u16,
     /// Canonical lowercase, hyphenated UUID text.
     #[serde(deserialize_with = "deserialize_canonical_uuid")]
@@ -50,7 +50,7 @@ pub struct AgentReport {
     pub interval_seconds: f64,
     pub system: SystemSnapshot,
     pub capabilities: Vec<Capability>,
-    pub agent: AgentHealth,
+    pub client: ClientHealth,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -63,7 +63,7 @@ pub struct HostIdentity {
     pub os_version: Option<String>,
     pub kernel_version: Option<String>,
     pub arch: String,
-    pub agent_version: String,
+    pub client_version: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -83,7 +83,7 @@ pub struct SystemSnapshot {
 #[serde(deny_unknown_fields)]
 pub struct CpuSnapshot {
     pub usage_percent: f64,
-    /// Fixed-width on the wire: `usize` would make the protocol depend on Agent architecture.
+    /// Fixed-width on the wire: `usize` would make the protocol depend on Client architecture.
     pub logical_count: u32,
     pub physical_count: Option<u32>,
     pub per_core_percent: Vec<f64>,
@@ -185,7 +185,7 @@ pub struct Capability {
     pub message: Option<String>,
 }
 
-/// Capability failures supported by the current Agent and Server release.
+/// Capability failures supported by the current Client and Server release.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CapabilityErrorKind {
@@ -239,7 +239,7 @@ impl Capability {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct AgentHealth {
+pub struct ClientHealth {
     #[serde(with = "crate::json_u64")]
     pub spool_pending_batches: u64,
     #[serde(with = "crate::json_u64")]
@@ -265,9 +265,9 @@ where
 mod tests {
     use super::*;
 
-    fn fixture() -> AgentReport {
-        AgentReport {
-            schema_version: AGENT_REPORT_SCHEMA_VERSION,
+    fn fixture() -> ClientReport {
+        ClientReport {
+            schema_version: CLIENT_REPORT_SCHEMA_VERSION,
             report_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa".into(),
             collected_at: "2026-01-01T00:00:00Z".parse().unwrap(),
             host: HostIdentity {
@@ -276,7 +276,7 @@ mod tests {
                 os_version: Some("1".into()),
                 kernel_version: None,
                 arch: "x86_64".into(),
-                agent_version: "0.3.6".into(),
+                client_version: "0.3.6".into(),
             },
             interval_seconds: 0.5,
             system: SystemSnapshot {
@@ -315,7 +315,7 @@ mod tests {
                 CapabilityErrorKind::NotPresent,
                 "not installed",
             )],
-            agent: AgentHealth {
+            client: ClientHealth {
                 spool_pending_batches: 1,
                 collector_errors: 0,
             },
@@ -327,7 +327,7 @@ mod tests {
         let report = fixture();
         let json = serde_json::to_vec(&report).unwrap();
         assert_eq!(
-            serde_json::from_slice::<AgentReport>(&json).unwrap(),
+            serde_json::from_slice::<ClientReport>(&json).unwrap(),
             report
         );
     }
@@ -372,14 +372,17 @@ mod tests {
             "18446744073709551615"
         );
         assert!(json["system"]["gpus"][0]["memory_used_bytes"].is_null());
-        assert_eq!(serde_json::from_value::<AgentReport>(json).unwrap(), report);
+        assert_eq!(
+            serde_json::from_value::<ClientReport>(json).unwrap(),
+            report
+        );
     }
 
     #[test]
     fn large_json_integers_must_use_the_current_decimal_string_shape() {
         let mut json = serde_json::to_value(fixture()).unwrap();
         json["system"]["networks"][0]["received_bytes_total"] = serde_json::json!(u64::MAX);
-        assert!(serde_json::from_value::<AgentReport>(json).is_err());
+        assert!(serde_json::from_value::<ClientReport>(json).is_err());
     }
 
     #[test]
@@ -388,7 +391,7 @@ mod tests {
             let mut json = serde_json::to_value(fixture()).unwrap();
             json["system"]["networks"][0]["received_bytes_total"] = serde_json::json!(invalid);
             assert!(
-                serde_json::from_value::<AgentReport>(json).is_err(),
+                serde_json::from_value::<ClientReport>(json).is_err(),
                 "accepted malformed u64 string {invalid:?}"
             );
         }
@@ -413,7 +416,7 @@ mod tests {
         cpu["system"]["cpu"]["unknown_measurement"] = serde_json::json!(true);
         values.push(cpu);
         for value in values {
-            assert!(serde_json::from_value::<AgentReport>(value).is_err());
+            assert!(serde_json::from_value::<ClientReport>(value).is_err());
         }
     }
 
@@ -432,7 +435,7 @@ mod tests {
                 _ => unreachable!(),
             }
             assert!(
-                serde_json::from_value::<AgentReport>(report).is_err(),
+                serde_json::from_value::<ClientReport>(report).is_err(),
                 "{field} accepted noncanonical UUID {value}"
             );
         }

@@ -17,7 +17,8 @@ use host_monitoring_server::{
     token_hash,
 };
 use host_protocol::{
-    AgentHealth, AgentReport, Capability, CpuSnapshot, HostIdentity, MemorySnapshot, SystemSnapshot,
+    Capability, ClientHealth, ClientReport, CpuSnapshot, HostIdentity, MemorySnapshot,
+    SystemSnapshot,
 };
 use http_body_util::BodyExt;
 use sarmg_error::ErrorEnvelope;
@@ -48,12 +49,12 @@ impl TestDatabase {
 
     async fn add_host(&self, name: &str) -> (Uuid, String) {
         let host_id = Uuid::new_v4();
-        let token = format!("agent-token-{host_id}");
+        let token = format!("client-token-{host_id}");
         let hash = token_hash(&token);
         let now = Utc::now();
         sqlx::query(
             r#"INSERT INTO monitored_hosts(
-                   host_id,name,os,arch,agent_version,capabilities,
+                   host_id,name,os,arch,client_version,capabilities,
                    registered_at,last_seen_at,lifecycle_status
                ) VALUES(?,?,'linux','x86_64','test','[]',?,?,'active')"#,
         )
@@ -65,7 +66,7 @@ impl TestDatabase {
         .await
         .unwrap();
         sqlx::query(
-            "INSERT INTO agent_credentials(credential_id,host_id,token_hash,issued_at) \
+            "INSERT INTO client_credentials(credential_id,host_id,token_hash,issued_at) \
              VALUES(?,?,?,?)",
         )
         .bind(Uuid::new_v4())
@@ -98,9 +99,9 @@ fn config(
     .unwrap()
 }
 
-fn report(host_id: Uuid, report_id: Uuid, collected_at: DateTime<Utc>) -> AgentReport {
-    AgentReport {
-        schema_version: host_protocol::AGENT_REPORT_SCHEMA_VERSION,
+fn report(host_id: Uuid, report_id: Uuid, collected_at: DateTime<Utc>) -> ClientReport {
+    ClientReport {
+        schema_version: host_protocol::CLIENT_REPORT_SCHEMA_VERSION,
         report_id: report_id.to_string(),
         collected_at,
         host: HostIdentity {
@@ -109,7 +110,7 @@ fn report(host_id: Uuid, report_id: Uuid, collected_at: DateTime<Utc>) -> AgentR
             os_version: Some("test-os".into()),
             kernel_version: Some("test-kernel".into()),
             arch: "x86_64".into(),
-            agent_version: env!("CARGO_PKG_VERSION").into(),
+            client_version: env!("CARGO_PKG_VERSION").into(),
         },
         interval_seconds: 10.0,
         system: SystemSnapshot {
@@ -133,19 +134,19 @@ fn report(host_id: Uuid, report_id: Uuid, collected_at: DateTime<Utc>) -> AgentR
             gpus: vec![],
         },
         capabilities: vec![Capability::available("cpu", "test")],
-        agent: AgentHealth {
+        client: ClientHealth {
             spool_pending_batches: 0,
             collector_errors: 0,
         },
     }
 }
 
-fn write(report: AgentReport, token: &str) -> ReportWrite {
+fn write(report: ClientReport, token: &str) -> ReportWrite {
     let metrics = model::validate_report(&report).unwrap();
     ReportWrite::new(report, token_hash(token), metrics)
 }
 
-fn report_request(token: &str, report: &AgentReport) -> Request<Body> {
+fn report_request(token: &str, report: &ClientReport) -> Request<Body> {
     Request::post("/api/v2/host-monitor/report")
         .header(header::AUTHORIZATION, format!("Bearer {token}"))
         .header(header::CONTENT_TYPE, "application/json")
@@ -220,7 +221,7 @@ async fn router_authentication_binding_body_and_validation_all_precede_enqueue()
     let valid = report(host_id, Uuid::new_v4(), Utc::now());
     let unauthorized = app
         .clone()
-        .oneshot(report_request("wrong-agent-token", &valid))
+        .oneshot(report_request("wrong-client-token", &valid))
         .await
         .unwrap();
     assert_error_envelope(
@@ -242,7 +243,7 @@ async fn router_authentication_binding_body_and_validation_all_precede_enqueue()
     assert_error_envelope(
         wrong_binding,
         StatusCode::FORBIDDEN,
-        "agent_host_mismatch",
+        "client_host_mismatch",
         false,
     )
     .await;
@@ -264,7 +265,7 @@ async fn router_authentication_binding_body_and_validation_all_precede_enqueue()
                 .header(header::CONTENT_TYPE, "application/json")
                 .body(Body::from(vec![
                     b' ';
-                    host_protocol::AGENT_REPORT_MAX_BODY_BYTES
+                    host_protocol::CLIENT_REPORT_MAX_BODY_BYTES
                         + 1
                 ]))
                 .unwrap(),
@@ -373,7 +374,7 @@ async fn concurrent_reports_are_batched_and_acknowledged_after_commit() {
         stats.batches < 12,
         "every report used its own batch: {stats:?}"
     );
-    let stored: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM agent_metric_reports")
+    let stored: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM client_metric_reports")
         .fetch_one(&database.pool)
         .await
         .unwrap();
@@ -434,14 +435,14 @@ async fn report_conflict_and_authentication_race_are_isolated_inside_one_batch()
     assert_eq!(stats.largest_batch, 3, "items did not share one batch");
 
     let owner: Uuid =
-        sqlx::query_scalar("SELECT host_id FROM agent_metric_reports WHERE report_id=?")
+        sqlx::query_scalar("SELECT host_id FROM client_metric_reports WHERE report_id=?")
             .bind(shared_id)
             .fetch_one(&database.pool)
             .await
             .unwrap();
     assert_eq!(owner, host_a);
     let valid_stored: i64 =
-        sqlx::query_scalar("SELECT COUNT(*) FROM agent_metric_reports WHERE report_id=?")
+        sqlx::query_scalar("SELECT COUNT(*) FROM client_metric_reports WHERE report_id=?")
             .bind(valid_id)
             .fetch_one(&database.pool)
             .await
@@ -474,7 +475,7 @@ async fn cancelled_waiter_remains_tracked_and_shutdown_drains_queued_work() {
     task.shutdown().await.unwrap();
 
     let stored: i64 =
-        sqlx::query_scalar("SELECT COUNT(*) FROM agent_metric_reports WHERE report_id=?")
+        sqlx::query_scalar("SELECT COUNT(*) FROM client_metric_reports WHERE report_id=?")
             .bind(report_id)
             .fetch_one(&database.pool)
             .await
@@ -548,7 +549,7 @@ async fn router_overload_is_fast_bounded_and_closed_writer_is_retryable() {
     }
     release_write_lock(blocker).await;
     task.shutdown().await.unwrap();
-    let stored: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM agent_metric_reports")
+    let stored: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM client_metric_reports")
         .fetch_one(&database.pool)
         .await
         .unwrap();

@@ -5,9 +5,9 @@
 仓库固定 Rust `1.98.0` 与 `.node-version` 中的 Node `26.7.0`。Server Web 使用 lockfile 对应的 npm。
 这个 Node 版本同时满足 Foundation Server 0.7.0 包的 engine 合同；React `19.2.8`、Vite `7.3.6` 与 TypeScript
 `5.8.3` 由 `@sarmg/admin-web` 的 `ADMIN_WEB_TOOLCHAIN` 精确门禁。Linux 常规开发可覆盖协议、服务
-端和大部分 Agent 逻辑；Server 的唯一目标是 `x86_64-unknown-linux-gnu`，所以完整 workspace 门禁和
+端和大部分 Client 逻辑；Server 的唯一目标是 `x86_64-unknown-linux-gnu`，所以完整 workspace 门禁和
 Server 启动必须在 x86_64 glibc Linux 执行。Windows MSI、macOS pkg 以及真实平台采集仍由相应系统和
-CI 验证，Windows `x86_64-pc-windows-msvc` Agent 不因 Server 的单平台边界而移除。
+CI 验证，Windows `x86_64-pc-windows-msvc` Client 不因 Server 的单平台边界而移除。
 
 ```bash
 rustup toolchain install 1.98.0
@@ -60,7 +60,7 @@ cargo +1.98.0 run -p host-monitor -- once --config /absolute/config.json
 
 `probe` 只证明采集；`pair` 创建/恢复请求并等待 activation；`status` 读取本地绑定；`once` 才同时覆盖
 采集和主通路投递。当前 React 页面没有 invite/activation 操作，所以不能只打开 activation URL 完成
-配对；开发联调需直接覆盖受保护 invite/activation API，Windows Tray 路径还可把一次性 code 交给 Agent
+配对；开发联调需直接覆盖受保护 invite/activation API，Windows Tray 路径还可把一次性 code 交给 Client
 提交。不要跳过配对后把 401 当作采集器故障。
 
 ## 2.4 安全地观察状态
@@ -71,9 +71,9 @@ cargo +1.98.0 run -p host-monitor -- once --config /absolute/config.json
 
 ## 2.5 第一次成功的验收定义
 
-一次当前代码可完成的练习应证明：Server readiness 正常；管理员能登录；Agent `probe` 返回受限合法
+一次当前代码可完成的练习应证明：Server readiness 正常；管理员能登录；Client `probe` 返回受限合法
 报告；通过管理 API 创建 invite 并完成 activation；`once` 返回成功；Host 列表 API 和 React JSON 中出现
-同一 Host 的 latest 摘要；重启 Agent 后继续使用同一当前绑定。把 React pairing 页面列为尚未满足的
+同一 Host 的 latest 摘要；重启 Client 后继续使用同一当前绑定。把 React pairing 页面列为尚未满足的
 验收项，而不是手工跳过后记为成功。
 
 ## 2.6 常见失败
@@ -83,12 +83,12 @@ cargo +1.98.0 run -p host-monitor -- once --config /absolute/config.json
 | Web 404 | `STATIC_DIR` 是否为已构建绝对路径 |
 | Server 拒绝数据库 | metadata、Schema、文件类型或实例锁 |
 | Pair 一直 pending | invite/code 是否有效、activation 是否调用；当前 React 页本身不能批准 |
-| TLS 失败 | CA、主机名、证书时间；Agent 没有关闭证书校验的开关 |
-| `once` 429/503 | Server 准入或 writer，Agent 应保留报告 |
+| TLS 失败 | CA、主机名、证书时间；Client 没有关闭证书校验的开关 |
+| `once` 429/503 | Server 准入或 writer，Client 应保留报告 |
 | 第二实例失败 | state directory 锁，这是预期保护 |
 
 ## 2.7 练习后质量门
 
-在 x86_64 GNU/Linux 运行 `cargo fmt`、workspace check/test 和 Web build；其他平台运行 Agent 自己的目标
+在 x86_64 GNU/Linux 运行 `cargo fmt`、workspace check/test 和 Web build；其他平台运行 Client 自己的目标
 门禁。此时只建立基线，不改 fingerprint、数据库或配置来“让测试通过”。如果基线失败，先记录环境与
 错误层次。

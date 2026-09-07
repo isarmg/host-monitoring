@@ -1,7 +1,6 @@
 [workspace]
 resolver = "3"
 members = [
-  "clients/host-monitor",
   "host-monitoring-server",
   "protocol",
 ]
@@ -12,7 +11,7 @@ edition = "2024"
 rust-version = "1.98"
 authors = ["sarmg <isarmg@163.com>"]
 license = "Apache-2.0"
-repository = "https://github.com/isarmg/host-monitoring"
+repository = "https://github.com/isarmg/host-monitoring-server"
 
 [workspace.dependencies]
 anyhow = "1"
@@ -29,8 +28,6 @@ sarmg-admin-axum = { git = "https://github.com/isarmg/sarmg-foundation-server.gi
 sarmg-admin-sqlite = { git = "https://github.com/isarmg/sarmg-foundation-server.git", rev = "77e7ad7af8e1bf62432bd6bdd8fa9aff54cb39d1", version = "=0.7.0" }
 sarmg-contracts = { git = "https://github.com/isarmg/sarmg-foundation-server.git", rev = "77e7ad7af8e1bf62432bd6bdd8fa9aff54cb39d1", version = "=0.7.0" }
 sarmg-error = { git = "https://github.com/isarmg/sarmg-foundation-server.git", rev = "77e7ad7af8e1bf62432bd6bdd8fa9aff54cb39d1", version = "=0.7.0" }
-sarmg-agent-runtime = { git = "https://github.com/isarmg/sarmg-foundation-agent.git", rev = "c7537cdbf22ee69298e93ec91b048f90de8fde40", version = "=0.6.0" }
-sarmg-agent-secret = { git = "https://github.com/isarmg/sarmg-foundation-agent.git", rev = "c7537cdbf22ee69298e93ec91b048f90de8fde40", version = "=0.6.0" }
 sarmg-fs-safety = { git = "https://github.com/isarmg/sarmg-foundation-server.git", rev = "77e7ad7af8e1bf62432bd6bdd8fa9aff54cb39d1", version = "=0.7.0" }
 sarmg-secure-http = { git = "https://github.com/isarmg/sarmg-foundation-server.git", rev = "77e7ad7af8e1bf62432bd6bdd8fa9aff54cb39d1", version = "=0.7.0" }
 sarmg-schema-identity = { git = "https://github.com/isarmg/sarmg-foundation-server.git", rev = "77e7ad7af8e1bf62432bd6bdd8fa9aff54cb39d1", version = "=0.7.0" }
@@ -43,17 +40,3 @@ uuid = { version = "1", features = ["serde", "v4"] }
 codegen-units = 1
 lto = "thin"
 strip = "symbols"
-[workspace.dependencies.sarmg-agent-error]
-git = "https://github.com/isarmg/sarmg-foundation-agent.git"
-rev = "c7537cdbf22ee69298e93ec91b048f90de8fde40"
-version = "=0.6.0"
-
-[workspace.dependencies.sarmg-agent-fs-safety]
-git = "https://github.com/isarmg/sarmg-foundation-agent.git"
-rev = "c7537cdbf22ee69298e93ec91b048f90de8fde40"
-version = "=0.6.0"
-
-[workspace.dependencies.sarmg-agent-secure-http]
-git = "https://github.com/isarmg/sarmg-foundation-agent.git"
-rev = "c7537cdbf22ee69298e93ec91b048f90de8fde40"
-version = "=0.6.0"

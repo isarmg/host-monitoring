@@ -50,7 +50,7 @@ latest 表示每个 Host 当前选定的最新有效报告，不等同于数据�
 ## 7.8 过载观测
 
 当前可直接取得的证据主要是 `/health/ready` 的 database/retention/writer 布尔值、分类日志、HTTP
-429/503，以及 Agent `status`/doctor 的 spool 状态。`RetentionMaintenanceStats` 只存在于进程内且启动方
+429/503，以及 Client `status`/doctor 的 spool 状态。`RetentionMaintenanceStats` 只存在于进程内且启动方
 丢弃 handle，Server 也没有 metrics API；队列深度、入队等待、batch/事务延迟、raw/aggregate 行数和
 maintenance 用时目前不能由产品端点完整观测。它们是应补的运维 instrumentation，不能写成已交付指标。
 

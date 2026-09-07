@@ -1,18 +1,19 @@
 use chrono::{DateTime, Utc};
 use host_protocol::{
-    AGENT_REPORT_MAX_AGENT_VERSION_BYTES, AGENT_REPORT_MAX_CAPABILITIES,
-    AGENT_REPORT_MAX_CAPABILITY_MESSAGE_BYTES, AGENT_REPORT_MAX_CAPABILITY_NAME_BYTES,
-    AGENT_REPORT_MAX_CAPABILITY_SOURCE_BYTES, AGENT_REPORT_MAX_CPU_CORES,
-    AGENT_REPORT_MAX_DISK_NAME_BYTES, AGENT_REPORT_MAX_DISKS, AGENT_REPORT_MAX_FILE_SYSTEM_BYTES,
-    AGENT_REPORT_MAX_GPU_ID_BYTES, AGENT_REPORT_MAX_GPU_NAME_BYTES,
-    AGENT_REPORT_MAX_GPU_SOURCE_BYTES, AGENT_REPORT_MAX_GPU_VENDOR_BYTES, AGENT_REPORT_MAX_GPUS,
-    AGENT_REPORT_MAX_HOST_ARCH_BYTES, AGENT_REPORT_MAX_HOST_OS_BYTES,
-    AGENT_REPORT_MAX_HOST_VERSION_BYTES, AGENT_REPORT_MAX_INTERVAL_SECONDS,
-    AGENT_REPORT_MAX_MOUNT_POINT_BYTES, AGENT_REPORT_MAX_NETWORK_NAME_BYTES,
-    AGENT_REPORT_MAX_NETWORKS, AGENT_REPORT_MAX_TEMPERATURE_ID_BYTES,
-    AGENT_REPORT_MAX_TEMPERATURE_LABEL_BYTES, AGENT_REPORT_MAX_TEMPERATURE_SOURCE_BYTES,
-    AGENT_REPORT_MAX_TEMPERATURES, AGENT_REPORT_MIN_INTERVAL_SECONDS, AGENT_REPORT_SCHEMA_VERSION,
-    AgentPairingRequest, AgentReport, Capability, HostIdentity,
+    CLIENT_REPORT_MAX_CAPABILITIES, CLIENT_REPORT_MAX_CAPABILITY_MESSAGE_BYTES,
+    CLIENT_REPORT_MAX_CAPABILITY_NAME_BYTES, CLIENT_REPORT_MAX_CAPABILITY_SOURCE_BYTES,
+    CLIENT_REPORT_MAX_CLIENT_VERSION_BYTES, CLIENT_REPORT_MAX_CPU_CORES,
+    CLIENT_REPORT_MAX_DISK_NAME_BYTES, CLIENT_REPORT_MAX_DISKS,
+    CLIENT_REPORT_MAX_FILE_SYSTEM_BYTES, CLIENT_REPORT_MAX_GPU_ID_BYTES,
+    CLIENT_REPORT_MAX_GPU_NAME_BYTES, CLIENT_REPORT_MAX_GPU_SOURCE_BYTES,
+    CLIENT_REPORT_MAX_GPU_VENDOR_BYTES, CLIENT_REPORT_MAX_GPUS, CLIENT_REPORT_MAX_HOST_ARCH_BYTES,
+    CLIENT_REPORT_MAX_HOST_OS_BYTES, CLIENT_REPORT_MAX_HOST_VERSION_BYTES,
+    CLIENT_REPORT_MAX_INTERVAL_SECONDS, CLIENT_REPORT_MAX_MOUNT_POINT_BYTES,
+    CLIENT_REPORT_MAX_NETWORK_NAME_BYTES, CLIENT_REPORT_MAX_NETWORKS,
+    CLIENT_REPORT_MAX_TEMPERATURE_ID_BYTES, CLIENT_REPORT_MAX_TEMPERATURE_LABEL_BYTES,
+    CLIENT_REPORT_MAX_TEMPERATURE_SOURCE_BYTES, CLIENT_REPORT_MAX_TEMPERATURES,
+    CLIENT_REPORT_MIN_INTERVAL_SECONDS, CLIENT_REPORT_SCHEMA_VERSION, Capability,
+    ClientPairingRequest, ClientReport, HostIdentity,
 };
 use serde::{Deserialize, Serialize};
 
@@ -20,11 +21,11 @@ use crate::error::{Error, Result};
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct CreateAgentInstanceRequest {
+pub struct CreateClientInstanceRequest {
     pub display_name: Option<String>,
 }
 
-impl CreateAgentInstanceRequest {
+impl CreateClientInstanceRequest {
     pub fn validated(self) -> Result<String> {
         let display_name = self
             .display_name
@@ -69,13 +70,13 @@ mod instance_name_tests {
     #[test]
     fn instance_creation_has_no_expiration_option() {
         assert!(
-            serde_json::from_value::<CreateAgentInstanceRequest>(
+            serde_json::from_value::<CreateClientInstanceRequest>(
                 serde_json::json!({"display_name":"new","expires_in_minutes":15})
             )
             .is_err()
         );
         assert!(
-            serde_json::from_value::<CreateAgentInstanceRequest>(
+            serde_json::from_value::<CreateClientInstanceRequest>(
                 serde_json::json!({"display_name":"new"})
             )
             .unwrap()
@@ -90,7 +91,7 @@ mod instance_name_tests {
             for count in [32, 33] {
                 let name = character.repeat(count);
                 assert_eq!(
-                    CreateAgentInstanceRequest {
+                    CreateClientInstanceRequest {
                         display_name: Some(name.clone()),
                     }
                     .validated()
@@ -109,7 +110,7 @@ mod instance_name_tests {
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub struct AgentInstanceSummary {
+pub struct ClientInstanceSummary {
     pub request_id: String,
     pub instance_id: String,
     pub display_name: String,
@@ -118,18 +119,18 @@ pub struct AgentInstanceSummary {
 }
 
 #[derive(Debug, Serialize)]
-pub struct CreatedAgentInstance {
+pub struct CreatedClientInstance {
     #[serde(flatten)]
-    pub summary: AgentInstanceSummary,
+    pub summary: ClientInstanceSummary,
     pub activation_code: String,
 }
 
 #[derive(Debug, Serialize)]
-pub struct AgentPairingPublicSummary {
+pub struct ClientPairingPublicSummary {
     pub request_id: String,
     pub os: String,
     pub arch: String,
-    pub agent_version: String,
+    pub client_version: String,
     pub status: String,
     pub expires_at: DateTime<Utc>,
 }
@@ -155,7 +156,7 @@ pub struct HostSummary {
     pub os_version: Option<String>,
     pub kernel_version: Option<String>,
     pub arch: String,
-    pub agent_version: String,
+    pub client_version: String,
     pub registered_at: DateTime<Utc>,
     pub last_seen_at: DateTime<Utc>,
     pub latest_collected_at: Option<DateTime<Utc>>,
@@ -183,7 +184,7 @@ pub struct HostListQuery {
 #[derive(Debug, Serialize)]
 pub struct HostDetailResponse {
     pub host: HostSummary,
-    pub latest: Option<AgentReport>,
+    pub latest: Option<ClientReport>,
 }
 
 #[derive(Debug, Serialize)]
@@ -209,7 +210,7 @@ pub struct HistoryQuery {
     pub limit: Option<i64>,
 }
 
-pub fn validate_pairing(request: &AgentPairingRequest) -> Result<()> {
+pub fn validate_pairing(request: &ClientPairingRequest) -> Result<()> {
     validate_host(&request.host)?;
     validate_hash("token_hash", &request.token_hash)?;
     validate_hash("polling_secret_hash", &request.polling_secret_hash)?;
@@ -221,16 +222,16 @@ pub fn validate_pairing(request: &AgentPairingRequest) -> Result<()> {
     Ok(())
 }
 
-pub fn validate_report(report: &AgentReport) -> Result<MetricSummary> {
+pub fn validate_report(report: &ClientReport) -> Result<MetricSummary> {
     validate_host(&report.host)?;
     canonical_uuid(&report.report_id, "report_id")?;
-    if report.schema_version != AGENT_REPORT_SCHEMA_VERSION {
+    if report.schema_version != CLIENT_REPORT_SCHEMA_VERSION {
         return Err(Error::BadRequest(
-            "unsupported agent report schema_version".into(),
+            "unsupported client report schema_version".into(),
         ));
     }
     if !report.interval_seconds.is_finite()
-        || !(AGENT_REPORT_MIN_INTERVAL_SECONDS..=AGENT_REPORT_MAX_INTERVAL_SECONDS as f64)
+        || !(CLIENT_REPORT_MIN_INTERVAL_SECONDS..=CLIENT_REPORT_MAX_INTERVAL_SECONDS as f64)
             .contains(&report.interval_seconds)
     {
         return Err(Error::BadRequest(
@@ -242,12 +243,12 @@ pub fn validate_report(report: &AgentReport) -> Result<MetricSummary> {
             "collected_at is too far in the future".into(),
         ));
     }
-    if report.capabilities.len() > AGENT_REPORT_MAX_CAPABILITIES
-        || report.system.cpu.per_core_percent.len() > AGENT_REPORT_MAX_CPU_CORES
-        || report.system.networks.len() > AGENT_REPORT_MAX_NETWORKS
-        || report.system.disks.len() > AGENT_REPORT_MAX_DISKS
-        || report.system.temperatures.len() > AGENT_REPORT_MAX_TEMPERATURES
-        || report.system.gpus.len() > AGENT_REPORT_MAX_GPUS
+    if report.capabilities.len() > CLIENT_REPORT_MAX_CAPABILITIES
+        || report.system.cpu.per_core_percent.len() > CLIENT_REPORT_MAX_CPU_CORES
+        || report.system.networks.len() > CLIENT_REPORT_MAX_NETWORKS
+        || report.system.disks.len() > CLIENT_REPORT_MAX_DISKS
+        || report.system.temperatures.len() > CLIENT_REPORT_MAX_TEMPERATURES
+        || report.system.gpus.len() > CLIENT_REPORT_MAX_GPUS
     {
         return Err(Error::BadRequest("report contains too many devices".into()));
     }
@@ -272,18 +273,18 @@ pub fn validate_report(report: &AgentReport) -> Result<MetricSummary> {
         validate_required(
             "capability.name",
             &capability.name,
-            AGENT_REPORT_MAX_CAPABILITY_NAME_BYTES,
+            CLIENT_REPORT_MAX_CAPABILITY_NAME_BYTES,
         )?;
         validate_required(
             "capability.source",
             &capability.source,
-            AGENT_REPORT_MAX_CAPABILITY_SOURCE_BYTES,
+            CLIENT_REPORT_MAX_CAPABILITY_SOURCE_BYTES,
         )?;
         if let Some(message) = &capability.message {
             validate_optional(
                 "capability.message",
                 message,
-                AGENT_REPORT_MAX_CAPABILITY_MESSAGE_BYTES,
+                CLIENT_REPORT_MAX_CAPABILITY_MESSAGE_BYTES,
             )?;
         }
     }
@@ -291,7 +292,7 @@ pub fn validate_report(report: &AgentReport) -> Result<MetricSummary> {
         validate_required(
             "network.name",
             &network.name,
-            AGENT_REPORT_MAX_NETWORK_NAME_BYTES,
+            CLIENT_REPORT_MAX_NETWORK_NAME_BYTES,
         )?;
         nonnegative(
             "network.received_bytes_per_second",
@@ -303,16 +304,16 @@ pub fn validate_report(report: &AgentReport) -> Result<MetricSummary> {
         )?;
     }
     for disk in &report.system.disks {
-        validate_optional("disk.name", &disk.name, AGENT_REPORT_MAX_DISK_NAME_BYTES)?;
+        validate_optional("disk.name", &disk.name, CLIENT_REPORT_MAX_DISK_NAME_BYTES)?;
         validate_required(
             "disk.mount_point",
             &disk.mount_point,
-            AGENT_REPORT_MAX_MOUNT_POINT_BYTES,
+            CLIENT_REPORT_MAX_MOUNT_POINT_BYTES,
         )?;
         validate_optional(
             "disk.file_system",
             &disk.file_system,
-            AGENT_REPORT_MAX_FILE_SYSTEM_BYTES,
+            CLIENT_REPORT_MAX_FILE_SYSTEM_BYTES,
         )?;
         if disk.available_bytes > disk.total_bytes {
             return Err(Error::BadRequest(
@@ -329,17 +330,17 @@ pub fn validate_report(report: &AgentReport) -> Result<MetricSummary> {
         validate_optional(
             "temperature.id",
             &sensor.id,
-            AGENT_REPORT_MAX_TEMPERATURE_ID_BYTES,
+            CLIENT_REPORT_MAX_TEMPERATURE_ID_BYTES,
         )?;
         validate_optional(
             "temperature.label",
             &sensor.label,
-            AGENT_REPORT_MAX_TEMPERATURE_LABEL_BYTES,
+            CLIENT_REPORT_MAX_TEMPERATURE_LABEL_BYTES,
         )?;
         validate_optional(
             "temperature.source",
             &sensor.source,
-            AGENT_REPORT_MAX_TEMPERATURE_SOURCE_BYTES,
+            CLIENT_REPORT_MAX_TEMPERATURE_SOURCE_BYTES,
         )?;
         for value in [sensor.celsius, sensor.max_celsius, sensor.critical_celsius]
             .into_iter()
@@ -351,10 +352,18 @@ pub fn validate_report(report: &AgentReport) -> Result<MetricSummary> {
         }
     }
     for gpu in &report.system.gpus {
-        validate_optional("gpu.id", &gpu.id, AGENT_REPORT_MAX_GPU_ID_BYTES)?;
-        validate_optional("gpu.vendor", &gpu.vendor, AGENT_REPORT_MAX_GPU_VENDOR_BYTES)?;
-        validate_optional("gpu.name", &gpu.name, AGENT_REPORT_MAX_GPU_NAME_BYTES)?;
-        validate_optional("gpu.source", &gpu.source, AGENT_REPORT_MAX_GPU_SOURCE_BYTES)?;
+        validate_optional("gpu.id", &gpu.id, CLIENT_REPORT_MAX_GPU_ID_BYTES)?;
+        validate_optional(
+            "gpu.vendor",
+            &gpu.vendor,
+            CLIENT_REPORT_MAX_GPU_VENDOR_BYTES,
+        )?;
+        validate_optional("gpu.name", &gpu.name, CLIENT_REPORT_MAX_GPU_NAME_BYTES)?;
+        validate_optional(
+            "gpu.source",
+            &gpu.source,
+            CLIENT_REPORT_MAX_GPU_SOURCE_BYTES,
+        )?;
         if let Some(value) = gpu.utilization_percent {
             percent("gpu.utilization_percent", value)?;
         }
@@ -383,26 +392,26 @@ pub fn validate_report(report: &AgentReport) -> Result<MetricSummary> {
 
 pub fn validate_host(host: &HostIdentity) -> Result<()> {
     canonical_uuid(&host.id, "host.id")?;
-    validate_required("host.os", &host.os, AGENT_REPORT_MAX_HOST_OS_BYTES)?;
-    validate_required("host.arch", &host.arch, AGENT_REPORT_MAX_HOST_ARCH_BYTES)?;
+    validate_required("host.os", &host.os, CLIENT_REPORT_MAX_HOST_OS_BYTES)?;
+    validate_required("host.arch", &host.arch, CLIENT_REPORT_MAX_HOST_ARCH_BYTES)?;
     validate_required(
-        "host.agent_version",
-        &host.agent_version,
-        AGENT_REPORT_MAX_AGENT_VERSION_BYTES,
+        "host.client_version",
+        &host.client_version,
+        CLIENT_REPORT_MAX_CLIENT_VERSION_BYTES,
     )?;
     validate_optional(
         "host.os_version",
         host.os_version.as_deref().unwrap_or(""),
-        AGENT_REPORT_MAX_HOST_VERSION_BYTES,
+        CLIENT_REPORT_MAX_HOST_VERSION_BYTES,
     )?;
     validate_optional(
         "host.kernel_version",
         host.kernel_version.as_deref().unwrap_or(""),
-        AGENT_REPORT_MAX_HOST_VERSION_BYTES,
+        CLIENT_REPORT_MAX_HOST_VERSION_BYTES,
     )?;
-    if host.agent_version != env!("CARGO_PKG_VERSION") {
+    if host.client_version != env!("CARGO_PKG_VERSION") {
         return Err(Error::BadRequest(format!(
-            "unsupported host.agent_version; expected {}",
+            "unsupported host.client_version; expected {}",
             env!("CARGO_PKG_VERSION")
         )));
     }
@@ -461,7 +470,7 @@ fn nonnegative(field: &str, value: f64) -> Result<()> {
     Ok(())
 }
 
-fn metric_summary(report: &AgentReport) -> MetricSummary {
+fn metric_summary(report: &ClientReport) -> MetricSummary {
     let gpu_memory = report
         .system
         .gpus

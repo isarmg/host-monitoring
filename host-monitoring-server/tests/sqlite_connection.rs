@@ -149,7 +149,7 @@ async fn exact_current_schema_survives_close_and_reopen() {
     let now = Utc::now();
     sqlx::query(
         "INSERT INTO monitored_hosts(\
-           host_id,name,os,arch,agent_version,registered_at,last_seen_at\
+           host_id,name,os,arch,client_version,registered_at,last_seen_at\
          ) VALUES(?,?,?,?,?,?,?)",
     )
     .bind(host_id)
@@ -164,7 +164,7 @@ async fn exact_current_schema_survives_close_and_reopen() {
     .expect("seed persistent host");
 
     let invalid_credential = sqlx::query(
-        "INSERT INTO agent_credentials(credential_id,host_id,token_hash,issued_at) \
+        "INSERT INTO client_credentials(credential_id,host_id,token_hash,issued_at) \
          VALUES(?,?,?,?)",
     )
     .bind(Uuid::new_v4())
@@ -247,7 +247,7 @@ async fn readiness_rejects_live_schema_drift() {
     assert!(store::ready(&pool).await);
     assert!(store::retention_ready(&pool).await);
 
-    sqlx::query("DROP TABLE agent_metric_hourly_aggregates")
+    sqlx::query("DROP TABLE client_metric_hourly_aggregates")
         .execute(&pool)
         .await
         .unwrap();

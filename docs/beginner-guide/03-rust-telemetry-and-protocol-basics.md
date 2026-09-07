@@ -2,7 +2,7 @@
 
 ## 3.1 Workspace 依赖方向
 
-`host-protocol` 位于依赖图底部，Agent 与 Server 都依赖它。协议 crate 不应反向依赖任一运行时，也不
+`host-protocol` 位于依赖图底部，Client 与 Server 都依赖它。协议 crate 不应反向依赖任一运行时，也不
 应读取环境、数据库或文件。这样相同 DTO、枚举和边界由编译器在两端共同验证。
 
 ## 3.2 一份报告不是任意 JSON
@@ -12,9 +12,9 @@
 
 ## 3.3 跨语言整数
 
-JavaScript 对大于 `2^53-1` 的整数不能精确表示。Agent wire protocol 的大计数使用明确的安全编码与解析
+JavaScript 对大于 `2^53-1` 的整数不能精确表示。Client wire protocol 的大计数使用明确的安全编码与解析
 辅助模块；移动宿主不能先把它读成不精确 Number 再转换。当前 Web 只消费 Server 汇总后的有限数值，
-没有读取完整 Agent report；若未来把计数器加入管理 API，才必须同步设计浏览器表示与 guard。
+没有读取完整 Client report；若未来把计数器加入管理 API，才必须同步设计浏览器表示与 guard。
 
 ## 3.4 采集器设计
 
@@ -44,7 +44,7 @@ JavaScript 对大于 `2^53-1` 的整数不能精确表示。Agent wire protocol 
 ## 3.8 修改协议的联动清单
 
 1. 修改 `host-protocol` 的 DTO、校验与测试。
-2. 更新 Agent 构造逻辑和所有平台 fixture。
+2. 更新 Client 构造逻辑和所有平台 fixture。
 3. 更新 Server 验证、持久化、聚合与 API 输出。
 4. 若该字段进入管理 API，再更新 Web 类型、exact guard 与展示；否则记录 Web 不消费它。
 5. 更新当前协议身份、文档和发布合同。
@@ -52,6 +52,6 @@ JavaScript 对大于 `2^53-1` 的整数不能精确表示。Agent wire protocol 
 
 ## 3.9 动手练习
 
-选择一个只读标量，从平台采集器跟到 `AgentReport`、JSON fixture、Server 入队、SQLite 标量列和 Host
+选择一个只读标量，从平台采集器跟到 `ClientReport`、JSON fixture、Server 入队、SQLite 标量列和 Host
 列表 API。再检查当前 Web 是否消费该 summary 字段。记录每层的单位、nullable 语义和最大值；若无法
 确定，说明字段文档或测试仍需加强。

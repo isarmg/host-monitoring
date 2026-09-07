@@ -9,7 +9,8 @@ use host_monitoring_server::{
     token_hash,
 };
 use host_protocol::{
-    AgentHealth, AgentReport, Capability, CpuSnapshot, HostIdentity, MemorySnapshot, SystemSnapshot,
+    Capability, ClientHealth, ClientReport, CpuSnapshot, HostIdentity, MemorySnapshot,
+    SystemSnapshot,
 };
 use sqlx::{Sqlite, SqlitePool, pool::PoolConnection};
 use tempfile::TempDir;
@@ -37,11 +38,11 @@ impl TestDatabase {
 
     async fn add_host(&self, name: &str) -> (Uuid, String) {
         let host_id = Uuid::new_v4();
-        let token = format!("agent-token-{host_id}");
+        let token = format!("client-token-{host_id}");
         let now = Utc::now();
         sqlx::query(
             r#"INSERT INTO monitored_hosts(
-                   host_id,name,os,arch,agent_version,capabilities,
+                   host_id,name,os,arch,client_version,capabilities,
                    registered_at,last_seen_at,lifecycle_status
                ) VALUES(?,?,'linux','x86_64','test','[]',?,?,'active')"#,
         )
@@ -53,7 +54,7 @@ impl TestDatabase {
         .await
         .unwrap();
         sqlx::query(
-            "INSERT INTO agent_credentials(credential_id,host_id,token_hash,issued_at) \
+            "INSERT INTO client_credentials(credential_id,host_id,token_hash,issued_at) \
              VALUES(?,?,?,?)",
         )
         .bind(Uuid::new_v4())
@@ -94,14 +95,14 @@ async fn insert_raw(
     temperature: Option<f64>,
 ) {
     sqlx::query(
-        r#"INSERT INTO agent_metric_reports(
+        r#"INSERT INTO client_metric_reports(
                report_id,host_id,schema_version,collected_at,received_at,interval_seconds,payload,
                cpu_usage_percent,memory_usage_percent,max_temperature_celsius
            ) VALUES(?,?,?,?,?,10,NULL,?,?,?)"#,
     )
     .bind(report_id)
     .bind(host_id)
-    .bind(host_protocol::AGENT_REPORT_SCHEMA_VERSION)
+    .bind(host_protocol::CLIENT_REPORT_SCHEMA_VERSION)
     .bind(collected_at)
     .bind(collected_at + chrono::Duration::seconds(1))
     .bind(cpu)
@@ -113,14 +114,14 @@ async fn insert_raw(
 }
 
 async fn raw_count(pool: &SqlitePool) -> i64 {
-    sqlx::query_scalar("SELECT COUNT(*) FROM agent_metric_reports")
+    sqlx::query_scalar("SELECT COUNT(*) FROM client_metric_reports")
         .fetch_one(pool)
         .await
         .unwrap()
 }
 
 async fn aggregate_count(pool: &SqlitePool) -> i64 {
-    sqlx::query_scalar("SELECT COUNT(*) FROM agent_metric_hourly_aggregates")
+    sqlx::query_scalar("SELECT COUNT(*) FROM client_metric_hourly_aggregates")
         .fetch_one(pool)
         .await
         .unwrap()
@@ -185,7 +186,7 @@ async fn utc_boundaries_nulls_latest_and_aggregate_expiry_are_exact() {
         .await;
     }
     sqlx::query(
-        r#"UPDATE agent_metric_reports SET
+        r#"UPDATE client_metric_reports SET
                network_received_bytes_per_second=100,
                network_transmitted_bytes_per_second=200,
                disk_read_bytes_per_second=300,
@@ -249,7 +250,7 @@ async fn utc_boundaries_nulls_latest_and_aggregate_expiry_are_exact() {
     assert_eq!(outcome.deleted_hourly_aggregates, 1);
 
     let remaining: Vec<Uuid> =
-        sqlx::query_scalar("SELECT report_id FROM agent_metric_reports ORDER BY report_id")
+        sqlx::query_scalar("SELECT report_id FROM client_metric_reports ORDER BY report_id")
             .fetch_all(&database.pool)
             .await
             .unwrap();
@@ -272,7 +273,7 @@ async fn utc_boundaries_nulls_latest_and_aggregate_expiry_are_exact() {
                   disk_written_bytes_per_second_count,disk_written_bytes_per_second_avg,
                   gpu_utilization_percent_count,gpu_utilization_percent_avg,
                   gpu_memory_usage_percent_count,gpu_memory_usage_percent_avg
-             FROM agent_metric_hourly_aggregates
+             FROM client_metric_hourly_aggregates
             WHERE host_id=? AND bucket_start=?"#,
     )
     .bind(host_id)
@@ -409,7 +410,7 @@ async fn batches_are_bounded_and_completed_reruns_are_idempotent() {
 
     let before: (i64, i64, f64) = sqlx::query_as(
         "SELECT sample_count,cpu_usage_percent_count,cpu_usage_percent_avg \
-         FROM agent_metric_hourly_aggregates WHERE host_id=?",
+         FROM client_metric_hourly_aggregates WHERE host_id=?",
     )
     .bind(host_id)
     .fetch_one(&database.pool)
@@ -420,7 +421,7 @@ async fn batches_are_bounded_and_completed_reruns_are_idempotent() {
     assert_eq!(rerun.aggregated_reports, 0);
     let after: (i64, i64, f64) = sqlx::query_as(
         "SELECT sample_count,cpu_usage_percent_count,cpu_usage_percent_avg \
-         FROM agent_metric_hourly_aggregates WHERE host_id=?",
+         FROM client_metric_hourly_aggregates WHERE host_id=?",
     )
     .bind(host_id)
     .fetch_one(&database.pool)
@@ -447,7 +448,7 @@ async fn aggregate_commit_survives_delete_failure_and_restart_without_double_cou
     .await;
     sqlx::query(
         r#"CREATE TRIGGER fail_retention_delete
-           BEFORE DELETE ON agent_metric_reports
+           BEFORE DELETE ON client_metric_reports
            WHEN OLD.aggregated_at IS NOT NULL
            BEGIN SELECT RAISE(FAIL,'forced retention delete failure'); END"#,
     )
@@ -461,14 +462,14 @@ async fn aggregate_commit_survives_delete_failure_and_restart_without_double_cou
             .is_err()
     );
     let marker: Option<DateTime<Utc>> =
-        sqlx::query_scalar("SELECT aggregated_at FROM agent_metric_reports WHERE report_id=?")
+        sqlx::query_scalar("SELECT aggregated_at FROM client_metric_reports WHERE report_id=?")
             .bind(report_id)
             .fetch_one(&database.pool)
             .await
             .unwrap();
     assert!(marker.is_some(), "aggregate transaction was not durable");
     let count_before: i64 =
-        sqlx::query_scalar("SELECT sample_count FROM agent_metric_hourly_aggregates")
+        sqlx::query_scalar("SELECT sample_count FROM client_metric_hourly_aggregates")
             .fetch_one(&database.pool)
             .await
             .unwrap();
@@ -491,7 +492,7 @@ async fn aggregate_commit_survives_delete_failure_and_restart_without_double_cou
     assert_eq!(retry.aggregated_reports, 0);
     assert_eq!(retry.deleted_raw_reports, 1);
     let count_after: i64 =
-        sqlx::query_scalar("SELECT sample_count FROM agent_metric_hourly_aggregates")
+        sqlx::query_scalar("SELECT sample_count FROM client_metric_hourly_aggregates")
             .fetch_one(&reopened)
             .await
             .unwrap();
@@ -568,9 +569,9 @@ async fn shutdown_cancels_a_waiting_write_lock_without_waiting_for_sqlite_busy_t
         .unwrap();
 }
 
-fn report(host_id: Uuid, report_id: Uuid, collected_at: DateTime<Utc>) -> AgentReport {
-    AgentReport {
-        schema_version: host_protocol::AGENT_REPORT_SCHEMA_VERSION,
+fn report(host_id: Uuid, report_id: Uuid, collected_at: DateTime<Utc>) -> ClientReport {
+    ClientReport {
+        schema_version: host_protocol::CLIENT_REPORT_SCHEMA_VERSION,
         report_id: report_id.to_string(),
         collected_at,
         host: HostIdentity {
@@ -579,7 +580,7 @@ fn report(host_id: Uuid, report_id: Uuid, collected_at: DateTime<Utc>) -> AgentR
             os_version: Some("test-os".into()),
             kernel_version: Some("test-kernel".into()),
             arch: "x86_64".into(),
-            agent_version: env!("CARGO_PKG_VERSION").into(),
+            client_version: env!("CARGO_PKG_VERSION").into(),
         },
         interval_seconds: 10.0,
         system: SystemSnapshot {
@@ -603,7 +604,7 @@ fn report(host_id: Uuid, report_id: Uuid, collected_at: DateTime<Utc>) -> AgentR
             gpus: vec![],
         },
         capabilities: vec![Capability::available("cpu", "test")],
-        agent: AgentHealth {
+        client: ClientHealth {
             spool_pending_batches: 0,
             collector_errors: 0,
         },
@@ -673,7 +674,7 @@ async fn bounded_maintenance_does_not_starve_the_serial_telemetry_writer() {
 
     for report_id in report_ids {
         let current: bool = sqlx::query_scalar(
-            "SELECT EXISTS(SELECT 1 FROM agent_metric_reports WHERE report_id=?)",
+            "SELECT EXISTS(SELECT 1 FROM client_metric_reports WHERE report_id=?)",
         )
         .bind(report_id)
         .fetch_one(&database.pool)

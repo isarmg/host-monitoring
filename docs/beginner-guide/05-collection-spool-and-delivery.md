@@ -1,8 +1,8 @@
 # 05. 采集、Spool 与投递可靠性
 
-## 5.1 Agent 启动顺序
+## 5.1 Client 启动顺序
 
-Agent 先严格解析当前配置，验证 state directory，取得单实例锁，读取或建立 Host identity，恢复配对与
+Client 先严格解析当前配置，验证 state directory，取得单实例锁，读取或建立 Host identity，恢复配对与
 spool，再初始化采集器和投递器。只有长期运行所需组件都就绪后才报告 service ready。
 
 ## 5.2 快速与慢速采样
@@ -23,7 +23,7 @@ spool 是磁盘上的有界待投递队列，不是无限历史库。报告在�
 ## 5.5 投递轮次
 
 投递器按文件名 FIFO 从 spool 每次取一条，每轮最多连续处理 32 条；HTTP report API 本身不是多报告
-batch。使用绑定了 Agent identity 的 credential 快照与 HTTPS；只有 debug 构建允许 loopback HTTP，
+batch。使用绑定了 Client identity 的 credential 快照与 HTTPS；只有 debug 构建允许 loopback HTTP，
 正式构建不接受该策略，也没有持久配置开关可启用远程明文 report/OTLP。连接失败、429、503 等可重试
 结果保留队首并施加退避；严格合同确认的永久内容拒绝才丢当前报告，严格 401 才进入重新授权。
 
@@ -48,9 +48,9 @@ spool。配置管理系统可以部署配置，但不能复制一台机器的状
 
 ## 5.8 可选 OTLP
 
-OTLP 是编译期可选 feature，默认 Agent 不包含它。启用后使用独立 Token 和目标，不能复用设备
+OTLP 是编译期可选 feature，默认 Client 不包含它。启用后使用独立 Token 和目标，不能复用设备
 credential，也不能把第三方错误正文原样写日志。只有 Host Monitoring `202` 已确认且 spool 已删除后，
-报告才以 best-effort 方式进入 128 容量 OTLP queue；queue 满、Collector 失败或 Agent 停机都允许漏导，
+报告才以 best-effort 方式进入 128 容量 OTLP queue；queue 满、Collector 失败或 Client 停机都允许漏导，
 不会恢复 spool 或改变主通路结果。该次序避免重复 OTLP，但明确牺牲次要通路的完整性。
 
 ## 5.9 故障场景推演

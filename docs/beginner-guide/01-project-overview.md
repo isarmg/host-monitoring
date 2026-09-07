@@ -5,7 +5,7 @@
 Host Monitoring 是独立部署的主机遥测系统：每台受管主机运行 `host-monitor`，控制面运行
 `host-monitoring-server`。客户端只主动向服务端建立 HTTPS 连接，服务端不会借监控功能在主机上执行
 命令或修改配置。跨平台客户端与单平台控制面是两个不同边界：Server 只支持
-`x86_64-unknown-linux-gnu`，Agent 继续支持 Linux、Windows、macOS 与移动宿主合同。
+`x86_64-unknown-linux-gnu`，Client 继续支持 Linux、Windows、macOS 与移动宿主合同。
 
 ## 1.2 四个组成部分
 
@@ -40,7 +40,7 @@ fallback；备份、恢复和具体版本转换只有在 `sarmg-upgrade` 明确�
 ## 1.5 两条数据通路
 
 主通路是 `host-monitor -> Server -> SQLite`，决定控制台看到的当前与历史数据。可选 OTLP 是额外导出，
-其失败不能伪造主通路成功，也不能让无界缓存拖垮 Agent。每条通路均有独立超时、容量和错误分类。
+其失败不能伪造主通路成功，也不能让无界缓存拖垮 Client。每条通路均有独立超时、容量和错误分类。
 
 ## 1.6 仓库地图
 
@@ -50,27 +50,27 @@ host-monitoring/
 ├─ clients/host-monitor/      跨平台客户端、库和安装资产
 ├─ clients/web/               React/Vite 管理员认证与 Host 列表
 ├─ host-monitoring-server/    API、SQLite 与发行合同
-├─ config/                    Server env 与 Agent JSON 的当前样例
+├─ config/                    Server env 与 Client JSON 的当前样例
 ├─ deploy/                    Server systemd 源资产
 ├─ scripts/                   发布和供应链检查
 └─ docs/                      教程、流程、取舍与运维
 ```
 
-阅读代码时先看 `protocol`，再分别跟踪 Agent 和 Server；否则容易把同名字段的传输语义与存储语义混为
+阅读代码时先看 `protocol`，再分别跟踪 Client 和 Server；否则容易把同名字段的传输语义与存储语义混为
 一谈。
 
 ## 1.7 主要架构取舍
 
 - SQLite 换取单机部署简单，但只允许一个写入控制面。
 - 本地 spool 换取短期断网可恢复，但必须严格限制容量并保护目录。
-- Agent 原生三平台安装换取真实传感器与服务管理，代价是更大的测试矩阵；Server 不进入该矩阵。
+- Client 原生三平台安装换取真实传感器与服务管理，代价是更大的测试矩阵；Server 不进入该矩阵。
 - 移动端只提供宿主库，尊重后台限制，代价是采样周期由平台决定。
 - 严格当前版本减少长期多版本负担，代价是任何外部转换都必须有明确停机流程和已实现的支持边。
 
 ## 1.8 新手常见误解
 
 1. “收到报告”不等于已经持久化；Server 只有事务提交后才返回 `202`。
-2. HTTP 超时不等于服务端未处理；Agent 必须依据可重试分类保留原报告 ID。
+2. HTTP 超时不等于服务端未处理；Client 必须依据可重试分类保留原报告 ID。
 3. 配对码不是长期 credential；它只用于一次性授权流程。
 4. 卸载程序默认保留本地状态不表示该状态可被另一发行读取；再次安装前必须验证当前 identity。
 5. 当前 Web 没有图表和 history 视图；页面中的列表 JSON 只反映 Host summary/latest 标量。

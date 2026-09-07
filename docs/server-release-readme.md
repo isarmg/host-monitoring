@@ -7,7 +7,7 @@ host-monitoring-server-0.9.3-x86_64-unknown-linux-gnu.tar.gz
 host-monitoring-server-0.9.3-x86_64-unknown-linux-gnu.tar.gz.sha256
 ```
 
-它不是源码构建指南，也不描述各平台 Agent 的安装。下文所有相对路径都必须在当前发行包内存在；源码
+它不是源码构建指南，也不描述各平台 Client 的安装。下文所有相对路径都必须在当前发行包内存在；源码
 仓库不是运行时依赖。
 
 ## 1. 支持边界
@@ -163,7 +163,7 @@ getent passwd isarmg-host
 id isarmg-host
 ```
 
-不要复用普通用户、登录账户、Web 管理员或 Agent 身份。
+不要复用普通用户、登录账户、Web 管理员或 Client 身份。
 
 ## 7. 创建生产配置
 
@@ -300,12 +300,12 @@ sudo /opt/isarmg/host-monitoring/releases/0.9.3/bin/host-monitoring-server \
 ```
 
 完成 TLS 代理后，还要从外部可信客户端验证 DNS/证书链、hashed Web assets、username 登录、Session、
-CSRF、退出，以及 Agent pairing/activation/report 链路。
+CSRF、退出，以及 Client pairing/activation/report 链路。
 
 ## 10. HTTPS 反向代理
 
 ```text
-Browser / Agent --HTTPS--> 可信反向代理 --loopback HTTP--> 127.0.0.1:18105 Server
+Browser / Client --HTTPS--> 可信反向代理 --loopback HTTP--> 127.0.0.1:18105 Server
 ```
 
 最小 Caddy 示例：
@@ -335,7 +335,7 @@ Server 不终止 TLS。代理负责证书、私钥、续期、HSTS 和公网限�
 | `GET /api/v2/auth/session` | 管理员 Cookie | Session 恢复并轮换 CSRF |
 | `POST /api/v2/auth/logout` | 管理员 Cookie + CSRF | 撤销当前 Session |
 | `/api/v2/monitoring/*` | 管理员 Cookie；写操作另需 CSRF | Host、历史、邀请、备注与删除 |
-| `/api/v2/host-monitor/*` | pairing capability 或 Agent Bearer | 配对、激活与遥测 |
+| `/api/v2/host-monitor/*` | pairing capability 或 Client Bearer | 配对、激活与遥测 |
 
 当前 React 页面只覆盖登录、Session 恢复、退出和 Host 列表 JSON。后端有详情、历史、邀请、激活、备注
 和删除能力，不表示 Web 已实现完整操作台。
@@ -351,7 +351,7 @@ sudo journalctl --unit host-monitoring-server.service --follow
 ```
 
 记录时间、HTTP status、错误 `code`、请求 ID、readiness、磁盘和只读摘要。不要公开密码、Cookie、CSRF、
-Agent credential、activation code、数据库或遥测正文。
+Client credential、activation code、数据库或遥测正文。
 
 ### 12.2 数据库锁
 
@@ -380,7 +380,7 @@ reset 的密码位于 argv，可能暴露给 Shell history 或同机进程列表
 ### 12.4 容量与保留
 
 监控 SQLite/WAL/SHM、容量、inode、I/O 延迟、队列饱和、429/503、writer readiness、raw/hourly 表、
-systemd 重启、代理 5xx、证书到期和 Agent 离线比例。
+systemd 重启、代理 5xx、证书到期和 Client 离线比例。
 
 retention worker 只覆盖 raw report 与 hourly aggregate，不会全局清理 `audit_events` 或全部过期/撤销
 Session；invite/pairing 也只有有界定向清理。不能把 raw retention 解释为所有控制面表的保留策略。
@@ -425,17 +425,17 @@ readiness 恢复前不接入流量。
 确认使用 username 而非邮箱；检查 canonical 规则、密码、HTTPS Cookie、单一 Host/Origin、浏览器时间和
 TCP peer 限流。不要添加邮箱候选、旧用户名 fallback 或第二 role。
 
-### Agent 报告失败
+### Client 报告失败
 
 按稳定错误 `code` 分支，不按 `message`。`unauthorized` 表示 credential 已失效，需显式重新配对；
-`agent_host_mismatch` 表示 Host 与 credential 绑定不一致，应丢弃并调查。同时检查队列、429/503、
-`Retry-After`、Agent spool、TLS 和时间。
+`client_host_mismatch` 表示 Host 与 credential 绑定不一致，应丢弃并调查。同时检查队列、429/503、
+`Retry-After`、Client spool、TLS 和时间。
 
 ## 15. 安全事件
 
-1. 在代理隔离入口，并隔离受影响 Agent；
+1. 在代理隔离入口，并隔离受影响 Client；
 2. 保全只读 Journal、identity/manifest、摘要、数据库与 WAL/SHM；
-3. 轮换管理员、Agent、mTLS、OTLP、TLS 私钥和主机凭据；
+3. 轮换管理员、Client、mTLS、OTLP、TLS 私钥和主机凭据；
 4. 证据未保全前不要清理数据库、日志或状态；
 5. 只修当前版本，不加入旧兼容。
 
@@ -453,7 +453,7 @@ TCP peer 限流。不要添加邮箱候选、旧用户名 fallback 或第二 rol
 - [ ] 初始 username canonical，密码是独立长随机秘密。
 - [ ] unit 与发行包一致，`systemd-analyze verify` 通过。
 - [ ] 固定 `serve-release` 启动，live 与 ready 均为 200。
-- [ ] TLS、证书、外部管理登录、Cookie/CSRF 与 Agent 链路通过。
+- [ ] TLS、证书、外部管理登录、Cookie/CSRF 与 Client 链路通过。
 - [ ] 监控覆盖 SQLite/WAL、容量/inode、writer、retention、systemd、代理和证书。
 - [ ] 首次创建后已移除长期配置中的 bootstrap 明文密码。
 - [ ] 已明确当前不存在受支持的数据迁移、备份、恢复或跨版本回滚。

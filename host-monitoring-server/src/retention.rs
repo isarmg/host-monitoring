@@ -516,7 +516,7 @@ async fn aggregate_raw_batch(
                   r.network_received_bytes_per_second,r.network_transmitted_bytes_per_second,
                   r.disk_read_bytes_per_second,r.disk_written_bytes_per_second,
                   r.max_temperature_celsius,r.gpu_utilization_percent,r.gpu_memory_usage_percent
-             FROM agent_metric_reports r
+             FROM client_metric_reports r
             WHERE r.aggregated_at IS NULL
               AND r.collected_at < ?
               AND NOT EXISTS (
@@ -567,7 +567,7 @@ async fn aggregate_raw_batch(
         query.bind(now).execute(&mut *tx).await?;
     }
 
-    let mut mark = QueryBuilder::<Sqlite>::new("UPDATE agent_metric_reports SET aggregated_at=");
+    let mut mark = QueryBuilder::<Sqlite>::new("UPDATE client_metric_reports SET aggregated_at=");
     mark.push_bind(now)
         .push(" WHERE aggregated_at IS NULL AND report_id IN (");
     let mut ids = mark.separated(",");
@@ -587,9 +587,9 @@ async fn aggregate_raw_batch(
 async fn delete_aggregated_raw_batch(pool: &SqlitePool, batch_size: usize) -> anyhow::Result<u64> {
     let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
     let result = sqlx::query(
-        r#"DELETE FROM agent_metric_reports
+        r#"DELETE FROM client_metric_reports
             WHERE report_id IN (
-                SELECT r.report_id FROM agent_metric_reports r
+                SELECT r.report_id FROM client_metric_reports r
                  WHERE r.aggregated_at IS NOT NULL
                    AND NOT EXISTS (
                        SELECT 1 FROM monitored_hosts h
@@ -600,7 +600,7 @@ async fn delete_aggregated_raw_batch(pool: &SqlitePool, batch_size: usize) -> an
             )
               AND NOT EXISTS (
                   SELECT 1 FROM monitored_hosts h
-                   WHERE h.latest_report_id=agent_metric_reports.report_id
+                   WHERE h.latest_report_id=client_metric_reports.report_id
               )"#,
     )
     .bind(i64::try_from(batch_size)?)
@@ -622,9 +622,9 @@ async fn delete_expired_aggregate_batch(
 ) -> anyhow::Result<u64> {
     let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
     let result = sqlx::query(
-        r#"DELETE FROM agent_metric_hourly_aggregates
+        r#"DELETE FROM client_metric_hourly_aggregates
             WHERE rowid IN (
-                SELECT rowid FROM agent_metric_hourly_aggregates
+                SELECT rowid FROM client_metric_hourly_aggregates
                  WHERE interval_end < ?
                  ORDER BY interval_end,host_id,bucket_start
                  LIMIT ?
@@ -662,32 +662,32 @@ fn hourly_upsert_sql() -> String {
     columns.push("updated_at".to_string());
 
     let mut updates = vec![
-        "interval_start=MIN(agent_metric_hourly_aggregates.interval_start,excluded.interval_start)"
+        "interval_start=MIN(client_metric_hourly_aggregates.interval_start,excluded.interval_start)"
             .to_string(),
-        "interval_end=MAX(agent_metric_hourly_aggregates.interval_end,excluded.interval_end)"
+        "interval_end=MAX(client_metric_hourly_aggregates.interval_end,excluded.interval_end)"
             .to_string(),
-        "sample_count=agent_metric_hourly_aggregates.sample_count+excluded.sample_count"
+        "sample_count=client_metric_hourly_aggregates.sample_count+excluded.sample_count"
             .to_string(),
     ];
     for metric in METRIC_NAMES {
-        let current_count = format!("agent_metric_hourly_aggregates.{metric}_count");
+        let current_count = format!("client_metric_hourly_aggregates.{metric}_count");
         let incoming_count = format!("excluded.{metric}_count");
         updates.extend([
             format!(
-                "{metric}_min=CASE WHEN {current_count}=0 THEN excluded.{metric}_min WHEN {incoming_count}=0 THEN agent_metric_hourly_aggregates.{metric}_min ELSE MIN(agent_metric_hourly_aggregates.{metric}_min,excluded.{metric}_min) END"
+                "{metric}_min=CASE WHEN {current_count}=0 THEN excluded.{metric}_min WHEN {incoming_count}=0 THEN client_metric_hourly_aggregates.{metric}_min ELSE MIN(client_metric_hourly_aggregates.{metric}_min,excluded.{metric}_min) END"
             ),
             format!(
-                "{metric}_max=CASE WHEN {current_count}=0 THEN excluded.{metric}_max WHEN {incoming_count}=0 THEN agent_metric_hourly_aggregates.{metric}_max ELSE MAX(agent_metric_hourly_aggregates.{metric}_max,excluded.{metric}_max) END"
+                "{metric}_max=CASE WHEN {current_count}=0 THEN excluded.{metric}_max WHEN {incoming_count}=0 THEN client_metric_hourly_aggregates.{metric}_max ELSE MAX(client_metric_hourly_aggregates.{metric}_max,excluded.{metric}_max) END"
             ),
             format!(
-                "{metric}_avg=CASE WHEN {current_count}=0 THEN excluded.{metric}_avg WHEN {incoming_count}=0 THEN agent_metric_hourly_aggregates.{metric}_avg ELSE agent_metric_hourly_aggregates.{metric}_avg+(excluded.{metric}_avg-agent_metric_hourly_aggregates.{metric}_avg)*(CAST({incoming_count} AS REAL)/({current_count}+{incoming_count})) END"
+                "{metric}_avg=CASE WHEN {current_count}=0 THEN excluded.{metric}_avg WHEN {incoming_count}=0 THEN client_metric_hourly_aggregates.{metric}_avg ELSE client_metric_hourly_aggregates.{metric}_avg+(excluded.{metric}_avg-client_metric_hourly_aggregates.{metric}_avg)*(CAST({incoming_count} AS REAL)/({current_count}+{incoming_count})) END"
             ),
             format!("{metric}_count={current_count}+{incoming_count}"),
         ]);
     }
     updates.push("updated_at=excluded.updated_at".to_string());
     format!(
-        "INSERT INTO agent_metric_hourly_aggregates({}) VALUES ({}) ON CONFLICT(host_id,bucket_start) DO UPDATE SET {}",
+        "INSERT INTO client_metric_hourly_aggregates({}) VALUES ({}) ON CONFLICT(host_id,bucket_start) DO UPDATE SET {}",
         columns.join(","),
         vec!["?"; columns.len()].join(","),
         updates.join(",")

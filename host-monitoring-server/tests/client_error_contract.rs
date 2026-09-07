@@ -6,7 +6,6 @@ use axum::{
     http::{Request, Response, StatusCode, header},
 };
 use chrono::Utc;
-use host_monitor::transport::{SendError, classify_host_monitoring_response};
 use host_monitoring_server::{
     http::{AppState, router},
     store,
@@ -14,7 +13,7 @@ use host_monitoring_server::{
     token_hash,
 };
 use host_protocol::{
-    AgentHealth, AgentReport, CpuSnapshot, HostIdentity, MemorySnapshot, SystemSnapshot,
+    ClientHealth, ClientReport, CpuSnapshot, HostIdentity, MemorySnapshot, SystemSnapshot,
 };
 use http_body_util::BodyExt;
 use sarmg_error::ErrorEnvelope;
@@ -50,9 +49,9 @@ async fn fixture() -> Fixture {
     }
 }
 
-fn report(host_id: Uuid) -> AgentReport {
-    AgentReport {
-        schema_version: host_protocol::AGENT_REPORT_SCHEMA_VERSION,
+fn report(host_id: Uuid) -> ClientReport {
+    ClientReport {
+        schema_version: host_protocol::CLIENT_REPORT_SCHEMA_VERSION,
         report_id: Uuid::new_v4().to_string(),
         collected_at: Utc::now(),
         host: HostIdentity {
@@ -61,7 +60,7 @@ fn report(host_id: Uuid) -> AgentReport {
             os_version: None,
             kernel_version: None,
             arch: "x86_64".into(),
-            agent_version: env!("CARGO_PKG_VERSION").into(),
+            client_version: env!("CARGO_PKG_VERSION").into(),
         },
         interval_seconds: 10.0,
         system: SystemSnapshot {
@@ -85,19 +84,19 @@ fn report(host_id: Uuid) -> AgentReport {
             gpus: Vec::new(),
         },
         capabilities: Vec::new(),
-        agent: AgentHealth {
+        client: ClientHealth {
             spool_pending_batches: 0,
             collector_errors: 0,
         },
     }
 }
 
-async fn send_report(fixture: &Fixture, token: &str, report: &AgentReport) -> Response<Body> {
+async fn send_report(fixture: &Fixture, token: &str, report: &ClientReport) -> Response<Body> {
     fixture
         .app
         .clone()
         .oneshot(
-            Request::post(host_protocol::AGENT_REPORT_PATH)
+            Request::post(host_protocol::CLIENT_REPORT_PATH)
                 .header(header::AUTHORIZATION, format!("Bearer {token}"))
                 .header(header::CONTENT_TYPE, "application/json")
                 .body(Body::from(serde_json::to_vec(report).unwrap()))
@@ -128,11 +127,11 @@ async fn response_contract(response: Response<Body>) -> (StatusCode, String, Vec
 }
 
 #[tokio::test]
-async fn server_error_envelopes_drive_the_agent_credential_state_machine() {
+async fn server_error_envelopes_define_the_client_credential_contract() {
     let fixture = fixture().await;
 
     let unknown_host_report = report(Uuid::new_v4());
-    let (status, content_type, body) = response_contract(
+    let (status, _, body) = response_contract(
         send_report(&fixture, "revoked-or-unknown-token", &unknown_host_report).await,
     )
     .await;
@@ -140,17 +139,13 @@ async fn server_error_envelopes_drive_the_agent_credential_state_machine() {
     let envelope: ErrorEnvelope = serde_json::from_slice(&body).unwrap();
     assert_eq!(envelope.code.as_str(), "unauthorized");
     assert!(!envelope.retryable);
-    assert!(matches!(
-        classify_host_monitoring_response(status, Some(&content_type), &body),
-        Err(SendError::Unauthorized(_))
-    ));
 
     let credential_host = Uuid::new_v4();
     let token = "current-host-credential";
     let now = Utc::now();
     sqlx::query(
         "INSERT INTO monitored_hosts(\
-           host_id,name,os,arch,agent_version,registered_at,last_seen_at\
+           host_id,name,os,arch,client_version,registered_at,last_seen_at\
          ) VALUES(?,?,?,?,?,?,?)",
     )
     .bind(credential_host)
@@ -164,7 +159,7 @@ async fn server_error_envelopes_drive_the_agent_credential_state_machine() {
     .await
     .unwrap();
     sqlx::query(
-        "INSERT INTO agent_credentials(credential_id,host_id,token_hash,issued_at) VALUES(?,?,?,?)",
+        "INSERT INTO client_credentials(credential_id,host_id,token_hash,issued_at) VALUES(?,?,?,?)",
     )
     .bind(Uuid::new_v4())
     .bind(credential_host)
@@ -175,16 +170,12 @@ async fn server_error_envelopes_drive_the_agent_credential_state_machine() {
     .unwrap();
 
     let mismatched_report = report(Uuid::new_v4());
-    let (status, content_type, body) =
+    let (status, _, body) =
         response_contract(send_report(&fixture, token, &mismatched_report).await).await;
     assert_eq!(status, StatusCode::FORBIDDEN);
     let envelope: ErrorEnvelope = serde_json::from_slice(&body).unwrap();
-    assert_eq!(envelope.code.as_str(), "agent_host_mismatch");
+    assert_eq!(envelope.code.as_str(), "client_host_mismatch");
     assert!(!envelope.retryable);
-    assert!(matches!(
-        classify_host_monitoring_response(status, Some(&content_type), &body),
-        Err(SendError::Permanent(_))
-    ));
 }
 
 #[tokio::test]
@@ -194,7 +185,7 @@ async fn framework_api_rejections_are_replaced_by_the_same_strict_envelope() {
         .app
         .clone()
         .oneshot(
-            Request::post(host_protocol::AGENT_REPORT_PATH)
+            Request::post(host_protocol::CLIENT_REPORT_PATH)
                 .header(header::CONTENT_TYPE, "application/json")
                 .body(Body::from("{"))
                 .unwrap(),
@@ -227,7 +218,7 @@ async fn framework_api_rejections_are_replaced_by_the_same_strict_envelope() {
         .app
         .clone()
         .oneshot(
-            Request::get(host_protocol::AGENT_REPORT_PATH)
+            Request::get(host_protocol::CLIENT_REPORT_PATH)
                 .body(Body::empty())
                 .unwrap(),
         )

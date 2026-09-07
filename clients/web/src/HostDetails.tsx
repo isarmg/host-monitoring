@@ -40,11 +40,11 @@ export function HostDetails({ host, changed }: { host: Host; changed(): void }) 
       <form onSubmit={save} aria-busy={pending}>
         <FormField label={t("实例名称", "Instance name")}><InstanceNameField name="remark" defaultValue={host.name} required title={t("实例名称最多 32 个字符", "Instance names may contain up to 32 characters")} readOnly={pending} /></FormField>
         <p>{t("实例名称最多 32 个字符。", "Instance names may contain up to 32 characters.")}</p>
-        <p>{t("采集周期等 客户端 本地设置由客户端管理，此处不修改客户端配置。", "Collection intervals and other local agent settings are managed by the client, not by this page.")}</p>
+        <p>{t("采集周期等 客户端 本地设置由客户端管理，此处不修改客户端配置。", "Collection intervals and other local client settings are managed by the client, not by this page.")}</p>
         <div className="sarmg-actions"><Button disabled={pending} onClick={() => setDeleting(true)}>{t("删除实例", "Delete instance")}</Button><Button type="submit" disabled={pending}>{pending ? t("正在处理…", "Processing…") : t("保存设置", "Save settings")}</Button></div>
       </form>
     </section>
-    {deleting && <ConfirmDangerDialog title={t("删除监控实例", "Delete monitoring instance")} description={t("移除 {0} 的监控数据和绑定凭据。该 客户端 需要重新配对才能再次接入。", "Remove monitoring data and bound credentials for {0}. The agent must pair again to reconnect.", [host.name])}
+    {deleting && <ConfirmDangerDialog title={t("删除监控实例", "Delete monitoring instance")} description={t("移除 {0} 的监控数据和绑定凭据。该 客户端 需要重新配对才能再次接入。", "Remove monitoring data and bound credentials for {0}. The client must pair again to reconnect.", [host.name])}
       pending={pending} onClose={() => { if (!active.current) { setDeleting(false); setFailure(null); } }} onConfirm={() => void mutate("DELETE")}>
       {failure && <ErrorState requestId={failure.requestId}>{t("删除未能确认，请刷新核对实例状态。", "Deletion could not be confirmed. Refresh and check the instance state.")}</ErrorState>}
     </ConfirmDangerDialog>}

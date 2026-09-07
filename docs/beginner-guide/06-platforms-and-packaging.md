@@ -1,24 +1,24 @@
-# 06. Agent 的 Linux、Windows、macOS 与移动宿主
+# 06. Client 的 Linux、Windows、macOS 与移动宿主
 
 ## 6.1 共同产品核
 
-本章的跨平台矩阵只描述 Agent。三种桌面 Agent 共享协议、配置语义、配对、spool 和投递；平台层只实现
+本章的跨平台矩阵只描述 Client。三种桌面 Client 共享协议、配置语义、配对、spool 和投递；平台层只实现
 采集、服务管理、路径权限、用户交互与安装生命周期。不能以平台便利为理由改变 wire contract。
 Server 不属于该矩阵，只构建、发行和运行于 `x86_64-unknown-linux-gnu`。
 
-## 6.2 Linux Agent
+## 6.2 Linux Client
 
 deb/rpm 安装二进制、0600 配置、专用账户和 systemd unit。默认服务沙箱应保持收紧；NVIDIA 等设备访问
 通过明确 drop-in 放宽，而不是默认给所有设备权限。普通卸载保留状态，显式 purge 才清除当前身份和
 spool。
 
-## 6.3 Windows Agent
+## 6.3 Windows Client
 
 Windows Service 承担长期采集，Tray 只负责用户配置与配对；维护 helper 处理受保护的服务/文件事务。
 三者必须使用正确 PE subsystem，不能用可见控制台进程冒充后台服务。WiX 安装失败必须回滚本次创建的
 文件、服务和权限。
 
-## 6.4 macOS Agent
+## 6.4 macOS Client
 
 pkg 创建不可登录服务账户、LaunchDaemon 和日志轮转。安装/卸载脚本验证目标路径、账户身份和资源归属，
 不能用宽泛递归删除。安装失败测试要证明无关账户、同名外部文件和已有状态不受影响。
@@ -41,7 +41,7 @@ credential、Token、完整配置和可能敏感的主机数据不能进入日�
 
 ## 6.8 包测试矩阵
 
-| Agent 平台 | 静态检查 | 生命周期检查 | 运行检查 |
+| Client 平台 | 静态检查 | 生命周期检查 | 运行检查 |
 |---|---|---|---|
 | Linux | unit/nfpm/权限 | install/remove/purge | systemd、采集、投递 |
 | Windows | WiX authoring/PE | install/rollback/uninstall | Service、Tray、本机 IPC |

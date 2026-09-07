@@ -2,14 +2,14 @@
 
 ## 8.1 先确定变化落在哪条链
 
-修改前写出从输入到持久化/展示的路径。协议字段涉及 protocol、Agent、Server、Web；平台采集涉及目标
+修改前写出从输入到持久化/展示的路径。协议字段涉及 protocol、Client、Server、Web；平台采集涉及目标
 系统 fixture；安装涉及服务账户和回滚；Schema 涉及 fingerprint、doctor 与升级仓。只改“最明显文件”
 通常会留下不一致合同。
 
 ## 8.2 本地基础门禁
 
 完整 workspace/Server 门禁仅在 x86_64 GNU/Linux 执行。Windows/macOS 不尝试构建 Server，而是继续
-验证各自 Agent；尤其不得删除 CI 中的 `x86_64-pc-windows-msvc` Windows Agent release 构建。
+验证各自 Client；尤其不得删除 CI 中的 `x86_64-pc-windows-msvc` Windows Client release 构建。
 
 ```bash
 cargo +1.98.0 fmt --all -- --check
@@ -65,7 +65,7 @@ redaction、TLS 证书/主机名验证、redirect 拒绝、默认远程 HTTP 拒
 ## 8.8 提交前检查表
 
 - 工作树只包含本问题相关修改。
-- 格式、Server x86_64 GNU/Linux、各 Agent 目标、Clippy、测试、Web 和脚本全部通过。
+- 格式、Server x86_64 GNU/Linux、各 Client 目标、Clippy、测试、Web 和脚本全部通过。
 - 当前名称与版本全局唯一，忽略构建目录后不存在任何非当前产品身份。
 - 文档命令确实存在，链接可解析。
 - 没有凭据、真实主机数据、target/node_modules 或临时包。

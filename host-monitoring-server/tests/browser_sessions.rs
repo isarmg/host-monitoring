@@ -119,7 +119,7 @@ async fn foundation_login_session_csrf_and_logout_are_used_end_to_end() {
         .clone()
         .oneshot(request(
             Method::POST,
-            "/api/v2/monitoring/agent-instances",
+            "/api/v2/monitoring/client-instances",
             Some(&cookie),
             None,
         ))

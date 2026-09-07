@@ -3,7 +3,7 @@
 ## 1. 服务端部署布局
 
 Server 的唯一正式平台/target 是 x86_64 glibc Linux / `x86_64-unknown-linux-gnu`。ARM Linux、musl、
-Windows 和 macOS 只可能属于 Agent 交付，不得部署 `host-monitoring-server`。
+Windows 和 macOS 只可能属于 Client 交付，不得部署 `host-monitoring-server`。
 
 ```text
 /opt/isarmg/host-monitoring/releases/0.9.3/   root 持有、只读发行树
@@ -38,16 +38,16 @@ SQLite 或监听端口前通过 `uname` 再确认 Linux/x86_64；三层检查均
 
 当前 Server Rust 固定 Foundation 0.7.0 / `77e7ad7af8e1bf62432bd6bdd8fa9aff54cb39d1`，八个 Web 包使用
 同版正式 Release tarball 与 SHA-512 integrity，无相邻 Foundation 路径依赖；独立 CI 已通过，
-见[消费者证据](https://github.com/isarmg/sarmg-foundation-server/blob/main/consumers/axum-0.7.0-evidence.md)。Agent Foundation 是另一个独立上游，其版本不随 Server 包改写。
+见[消费者证据](https://github.com/isarmg/sarmg-foundation-server/blob/main/consumers/axum-0.7.0-evidence.md)。Client Foundation 是另一个独立上游，其版本不随 Server 包改写。
 React/Vite/TypeScript 基线与配置由 web-toolchain 维护；登录、Session、退出、主题和全局错误由共享 Shell 维护，诊断管理功能已移除。
 独立构建通过不等于当前主分支改动已进入产品 Release；发行仍须核对精确 tag、源码和全部门禁，不改写旧资产。
 Foundation 变更必须显式发布新版本并替换当前合同，同时通过 Host 的 Rust 全矩阵、Web clean build、
-SQLite reopen 与 Router→Agent 合同测试；不保留旧版本 fallback。
+SQLite reopen 与 Router→Client 合同测试；不保留旧版本 fallback。
 
 当前 React 业务页提供主机列表、分页、CPU/内存摘要和可展开的完整采集字段。它不提供邀请/激活、
 历史图表、备注、删除或 audit 查询界面，不能据此宣称已有完整 Web 运维台。
 `cd clients/web && npm run test:browser` 对实际生产构建执行 Chromium/Firefox 分页、指标详情、移动主题与 WCAG AA 验收；
-首次运行需 `npx playwright install --with-deps chromium firefox`。该测试的 API 全部由本机测试数据拦截，不访问真实 Agent。
+首次运行需 `npx playwright install --with-deps chromium firefox`。该测试的 API 全部由本机测试数据拦截，不访问真实 Client。
 
 ## 3. Server 配置
 
@@ -106,15 +106,15 @@ Server 自身只监听 HTTP socket；正式 HTTPS、证书与外部连接限制�
 | `GET /api/v2/monitoring/hosts` | 管理员 Session | query 只有 `limit/offset`；服务端钳到 1..1000，默认 200 | 分页 Host summary；当前 React 页只调用这一条业务 API |
 | `GET /api/v2/monitoring/hosts/{host_id}` | 管理员 Session | canonical UUID | Host summary 与可空 latest 原始报告；Web 的「新建实例」调用 |
 | `GET /api/v2/monitoring/hosts/{host_id}/history` | 管理员 Session | `from/to/limit`；`from <= to`；limit 1..1000，默认 300 | 仍保留的 raw 标量点；不读取 hourly aggregate |
-| `GET/POST /api/v2/monitoring/agent-instances` | 管理员 Session；POST 另需 CSRF/同源 | 管理路由组正文上限 16 KiB；POST exact `display_name?`，配对码不设有效期 | 列表最多 200 条；新建 `201` 只返回一次 activation code 并设 `no-store`；React 尚未调用 |
-| `DELETE /api/v2/monitoring/agent-instances/{request_id}` | 管理员 Session + CSRF + 同源 | canonical UUID，只能取消 pending invite | `204`；不存在为 404，非 pending 为 409 |
+| `GET/POST /api/v2/monitoring/client-instances` | 管理员 Session；POST 另需 CSRF/同源 | 管理路由组正文上限 16 KiB；POST exact `display_name?`，配对码不设有效期 | 列表最多 200 条；新建 `201` 只返回一次 activation code 并设 `no-store`；React 尚未调用 |
+| `DELETE /api/v2/monitoring/client-instances/{request_id}` | 管理员 Session + CSRF + 同源 | canonical UUID，只能取消 pending invite | `204`；不存在为 404，非 pending 为 409 |
 | `POST /api/v2/host-monitor/activate-admin` | 管理员 Session + CSRF + 同源 | 16 KiB 管理上限；exact request ID + activation code | 与 capability 激活进入同一事务；React 尚未调用 |
 | `PATCH/DELETE /api/v2/monitoring/managed-instances/{host_id}` | 管理员 Session + CSRF + 同源 | canonical UUID；PATCH remark trim 后 1..255 UTF-8 bytes | `204`；PATCH 是 last-write-wins，无 ETag/revision；DELETE 永久级联删除且没有产品内恢复 |
-| `POST /api/v2/host-monitor/pairing-requests` | 未配对 Agent | Agent 路由组 512 KiB；strict Host、bearer/polling-secret SHA-256；来源/设备/容量限流 | 创建或幂等恢复 pairing request；返回 activation URL，成功 `no-store` |
+| `POST /api/v2/host-monitor/pairing-requests` | 未配对 Client | Client 路由组 512 KiB；strict Host、bearer/polling-secret SHA-256；来源/设备/容量限流 | 创建或幂等恢复 pairing request；返回 activation URL，成功 `no-store` |
 | `GET /api/v2/host-monitor/pairing-requests/{request_id}` | 持有 request ID 的调用方 | canonical UUID；来源/请求限流 | 只暴露 OS/arch/version/status/expiry 公共摘要；成功 `no-store` |
-| `POST /api/v2/host-monitor/pairing-requests/{request_id}/status` | Agent 的 `Pairing <polling_secret>` | 512 KiB 组上限；secret 32..256 字符且无 whitespace | waiting/active/denied/expired 与可空 instance ID；成功 `no-store` |
+| `POST /api/v2/host-monitor/pairing-requests/{request_id}/status` | Client 的 `Pairing <polling_secret>` | 512 KiB 组上限；secret 32..256 字符且无 whitespace | waiting/active/denied/expired 与可空 instance ID；成功 `no-store` |
 | `POST /api/v2/host-monitor/activate` | 持有一次性 activation code 的 capability 调用方 | 512 KiB 组上限；来源/请求限流；不是管理员 Session | 激活同一事务状态机；配对码错误/取消/跨设备重用严格失败；短期设备请求仍有超时保护；成功 `no-store` |
-| `POST /api/v2/host-monitor/report` | `Bearer <agent credential>` | 512 KiB；单份 strict report；每 Host 速率桶 | 持久事务提交后才返回 `202`；同 Host 同 ID 重放 `accepted=false` |
+| `POST /api/v2/host-monitor/report` | `Bearer <client credential>` | 512 KiB；单份 strict report；每 Host 速率桶 | 持久事务提交后才返回 `202`；同 Host 同 ID 重放 `accepted=false` |
 
 登录与管理写操作的同源裁决会把所有原始 `Origin`、`Host`/HTTP/2 authority、`Sec-Fetch-Site` 值交给
 Foundation；重复、冲突或非当前形状 fail closed。生产 Cookie 名是 `__Host-sarmg-host-monitoring-session`，带
@@ -164,7 +164,7 @@ Argon2id hash；Schema trigger 同时提升 `session_version`、撤销该账户�
 完成后从长期环境文件移除 bootstrap 明文密码。项目没有管理员创建/列表/禁用 Web API；不要把
 `_sarmg_administrators` 表可容纳多行误写成完整账户管理功能。
 
-## 5. Agent 配置与诊断
+## 5. Client 配置与诊断
 
 `config/host-monitor.json.example` 是当前完整字段样例；`application_version` 必须等于 `0.9.3`。默认采集
 10 秒、慢速采集 30 秒、请求超时 10 秒、jitter 10%、spool 64 MiB。配对端点只接受 HTTPS；仅 debug
@@ -186,7 +186,7 @@ host-monitor doctor --config /etc/host-monitor/config.json --delivery
 
 本地 doctor 与 delivery doctor 含义不同；后者会真实发送报告，应在变更窗口使用。
 
-## 6. Linux Agent
+## 6. Linux Client
 
 从工作区根构建并调用打包器：
 
@@ -200,7 +200,7 @@ NFPM_ARCH=amd64 clients/host-monitor/packaging/linux/build-packages.sh
 分别表达 AMD/Intel/NVIDIA capability；字段或驱动不存在时保留缺失/错误分类，不用 0 伪装。NVIDIA
 NVML 采集通常需要按包内 `host-monitor-gpu.conf` 明确配置设备访问，不能默认放宽整个服务沙箱。
 
-## 7. Windows Agent
+## 7. Windows Client
 
 WiX 4 MSI 同时安装 Windows Service、Tray 和维护 helper。Tray 是用户交互外壳，Service 是持续采集
 主体；两者通过受保护本机控制通道通信。构建/验收使用：
@@ -218,7 +218,7 @@ powershell -File clients\host-monitor\packaging\windows\tests\Test-PeSubsystems.
 转换时，必须先在外部仓库建立、评审并验证明确转换边。安装失败必须由 MSI rollback 清理本次创建的
 服务和文件。
 
-## 8. macOS Agent
+## 8. macOS Client
 
 `build-pkg.sh` 生成含 LaunchDaemon、配置、日志轮转和专用不可登录账户的 pkg。验证：
 
@@ -275,10 +275,10 @@ pending/旧 denied 的有界清理和删除 Host 时的定向清理。长期实�
 Run、Once 和 `doctor --delivery` 在加载身份或初始化采样器前获取 Foundation 运行会话锁。
 同一状态目录已有投递进程时，新进程直接失败；Spool 及其克隆保留该锁直到退出。
 Status、只读 Doctor、Probe 与 Pair 不获取投递会话锁，可以与运行服务并行；配对写入仍须
-自己的短事务锁。不要删除 `agent.instance.lock` 或 Spool 锁文件来强行启动第二个进程，
+自己的短事务锁。不要删除 `client.instance.lock` 或 Spool 锁文件来强行启动第二个进程，
 锁文件在进程结束后保留是正常行为；应先正常停止原实例。
 
-Unix Agent 状态目录必须由当前服务账户拥有、权限为 0700，路径及祖先不能是符号链接。
+Unix Client 状态目录必须由当前服务账户拥有、权限为 0700，路径及祖先不能是符号链接。
 配对事务锁必须为同 UID/GID 的 0600 普通单链接文件。管理员以 root 配对时，新凭据和锁
 继承服务状态目录的 UID/GID；程序拒绝不安全的现有目录或锁，不自动 chmod/chown 修复。
 安装器/systemd 负责建立当前部署权限；权限异常时先停止并检查部署及现场，不把重新配对
@@ -328,7 +328,7 @@ CA、主机名不匹配、过期服务端证书、缺失/不受信任的客户�
 
 可单独运行握手回归：`cargo test --locked -p host-monitor --lib --all-features transport::tls_tests`。
 
-Report、OTLP 和创建/轮询/激活配对共用 Agent Foundation HTTP 工厂，不再保留产品本地
+Report、OTLP 和创建/轮询/激活配对共用 Client Foundation HTTP 工厂，不再保留产品本地
 响应读取循环。请求总超时覆盖 DNS 到响应体读完，连接超时为总超时与 10 秒的较小值；
 每次请求最多接受 16 个解析地址，验证后绑定实际连接。响应 Header/Body 各限 64 KiB，
 拒绝超限 Content-Length 和分块响应。系统/环境代理及重定向禁用；依赖环境代理的部署
@@ -348,19 +348,19 @@ Report、OTLP 和创建/轮询/激活配对共用 Agent Foundation HTTP 工厂�
 授权成功。只读凭据检查使用同一 StateReader 的 4 KiB 上限与文件安全规则，拒绝特殊文件，
 不会因 FIFO 等待写入者；检查可读且非空不等于当前凭据已获 Server 授权。
 
-1. 检查 Server 的 systemd，以及 Agent 所在平台的 systemd/Windows Service/LaunchDaemon 状态和最近日志。
+1. 检查 Server 的 systemd，以及 Client 所在平台的 systemd/Windows Service/LaunchDaemon 状态和最近日志。
 2. Server 检查 `/healthz`、`/readyz`；writer 停止时 readiness 必须失败。
 3. 查看 429/503 与 `Retry-After`，区分准入限流、队列饱和和 writer 故障。
 4. 查看严格错误 `code`：`unauthorized` 表示当前 credential 已失效并需显式重新配对；
-   `agent_host_mismatch` 表示该报告 Host 与 credential 绑定不一致，只丢弃该报告。不能按 `message` 分支。
-5. Agent 查看 `status`、spool 数量、当前 active binding、TLS 和系统时间。
-6. 运行 Server/Agent doctor；Schema 不符时停止服务并保全原件。当前没有 Host 转换边，不要直接调用
+   `client_host_mismatch` 表示该报告 Host 与 credential 绑定不一致，只丢弃该报告。不能按 `message` 分支。
+5. Client 查看 `status`、spool 数量、当前 active binding、TLS 和系统时间。
+6. 运行 Server/Client doctor；Schema 不符时停止服务并保全原件。当前没有 Host 转换边，不要直接调用
    外部通用引擎尝试处理。
 7. 容量规划同时监控 SQLite、WAL、spool、磁盘空间和 inode。
 
 ## 11. 安全事件与报告
 
-先隔离公网入口和受影响 Agent，保全只读日志、发行摘要、数据库四元 identity、SQLite/WAL 文件现场与
+先隔离公网入口和受影响 Client，保全只读日志、发行摘要、数据库四元 identity、SQLite/WAL 文件现场与
 状态目录权限，再轮换
-管理员、Agent、mTLS、OTLP 等凭据。使用 GitHub Private Vulnerability Reporting；公开 issue 不得
+管理员、Client、mTLS、OTLP 等凭据。使用 GitHub Private Vulnerability Reporting；公开 issue 不得
 包含生产遥测、主机标识、凭据或复现 Secret。安全支持仅覆盖当前发布版本和当前 `main`。

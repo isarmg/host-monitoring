@@ -59,7 +59,7 @@ async fn lock_identity_survives_working_directory_and_sqlite_restarts() {
     let now = Utc::now();
     sqlx::query(
         "INSERT INTO monitored_hosts(\
-           host_id,name,os,arch,agent_version,registered_at,last_seen_at\
+           host_id,name,os,arch,client_version,registered_at,last_seen_at\
          ) VALUES(?,?,?,?,?,?,?)",
     )
     .bind(host_id)

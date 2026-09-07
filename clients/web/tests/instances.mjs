@@ -21,7 +21,7 @@ try {
         const request = route.request(); const path = new URL(request.url()).pathname;
         if (request.method() !== "GET") assert.equal(request.headers()["x-csrf-token"], session.csrf_token);
         if (path.endsWith("/monitoring/hosts")) return route.fulfill({ json: { hosts: [], total: 0, limit: 50, offset: 0 } });
-        if (path.endsWith("/agent-instances")) {
+        if (path.endsWith("/client-instances")) {
           if (request.method() === "POST") {
             creates++; assert.deepEqual(Object.keys(request.postDataJSON()),["display_name"]);
             if (creates === 1) return route.fulfill({ status: 503, headers: { "x-request-id": "invite-123" }, json: { code: "service_unavailable", retryable: true, message: "SECRET", request_id: "invite-123" } });
@@ -32,9 +32,9 @@ try {
           }
           return route.fulfill({ json: invitation ? [invitation] : [] });
         }
-        if (path.endsWith(`/agent-instances/${inviteId}`)) { invitation.status = "cancelled"; return route.fulfill({ status: 204 }); }
+        if (path.endsWith(`/client-instances/${inviteId}`)) { invitation.status = "cancelled"; return route.fulfill({ status: 204 }); }
         if (path.endsWith(`/pairing-requests/${pairId}`)) return route.fulfill({ json: {
-          request_id: pairId, os: "linux", arch: "x86_64", agent_version: "0.8.0", status: activations ? "active" : "waiting", expires_at: "2099-01-01T00:00:00Z",
+          request_id: pairId, os: "linux", arch: "x86_64", client_version: "0.8.0", status: activations ? "active" : "waiting", expires_at: "2099-01-01T00:00:00Z",
         } });
         if (path.endsWith("/activate-admin")) {
           assert.deepEqual(request.postDataJSON(), { request_id: pairId, activation_code: code });
@@ -54,7 +54,7 @@ try {
       }
       await instanceName.fill("名".repeat(33));
       assert.equal(await instanceName.evaluate(input => input.checkValidity()), false);
-      await page.getByLabel("实例名称", { exact: true }).fill("测试 Agent");
+      await page.getByLabel("实例名称", { exact: true }).fill("测试 Client");
       await page.getByRole("button", { name: "创建实例", exact: true }).click();
       await expect(page.getByRole("alert")).toContainText("invite-123");
       await expect(page.locator("body")).not.toContainText("SECRET");
@@ -75,7 +75,7 @@ try {
       await page.getByRole("button", { name: "取消配对", exact: true }).click();
       await page.getByRole("button", { name: "确认", exact: true }).click();
       await expect(page.getByRole("cell", { name: "已取消", exact: true })).toBeVisible();
-      // A new trusted invitation models the independent Agent pairing request.
+      // A new trusted invitation models the independent Client pairing request.
       invitation.status = "pending";
       await page.goto(`http://127.0.0.1:${server.httpServer.address().port}/activate/${pairId}`);
       await expect(page.getByRole("dialog", { name: "激活 客户端 配对" })).toBeVisible();

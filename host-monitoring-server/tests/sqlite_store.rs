@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use chrono::{DateTime, Duration, Utc};
 use host_monitoring_server::{database_schema, model, store, token_hash};
 use host_protocol::{
-    AgentHealth, AgentPairingRequest, AgentReport, Capability, CpuSnapshot, DiskSnapshot,
+    Capability, ClientHealth, ClientPairingRequest, ClientReport, CpuSnapshot, DiskSnapshot,
     HostIdentity, MemorySnapshot, NetworkSnapshot, PairingStatus, SystemSnapshot,
 };
 use sqlx::{SqlitePool, sqlite::SqliteConnectOptions, sqlite::SqlitePoolOptions};
@@ -35,13 +35,13 @@ fn host(id: Uuid, os: &str) -> HostIdentity {
         os_version: Some("test-os-version".into()),
         kernel_version: Some("test-kernel".into()),
         arch: "x86_64".into(),
-        agent_version: env!("CARGO_PKG_VERSION").into(),
+        client_version: env!("CARGO_PKG_VERSION").into(),
     }
 }
 
-fn report(host_id: Uuid, collected_at: DateTime<Utc>) -> AgentReport {
-    AgentReport {
-        schema_version: host_protocol::AGENT_REPORT_SCHEMA_VERSION,
+fn report(host_id: Uuid, collected_at: DateTime<Utc>) -> ClientReport {
+    ClientReport {
+        schema_version: host_protocol::CLIENT_REPORT_SCHEMA_VERSION,
         report_id: Uuid::new_v4().to_string(),
         collected_at,
         host: host(host_id, "linux-updated"),
@@ -88,7 +88,7 @@ fn report(host_id: Uuid, collected_at: DateTime<Utc>) -> AgentReport {
             gpus: vec![],
         },
         capabilities: vec![Capability::available("cpu", "test")],
-        agent: AgentHealth {
+        client: ClientHealth {
             spool_pending_batches: 0,
             collector_errors: 0,
         },
@@ -106,9 +106,9 @@ async fn pending_pairings_are_capped_per_device_without_breaking_idempotent_retr
     let mut first = None;
 
     for index in 0..4 {
-        let request = AgentPairingRequest {
+        let request = ClientPairingRequest {
             host: host(host_id, "linux"),
-            token_hash: token_hash(&format!("agent-token-{index}")),
+            token_hash: token_hash(&format!("client-token-{index}")),
             polling_secret_hash: token_hash(&format!("polling-secret-{index}")),
         };
         let result = store::create_pairing(&pool, &request)
@@ -123,9 +123,9 @@ async fn pending_pairings_are_capped_per_device_without_breaking_idempotent_retr
         }
     }
 
-    let rejected = AgentPairingRequest {
+    let rejected = ClientPairingRequest {
         host: host(host_id, "linux"),
-        token_hash: token_hash("agent-token-over-budget"),
+        token_hash: token_hash("client-token-over-budget"),
         polling_secret_hash: token_hash("polling-secret-over-budget"),
     };
     assert!(matches!(
@@ -160,7 +160,7 @@ async fn cancelled_code_cannot_authorize_a_new_pairing() {
             .unwrap(),
         store::CancelInviteResult::Cancelled
     ));
-    let pairing = AgentPairingRequest {
+    let pairing = ClientPairingRequest {
         host: host(Uuid::new_v4(), "linux"),
         token_hash: token_hash("device-secret"),
         polling_secret_hash: token_hash("polling-secret"),
@@ -177,7 +177,7 @@ async fn cancelled_code_cannot_authorize_a_new_pairing() {
         store::ActivateResult::Conflict
     ));
     let columns: Vec<String> =
-        sqlx::query_scalar("SELECT name FROM pragma_table_info('agent_instance_invites')")
+        sqlx::query_scalar("SELECT name FROM pragma_table_info('client_instance_invites')")
             .fetch_all(&pool)
             .await
             .unwrap();
@@ -206,7 +206,7 @@ async fn current_sqlite_supports_pair_activate_report_remark_and_delete() {
     };
     let activation_code = activation_code.expect("created invite has an activation code");
     // Code age is not an authorization deadline; only explicit cancel/use invalidates it.
-    sqlx::query("UPDATE agent_instance_invites SET created_at='2000-01-01T00:00:00Z'")
+    sqlx::query("UPDATE client_instance_invites SET created_at='2000-01-01T00:00:00Z'")
         .execute(&pool)
         .await
         .unwrap();
@@ -216,13 +216,13 @@ async fn current_sqlite_supports_pair_activate_report_remark_and_delete() {
     );
     let instance_id = Uuid::parse_str(&invite.instance_id).expect("canonical instance id");
 
-    let agent_token = "agent-token-for-sqlite-regression";
+    let client_token = "client-token-for-sqlite-regression";
     let polling_secret = "polling-secret-for-sqlite-regression";
-    let agent_token_hash = token_hash(agent_token);
+    let client_token_hash = token_hash(client_token);
     let polling_secret_hash = token_hash(polling_secret);
-    let pairing = AgentPairingRequest {
+    let pairing = ClientPairingRequest {
         host: host(Uuid::new_v4(), "linux"),
-        token_hash: agent_token_hash.clone(),
+        token_hash: client_token_hash.clone(),
         polling_secret_hash: polling_secret_hash.clone(),
     };
     let pairing_result = store::create_pairing(&pool, &pairing)
@@ -237,7 +237,7 @@ async fn current_sqlite_supports_pair_activate_report_remark_and_delete() {
         _ => panic!("fresh pairing request was not created"),
     };
     let pairing_created_at: Option<DateTime<Utc>> =
-        sqlx::query_scalar("SELECT created_at FROM agent_pairing_requests WHERE request_id=?")
+        sqlx::query_scalar("SELECT created_at FROM client_pairing_requests WHERE request_id=?")
             .bind(request_id)
             .fetch_one(&pool)
             .await
@@ -258,7 +258,7 @@ async fn current_sqlite_supports_pair_activate_report_remark_and_delete() {
         Some((PairingStatus::Active, Some(instance_id.to_string())))
     );
     assert_eq!(
-        store::host_for_token(&pool, &agent_token_hash)
+        store::host_for_token(&pool, &client_token_hash)
             .await
             .expect("resolve credential"),
         Some(instance_id)
@@ -267,7 +267,7 @@ async fn current_sqlite_supports_pair_activate_report_remark_and_delete() {
     let collected_at = Utc::now() - Duration::seconds(1);
     let report = report(instance_id, collected_at);
     let metrics = model::validate_report(&report).expect("valid report fixture");
-    let (accepted, received_at) = store::store_report(&pool, &report, &agent_token_hash, &metrics)
+    let (accepted, received_at) = store::store_report(&pool, &report, &client_token_hash, &metrics)
         .await
         .expect("store telemetry report");
     assert!(accepted);
@@ -284,8 +284,8 @@ async fn current_sqlite_supports_pair_activate_report_remark_and_delete() {
     assert_eq!(latest, Some(report.clone()));
 
     let credential_last_used: Option<DateTime<Utc>> =
-        sqlx::query_scalar("SELECT last_used_at FROM agent_credentials WHERE token_hash=?")
-            .bind(&agent_token_hash)
+        sqlx::query_scalar("SELECT last_used_at FROM client_credentials WHERE token_hash=?")
+            .bind(&client_token_hash)
             .fetch_one(&pool)
             .await
             .expect("read credential timestamp");
@@ -327,10 +327,10 @@ async fn current_sqlite_supports_pair_activate_report_remark_and_delete() {
     let remaining: i64 = sqlx::query_scalar(
         "SELECT \
            (SELECT count(*) FROM monitored_hosts) + \
-           (SELECT count(*) FROM agent_metric_reports) + \
-           (SELECT count(*) FROM agent_credentials) + \
-           (SELECT count(*) FROM agent_pairing_requests) + \
-           (SELECT count(*) FROM agent_instance_invites)",
+           (SELECT count(*) FROM client_metric_reports) + \
+           (SELECT count(*) FROM client_credentials) + \
+           (SELECT count(*) FROM client_pairing_requests) + \
+           (SELECT count(*) FROM client_instance_invites)",
     )
     .fetch_one(&pool)
     .await

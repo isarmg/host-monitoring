@@ -5,7 +5,7 @@ CREATE TABLE monitored_hosts (
     os_version               TEXT,
     kernel_version           TEXT,
     arch                     TEXT NOT NULL,
-    agent_version            TEXT NOT NULL,
+    client_version            TEXT NOT NULL,
     capabilities             TEXT NOT NULL DEFAULT '[]',
     registered_at            TEXT NOT NULL,
     last_seen_at             TEXT NOT NULL,
@@ -22,7 +22,7 @@ CREATE INDEX monitored_hosts_latest_report_retention
     ON monitored_hosts(latest_report_id)
     WHERE latest_report_id IS NOT NULL;
 
-CREATE TABLE agent_metric_reports (
+CREATE TABLE client_metric_reports (
     report_id                             TEXT PRIMARY KEY,
     host_id                               TEXT NOT NULL REFERENCES monitored_hosts(host_id) ON DELETE CASCADE,
     schema_version                        INTEGER NOT NULL,
@@ -42,17 +42,17 @@ CREATE TABLE agent_metric_reports (
     aggregated_at                         TEXT
 );
 
-CREATE INDEX agent_metric_reports_host_collected
-    ON agent_metric_reports(host_id, collected_at DESC, report_id DESC);
-CREATE INDEX agent_metric_reports_received ON agent_metric_reports(received_at);
-CREATE INDEX agent_metric_reports_retention_pending
-    ON agent_metric_reports(collected_at, report_id)
+CREATE INDEX client_metric_reports_host_collected
+    ON client_metric_reports(host_id, collected_at DESC, report_id DESC);
+CREATE INDEX client_metric_reports_received ON client_metric_reports(received_at);
+CREATE INDEX client_metric_reports_retention_pending
+    ON client_metric_reports(collected_at, report_id)
     WHERE aggregated_at IS NULL;
-CREATE INDEX agent_metric_reports_retention_delete
-    ON agent_metric_reports(aggregated_at, report_id)
+CREATE INDEX client_metric_reports_retention_delete
+    ON client_metric_reports(aggregated_at, report_id)
     WHERE aggregated_at IS NOT NULL;
 
-CREATE TABLE agent_credentials (
+CREATE TABLE client_credentials (
     credential_id   TEXT PRIMARY KEY,
     host_id         TEXT NOT NULL REFERENCES monitored_hosts(host_id) ON DELETE CASCADE,
     token_hash      TEXT NOT NULL UNIQUE,
@@ -61,12 +61,12 @@ CREATE TABLE agent_credentials (
     revoked_at      TEXT
 );
 
-CREATE INDEX agent_credentials_host ON agent_credentials(host_id);
-CREATE INDEX agent_credentials_active_token
-    ON agent_credentials(token_hash)
+CREATE INDEX client_credentials_host ON client_credentials(host_id);
+CREATE INDEX client_credentials_active_token
+    ON client_credentials(token_hash)
     WHERE revoked_at IS NULL;
 
-CREATE TABLE agent_instance_invites (
+CREATE TABLE client_instance_invites (
     invite_id             TEXT PRIMARY KEY,
     instance_id           TEXT NOT NULL,
     activation_code_hash  TEXT NOT NULL UNIQUE,
@@ -77,20 +77,20 @@ CREATE TABLE agent_instance_invites (
     cancelled_at          TEXT
 );
 
-CREATE INDEX agent_instance_invites_created
-    ON agent_instance_invites(created_at DESC);
-CREATE UNIQUE INDEX agent_instance_invites_one_pending
-    ON agent_instance_invites(instance_id)
+CREATE INDEX client_instance_invites_created
+    ON client_instance_invites(created_at DESC);
+CREATE UNIQUE INDEX client_instance_invites_one_pending
+    ON client_instance_invites(instance_id)
     WHERE status = 'pending';
 
-CREATE TABLE agent_pairing_requests (
+CREATE TABLE client_pairing_requests (
     request_id           TEXT PRIMARY KEY,
     requested_host_id    TEXT NOT NULL,
     os                   TEXT NOT NULL,
     os_version           TEXT,
     kernel_version       TEXT,
     arch                 TEXT NOT NULL,
-    agent_version        TEXT NOT NULL,
+    client_version        TEXT NOT NULL,
     token_hash           TEXT NOT NULL UNIQUE,
     polling_secret_hash  TEXT NOT NULL UNIQUE,
     status               TEXT NOT NULL DEFAULT 'pending',
@@ -101,11 +101,11 @@ CREATE TABLE agent_pairing_requests (
     activated_at         TEXT
 );
 
-CREATE INDEX agent_pairing_requests_expiry
-    ON agent_pairing_requests(expires_at)
+CREATE INDEX client_pairing_requests_expiry
+    ON client_pairing_requests(expires_at)
     WHERE status = 'pending';
-CREATE INDEX agent_pairing_requests_pending_device
-    ON agent_pairing_requests(requested_host_id, expires_at)
+CREATE INDEX client_pairing_requests_pending_device
+    ON client_pairing_requests(requested_host_id, expires_at)
     WHERE status = 'pending';
 
 CREATE TABLE audit_events (
@@ -119,7 +119,7 @@ CREATE TABLE audit_events (
 
 CREATE INDEX audit_events_created ON audit_events(created_at DESC);
 
-CREATE TABLE agent_metric_hourly_aggregates (
+CREATE TABLE client_metric_hourly_aggregates (
     host_id                                       TEXT NOT NULL REFERENCES monitored_hosts(host_id) ON DELETE CASCADE,
     bucket_start                                  TEXT NOT NULL,
     interval_start                                TEXT NOT NULL,
@@ -186,5 +186,5 @@ CREATE TABLE agent_metric_hourly_aggregates (
     CHECK (gpu_memory_usage_percent_count BETWEEN 0 AND sample_count)
 );
 
-CREATE INDEX agent_metric_hourly_aggregates_retention
-    ON agent_metric_hourly_aggregates(interval_end, host_id, bucket_start);
+CREATE INDEX client_metric_hourly_aggregates_retention
+    ON client_metric_hourly_aggregates(interval_end, host_id, bucket_start);

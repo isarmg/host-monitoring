@@ -2,28 +2,28 @@
 //!
 //! These DTOs intentionally contain no trust-boundary validation beyond strict JSON shape and
 //! canonical UUID decoding. The Server still owns policy checks such as hash format, supported
-//! Agent version, activation-code limits, and pairing state transitions.
+//! Client version, activation-code limits, and pairing state transitions.
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::{HostIdentity, report::deserialize_canonical_uuid};
 
-/// Exact HTTP surface shared by Host Monitoring 0.7 Server and Agent.
+/// Exact HTTP surface shared by Host Monitoring 0.7 Server and Client.
 /// There are deliberately no aliases for the former module-prefixed routes.
 pub const API_PREFIX: &str = "/api/v2";
-pub const AGENT_REPORT_PATH: &str = "/api/v2/host-monitor/report";
-pub const AGENT_PAIRING_REQUESTS_PATH: &str = "/api/v2/host-monitor/pairing-requests";
-pub const AGENT_PAIRING_REQUEST_PATH: &str = "/api/v2/host-monitor/pairing-requests/{request_id}";
-pub const AGENT_PAIRING_STATUS_PATH: &str =
+pub const CLIENT_REPORT_PATH: &str = "/api/v2/host-monitor/report";
+pub const CLIENT_PAIRING_REQUESTS_PATH: &str = "/api/v2/host-monitor/pairing-requests";
+pub const CLIENT_PAIRING_REQUEST_PATH: &str = "/api/v2/host-monitor/pairing-requests/{request_id}";
+pub const CLIENT_PAIRING_STATUS_PATH: &str =
     "/api/v2/host-monitor/pairing-requests/{request_id}/status";
-pub const AGENT_ACTIVATE_PATH: &str = "/api/v2/host-monitor/activate";
-pub const AGENT_ADMIN_ACTIVATE_PATH: &str = "/api/v2/host-monitor/activate-admin";
+pub const CLIENT_ACTIVATE_PATH: &str = "/api/v2/host-monitor/activate";
+pub const CLIENT_ADMIN_ACTIVATE_PATH: &str = "/api/v2/host-monitor/activate-admin";
 pub const BROWSER_ACTIVATION_PATH_PREFIX: &str = "/activate/";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct AgentPairingRequest {
+pub struct ClientPairingRequest {
     pub host: HostIdentity,
     pub token_hash: String,
     pub polling_secret_hash: String,
@@ -31,7 +31,7 @@ pub struct AgentPairingRequest {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct AgentPairingResponse {
+pub struct ClientPairingResponse {
     #[serde(deserialize_with = "deserialize_canonical_uuid")]
     pub request_id: String,
     pub activation_url: String,
@@ -41,7 +41,7 @@ pub struct AgentPairingResponse {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct AgentPairingStatusResponse {
+pub struct ClientPairingStatusResponse {
     pub status: PairingStatus,
     #[serde(
         default,
@@ -87,23 +87,23 @@ impl TryFrom<&str> for PairingStatus {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct ActivateAgentRequest {
+pub struct ActivateClientRequest {
     #[serde(deserialize_with = "deserialize_canonical_uuid")]
     pub request_id: String,
     pub activation_code: String,
 }
 
-/// Borrowed serialization view used by Agents so the one-time activation code
+/// Borrowed serialization view used by Clients so the one-time activation code
 /// is not copied into an additional heap allocation before transmission.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-pub struct ActivateAgentRequestRef<'a> {
+pub struct ActivateClientRequestRef<'a> {
     pub request_id: &'a str,
     pub activation_code: &'a str,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct ActivateAgentResponse {
+pub struct ActivateClientResponse {
     #[serde(deserialize_with = "deserialize_canonical_uuid")]
     pub instance_id: String,
     pub status: ActivatePairingStatus,
@@ -117,7 +117,7 @@ pub enum ActivatePairingStatus {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct AgentReportAck {
+pub struct ClientReportAck {
     #[serde(deserialize_with = "deserialize_canonical_uuid")]
     pub host_id: String,
     #[serde(deserialize_with = "deserialize_canonical_uuid")]
@@ -150,20 +150,20 @@ mod tests {
             os_version: None,
             kernel_version: None,
             arch: "x86_64".into(),
-            agent_version: "0.3.6".into(),
+            client_version: "0.3.6".into(),
         }
     }
 
     #[test]
     fn pairing_request_round_trips_without_loss() {
-        let request = AgentPairingRequest {
+        let request = ClientPairingRequest {
             host: host(),
             token_hash: "a".repeat(64),
             polling_secret_hash: "b".repeat(64),
         };
         let encoded = serde_json::to_vec(&request).unwrap();
         assert_eq!(
-            serde_json::from_slice::<AgentPairingRequest>(&encoded).unwrap(),
+            serde_json::from_slice::<ClientPairingRequest>(&encoded).unwrap(),
             request
         );
     }
@@ -180,7 +180,7 @@ mod tests {
                 "instance_id": "BBBBBBBB-BBBB-4BBB-8BBB-BBBBBBBBBBBB"
             }),
         ] {
-            assert!(serde_json::from_value::<AgentPairingStatusResponse>(value).is_err());
+            assert!(serde_json::from_value::<ClientPairingStatusResponse>(value).is_err());
         }
     }
 
@@ -193,7 +193,7 @@ mod tests {
             "received_at": "2026-01-01T00:00:00Z",
             "unknown_status_detail": "ok"
         });
-        assert!(serde_json::from_value::<AgentReportAck>(value).is_err());
+        assert!(serde_json::from_value::<ClientReportAck>(value).is_err());
     }
 
     fn assert_rejects_server_control_fields<T: DeserializeOwned>(value: serde_json::Value) {
@@ -205,27 +205,27 @@ mod tests {
                 .insert(field.into(), serde_json::json!("forbidden"));
             assert!(
                 serde_json::from_value::<T>(candidate).is_err(),
-                "server-to-Agent response unexpectedly accepted {field}"
+                "server-to-Client response unexpectedly accepted {field}"
             );
         }
     }
 
     #[test]
-    fn server_to_agent_contract_has_no_control_payload() {
-        assert_rejects_server_control_fields::<AgentPairingResponse>(serde_json::json!({
+    fn server_to_client_contract_has_no_control_payload() {
+        assert_rejects_server_control_fields::<ClientPairingResponse>(serde_json::json!({
             "request_id": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
             "activation_url": "/activate/bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
             "expires_in": 900,
             "poll_interval": 2
         }));
-        assert_rejects_server_control_fields::<AgentPairingStatusResponse>(serde_json::json!({
+        assert_rejects_server_control_fields::<ClientPairingStatusResponse>(serde_json::json!({
             "status": "waiting"
         }));
-        assert_rejects_server_control_fields::<ActivateAgentResponse>(serde_json::json!({
+        assert_rejects_server_control_fields::<ActivateClientResponse>(serde_json::json!({
             "instance_id": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
             "status": "active"
         }));
-        assert_rejects_server_control_fields::<AgentReportAck>(serde_json::json!({
+        assert_rejects_server_control_fields::<ClientReportAck>(serde_json::json!({
             "host_id": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
             "report_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
             "accepted": true,
@@ -237,11 +237,11 @@ mod tests {
     fn borrowed_activation_request_matches_owned_wire_shape() {
         let request_id = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
         let activation_code = "uci_example";
-        let owned = ActivateAgentRequest {
+        let owned = ActivateClientRequest {
             request_id: request_id.into(),
             activation_code: activation_code.into(),
         };
-        let borrowed = ActivateAgentRequestRef {
+        let borrowed = ActivateClientRequestRef {
             request_id,
             activation_code,
         };

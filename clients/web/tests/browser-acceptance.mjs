@@ -9,7 +9,7 @@ const session = { authenticated: true, user_id: "A".repeat(43), username: "admin
 function host(index) {
   return {
     id: "018f1f4b-7a5d-7b5f-8d31-" + String(index).padStart(12, "0"), name: "Host-" + index,
-    os: "linux", os_version: null, kernel_version: null, arch: "x86_64", agent_version: "0.8.0",
+    os: "linux", os_version: null, kernel_version: null, arch: "x86_64", client_version: "0.8.0",
     registered_at: "2026-09-04T00:00:00Z", last_seen_at: "2026-09-04T00:00:00Z", latest_collected_at: null,
     status: "online", capabilities: [], cpu_usage_percent: null, memory_usage_percent: 25,
     network_received_bytes_per_second: null, network_transmitted_bytes_per_second: null,
@@ -36,7 +36,7 @@ try {
         if (isHosts) requested.push(offset);
         return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(isHosts
           ? { hosts: offset === 0 ? Array.from({ length: 50 }, (_, index) => host(index)) : [host(50)], total: 51, limit: 50, offset }
-          : url.pathname.endsWith("/agent-instances") ? [] : session) });
+          : url.pathname.endsWith("/client-instances") ? [] : session) });
       });
       await page.goto(`http://127.0.0.1:${address.port}`);
       await page.getByRole("button", { name: "选择实例 Host-0", exact: true }).waitFor();
@@ -66,7 +66,7 @@ try {
       await page.getByRole("button", { name: "选择实例 Host-50", exact: true }).click();
       assert.ok(requested.includes(50));
       await page.getByText("完整采集信息").click();
-      assert.equal(await page.getByText("agent_version", { exact: true }).count(), 0);
+      assert.equal(await page.getByText("client_version", { exact: true }).count(), 0);
       await page.getByText("注册时间", { exact: true }).waitFor();
       for (const theme of ["light", "dark"]) {
         if (await page.locator("html").getAttribute("data-theme") !== theme) await page.getByRole("button", { name: /切换到.*模式/ }).click();

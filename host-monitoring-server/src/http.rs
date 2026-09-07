@@ -20,9 +20,9 @@ use axum::{
 };
 use chrono::Utc;
 use host_protocol::{
-    AGENT_REPORT_MAX_BODY_BYTES, ActivateAgentRequest, ActivateAgentResponse,
-    ActivatePairingStatus, AgentPairingRequest, AgentPairingResponse, AgentPairingStatusResponse,
-    AgentReport, AgentReportAck,
+    ActivateClientRequest, ActivateClientResponse, ActivatePairingStatus,
+    CLIENT_REPORT_MAX_BODY_BYTES, ClientPairingRequest, ClientPairingResponse,
+    ClientPairingStatusResponse, ClientReport, ClientReportAck,
 };
 use sarmg_admin_auth::AdministratorOriginMode;
 use sarmg_admin_core::AdministratorService;
@@ -33,7 +33,7 @@ use tower_http::services::{ServeDir, ServeFile};
 use crate::{
     error::{Error, FoundationErrorEnvelope, Result, database, framework_envelope},
     model::{
-        CreateAgentInstanceRequest, CreatedAgentInstance, HistoryQuery, HistoryResponse,
+        CreateClientInstanceRequest, CreatedClientInstance, HistoryQuery, HistoryResponse,
         HostDetailResponse, HostListQuery, HostListResponse, UpdateMonitoringRemarkRequest,
         canonical_uuid, validate_pairing, validate_report,
     },
@@ -264,11 +264,11 @@ pub fn router(
             get(host_history),
         )
         .route(
-            "/api/v2/monitoring/agent-instances",
+            "/api/v2/monitoring/client-instances",
             get(list_instances).post(create_instance),
         )
         .route(
-            "/api/v2/monitoring/agent-instances/{request_id}",
+            "/api/v2/monitoring/client-instances/{request_id}",
             axum::routing::delete(cancel_instance),
         )
         .route(
@@ -276,7 +276,7 @@ pub fn router(
             axum::routing::patch(update_remark).delete(delete_host),
         )
         .route(
-            host_protocol::AGENT_ADMIN_ACTIVATE_PATH,
+            host_protocol::CLIENT_ADMIN_ACTIVATE_PATH,
             post(activate_admin),
         )
         .layer(DefaultBodyLimit::max(16 * 1024))
@@ -284,26 +284,26 @@ pub fn router(
             state.clone(),
             console_admission,
         ));
-    let agent = Router::new()
-        .route(host_protocol::AGENT_REPORT_PATH, post(report))
+    let client = Router::new()
+        .route(host_protocol::CLIENT_REPORT_PATH, post(report))
         .route(
-            host_protocol::AGENT_PAIRING_REQUESTS_PATH,
+            host_protocol::CLIENT_PAIRING_REQUESTS_PATH,
             post(create_pairing),
         )
         .route(
-            host_protocol::AGENT_PAIRING_REQUEST_PATH,
+            host_protocol::CLIENT_PAIRING_REQUEST_PATH,
             get(pairing_public),
         )
         .route(
-            host_protocol::AGENT_PAIRING_STATUS_PATH,
+            host_protocol::CLIENT_PAIRING_STATUS_PATH,
             post(pairing_status),
         )
         .route(
-            host_protocol::AGENT_ACTIVATE_PATH,
+            host_protocol::CLIENT_ACTIVATE_PATH,
             post(activate_capability),
         )
-        .layer(DefaultBodyLimit::max(AGENT_REPORT_MAX_BODY_BYTES));
-    let product = console.merge(agent).with_state(state);
+        .layer(DefaultBodyLimit::max(CLIENT_REPORT_MAX_BODY_BYTES));
+    let product = console.merge(client).with_state(state);
     Ok(Router::new()
         .merge(platform)
         .merge(product)
@@ -381,7 +381,7 @@ async fn console_admission(
 async fn create_instance(
     State(state): State<AppState>,
     Extension(principal): Extension<Principal>,
-    Json(request): Json<CreateAgentInstanceRequest>,
+    Json(request): Json<CreateClientInstanceRequest>,
 ) -> Result<Response> {
     state
         .pairing_admission
@@ -394,7 +394,7 @@ async fn create_instance(
         store::CreateInviteResult::Created(summary) => {
             let mut response = (
                 StatusCode::CREATED,
-                Json(CreatedAgentInstance {
+                Json(CreatedClientInstance {
                     summary,
                     activation_code: activation_code.expect("created invite has code"),
                 }),
@@ -413,7 +413,7 @@ async fn create_instance(
 
 async fn list_instances(
     State(state): State<AppState>,
-) -> Result<Json<Vec<crate::model::AgentInstanceSummary>>> {
+) -> Result<Json<Vec<crate::model::ClientInstanceSummary>>> {
     Ok(Json(
         store::list_invites(&state.pool).await.map_err(database)?,
     ))
@@ -424,14 +424,14 @@ async fn cancel_instance(
     Extension(principal): Extension<Principal>,
     Path(id): Path<String>,
 ) -> Result<StatusCode> {
-    let id = canonical_uuid(&id, "agent instance request id")?;
+    let id = canonical_uuid(&id, "client instance request id")?;
     match store::cancel_invite(&state.pool, id, &principal.subject)
         .await
         .map_err(database)?
     {
         store::CancelInviteResult::Cancelled => Ok(StatusCode::NO_CONTENT),
         store::CancelInviteResult::NotFound => {
-            Err(Error::NotFound("agent instance invite not found".into()))
+            Err(Error::NotFound("client instance invite not found".into()))
         }
         store::CancelInviteResult::NotPending => Err(Error::Conflict(
             "only a pending invite can be cancelled".into(),
@@ -442,7 +442,7 @@ async fn cancel_instance(
 async fn create_pairing(
     State(state): State<AppState>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
-    Json(request): Json<AgentPairingRequest>,
+    Json(request): Json<ClientPairingRequest>,
 ) -> Result<Response> {
     validate_pairing(&request)?;
     state
@@ -463,7 +463,7 @@ async fn create_pairing(
                 } else {
                     StatusCode::OK
                 },
-                Json(AgentPairingResponse {
+                Json(ClientPairingResponse {
                     request_id: request_id.to_string(),
                     activation_url: activation_url(request_id),
                     expires_in: (expires_at - Utc::now()).num_seconds().max(1) as u64,
@@ -480,7 +480,7 @@ async fn create_pairing(
             Err(Error::BadRequest("pairing request expired".into()))
         }
         store::CreatePairingResult::Conflict => Err(Error::Conflict(
-            "polling secret or agent token is already in use".into(),
+            "polling secret or client token is already in use".into(),
         )),
         store::CreatePairingResult::AtCapacity => Err(Error::RateLimited {
             message: "too many pending pairing requests",
@@ -527,7 +527,7 @@ async fn pairing_status(
         .await
         .map_err(database)?
         .ok_or(Error::Unauthorized)?;
-    let mut response = Json(AgentPairingStatusResponse {
+    let mut response = Json(ClientPairingStatusResponse {
         status,
         instance_id,
     })
@@ -542,7 +542,7 @@ async fn activate_admin(
     State(state): State<AppState>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     Extension(principal): Extension<Principal>,
-    Json(request): Json<ActivateAgentRequest>,
+    Json(request): Json<ActivateClientRequest>,
 ) -> Result<Response> {
     state
         .pairing_admission
@@ -553,15 +553,15 @@ async fn activate_admin(
 async fn activate_capability(
     State(state): State<AppState>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
-    Json(request): Json<ActivateAgentRequest>,
+    Json(request): Json<ActivateClientRequest>,
 ) -> Result<Response> {
-    activate(&state, peer.ip(), request, "agent-capability").await
+    activate(&state, peer.ip(), request, "client-capability").await
 }
 
 async fn activate(
     state: &AppState,
     source: std::net::IpAddr,
-    request: ActivateAgentRequest,
+    request: ActivateClientRequest,
     actor: &str,
 ) -> Result<Response> {
     let id = canonical_uuid(&request.request_id, "pairing request id")?;
@@ -581,7 +581,7 @@ async fn activate(
     .map_err(database)?
     {
         store::ActivateResult::Active(instance) => {
-            let mut response = Json(ActivateAgentResponse {
+            let mut response = Json(ActivateClientResponse {
                 instance_id: instance.to_string(),
                 status: ActivatePairingStatus::Active,
             })
@@ -612,7 +612,7 @@ fn activation_url(request_id: uuid::Uuid) -> String {
 async fn report(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Json(report): Json<AgentReport>,
+    Json(report): Json<ClientReport>,
 ) -> Result<Response> {
     let credential = authorization(&headers, "bearer").ok_or(Error::Unauthorized)?;
     let credential_hash = crate::token_hash(credential);
@@ -621,7 +621,7 @@ async fn report(
         .map_err(database)?
         .ok_or(Error::Unauthorized)?;
     if host.to_string() != report.host.id {
-        return Err(Error::AgentHostMismatch);
+        return Err(Error::ClientHostMismatch);
     }
     let metrics = validate_report(&report)?;
     let mut buckets = state.report_buckets.lock().await;
@@ -629,7 +629,7 @@ async fn report(
     drop(buckets);
     if let Err(delay) = admission {
         return Err(Error::RateLimited {
-            message: "agent report rate exceeded",
+            message: "client report rate exceeded",
             retry_after: delay
                 .as_secs()
                 .saturating_add(u64::from(delay.subsec_nanos() != 0))
@@ -683,7 +683,7 @@ async fn report(
     };
     Ok((
         StatusCode::ACCEPTED,
-        Json(AgentReportAck {
+        Json(ClientReportAck {
             host_id,
             report_id,
             accepted,
@@ -873,12 +873,12 @@ mod tests {
                 "os_version": "test",
                 "kernel_version": "test",
                 "arch": "x86_64",
-                "agent_version": env!("CARGO_PKG_VERSION")
+                "client_version": env!("CARGO_PKG_VERSION")
             },
             "token_hash": nonce.to_string().repeat(64),
             "polling_secret_hash": if nonce == 'a' { "b".repeat(64) } else { "c".repeat(64) }
         });
-        let mut request = Request::post(host_protocol::AGENT_PAIRING_REQUESTS_PATH)
+        let mut request = Request::post(host_protocol::CLIENT_PAIRING_REQUESTS_PATH)
             .header(header::CONTENT_TYPE, "application/json")
             .body(Body::from(body.to_string()))
             .unwrap();
@@ -1002,7 +1002,7 @@ mod tests {
         assert_eq!(body_bytes(response).await, b"<html>activation app</html>");
         let response = app
             .oneshot(
-                Request::get("/api/v2/monitoring/agent-instances")
+                Request::get("/api/v2/monitoring/client-instances")
                     .body(Body::empty())
                     .unwrap(),
             )

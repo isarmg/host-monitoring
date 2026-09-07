@@ -1,12 +1,12 @@
 use chrono::{DateTime, Utc};
-use host_protocol::{AgentPairingRequest, AgentReport, Capability, PairingStatus};
+use host_protocol::{Capability, ClientPairingRequest, ClientReport, PairingStatus};
 use sarmg_admin_core::AdministratorStore;
 use sqlx::{Acquire, FromRow, Row, Sqlite, SqlitePool, Transaction, types::Json};
 use uuid::Uuid;
 
 pub use crate::database_schema::{initialize_empty, open_existing, open_or_initialize};
 use crate::model::{
-    AgentInstanceSummary, AgentPairingPublicSummary, HistoryPoint, HostSummary, MetricSummary,
+    ClientInstanceSummary, ClientPairingPublicSummary, HistoryPoint, HostSummary, MetricSummary,
     host_status,
 };
 
@@ -17,11 +17,11 @@ pub async fn ready(pool: &SqlitePool) -> bool {
 pub async fn retention_ready(pool: &SqlitePool) -> bool {
     sqlx::query_scalar::<_, i64>(
         "SELECT \
-           EXISTS(SELECT 1 FROM pragma_table_info('agent_metric_reports') \
+           EXISTS(SELECT 1 FROM pragma_table_info('client_metric_reports') \
                    WHERE name='aggregated_at') \
            AND EXISTS(SELECT 1 FROM sqlite_master \
-                      WHERE type='table' AND name='agent_metric_hourly_aggregates') \
-           AND (SELECT COUNT(*) FROM pragma_table_info('agent_metric_hourly_aggregates'))=42",
+                      WHERE type='table' AND name='client_metric_hourly_aggregates') \
+           AND (SELECT COUNT(*) FROM pragma_table_info('client_metric_hourly_aggregates'))=42",
     )
     .fetch_one(pool)
     .await
@@ -95,7 +95,7 @@ async fn audit(
 }
 
 pub enum CreateInviteResult {
-    Created(AgentInstanceSummary),
+    Created(ClientInstanceSummary),
     Conflict,
 }
 
@@ -111,7 +111,7 @@ pub async fn create_invite(
     let created_at = Utc::now();
     let mut tx = pool.begin().await?;
     let row = sqlx::query(
-        r#"INSERT INTO agent_instance_invites(
+        r#"INSERT INTO client_instance_invites(
                invite_id,instance_id,activation_code_hash,display_name,created_at
            ) VALUES(?,?,?,?,?)
            ON CONFLICT (instance_id) WHERE status='pending' DO NOTHING
@@ -130,7 +130,7 @@ pub async fn create_invite(
     };
     audit(
         &mut tx,
-        "monitoring.agent_instance.invite.create",
+        "monitoring.client_instance.invite.create",
         &instance_id.to_string(),
         Some(&format!("invite_id={invite_id}")),
         actor,
@@ -138,20 +138,20 @@ pub async fn create_invite(
     .await?;
     tx.commit().await?;
     Ok((
-        CreateInviteResult::Created(agent_instance(&row)?),
+        CreateInviteResult::Created(client_instance(&row)?),
         Some(activation_code),
     ))
 }
 
-pub async fn list_invites(pool: &SqlitePool) -> anyhow::Result<Vec<AgentInstanceSummary>> {
+pub async fn list_invites(pool: &SqlitePool) -> anyhow::Result<Vec<ClientInstanceSummary>> {
     let rows = sqlx::query(
         r#"SELECT invite_id,instance_id,display_name,created_at,status
-           FROM agent_instance_invites
+           FROM client_instance_invites
            ORDER BY created_at DESC LIMIT 200"#,
     )
     .fetch_all(pool)
     .await?;
-    rows.iter().map(agent_instance).collect()
+    rows.iter().map(client_instance).collect()
 }
 
 pub enum CancelInviteResult {
@@ -167,7 +167,7 @@ pub async fn cancel_invite(
 ) -> anyhow::Result<CancelInviteResult> {
     let mut tx = pool.begin().await?;
     let row =
-        sqlx::query("SELECT status,instance_id FROM agent_instance_invites WHERE invite_id=?")
+        sqlx::query("SELECT status,instance_id FROM client_instance_invites WHERE invite_id=?")
             .bind(invite_id)
             .fetch_optional(&mut *tx)
             .await?;
@@ -181,7 +181,7 @@ pub async fn cancel_invite(
     }
     let instance_id: Uuid = row.try_get("instance_id")?;
     sqlx::query(
-        "UPDATE agent_instance_invites SET status='cancelled',cancelled_at=? WHERE invite_id=?",
+        "UPDATE client_instance_invites SET status='cancelled',cancelled_at=? WHERE invite_id=?",
     )
     .bind(Utc::now())
     .bind(invite_id)
@@ -189,7 +189,7 @@ pub async fn cancel_invite(
     .await?;
     audit(
         &mut tx,
-        "monitoring.agent_instance.invite.cancel",
+        "monitoring.client_instance.invite.cancel",
         &instance_id.to_string(),
         Some(&format!("invite_id={invite_id}")),
         actor,
@@ -199,8 +199,8 @@ pub async fn cancel_invite(
     Ok(CancelInviteResult::Cancelled)
 }
 
-fn agent_instance(row: &sqlx::sqlite::SqliteRow) -> anyhow::Result<AgentInstanceSummary> {
-    Ok(AgentInstanceSummary {
+fn client_instance(row: &sqlx::sqlite::SqliteRow) -> anyhow::Result<ClientInstanceSummary> {
+    Ok(ClientInstanceSummary {
         request_id: row.try_get::<Uuid, _>("invite_id")?.to_string(),
         instance_id: row.try_get::<Uuid, _>("instance_id")?.to_string(),
         display_name: row.try_get("display_name")?,
@@ -223,15 +223,15 @@ pub enum CreatePairingResult {
 
 pub async fn create_pairing(
     pool: &SqlitePool,
-    request: &AgentPairingRequest,
+    request: &ClientPairingRequest,
 ) -> anyhow::Result<CreatePairingResult> {
     const MAX_PENDING: i64 = 4096;
     let mut tx = pool.begin().await?;
     // Serialize identical polling secrets without locking the whole table.
     // SQLite serializes writes with its database lock; no advisory lock is needed.
     let existing = sqlx::query(
-        "SELECT request_id,requested_host_id,os,os_version,kernel_version,arch,agent_version,token_hash,status,expires_at \
-         FROM agent_pairing_requests WHERE polling_secret_hash=?",
+        "SELECT request_id,requested_host_id,os,os_version,kernel_version,arch,client_version,token_hash,status,expires_at \
+         FROM client_pairing_requests WHERE polling_secret_hash=?",
     ).bind(&request.polling_secret_hash).fetch_optional(&mut *tx).await?;
     if let Some(row) = existing {
         let matches = row.try_get::<Uuid, _>("requested_host_id")?.to_string() == request.host.id
@@ -239,7 +239,7 @@ pub async fn create_pairing(
             && row.try_get::<Option<String>, _>("os_version")? == request.host.os_version
             && row.try_get::<Option<String>, _>("kernel_version")? == request.host.kernel_version
             && row.try_get::<String, _>("arch")? == request.host.arch.trim()
-            && row.try_get::<String, _>("agent_version")? == request.host.agent_version.trim()
+            && row.try_get::<String, _>("client_version")? == request.host.client_version.trim()
             && row.try_get::<String, _>("token_hash")? == request.token_hash;
         let expires_at: DateTime<Utc> = row.try_get("expires_at")?;
         let status: String = row.try_get("status")?;
@@ -260,8 +260,8 @@ pub async fn create_pairing(
     let now = Utc::now();
     let denied_cutoff = now - chrono::Duration::days(30);
     sqlx::query(
-        "DELETE FROM agent_pairing_requests WHERE request_id IN (\
-           SELECT request_id FROM agent_pairing_requests \
+        "DELETE FROM client_pairing_requests WHERE request_id IN (\
+           SELECT request_id FROM client_pairing_requests \
            WHERE (status='pending' AND expires_at <= ?) OR (status='denied' AND created_at < ?) \
            ORDER BY created_at LIMIT 512)",
     )
@@ -270,7 +270,7 @@ pub async fn create_pairing(
     .execute(&mut *tx)
     .await?;
     let pending: i64 = sqlx::query_scalar(
-        "SELECT count(*) FROM agent_pairing_requests WHERE status='pending' AND expires_at>?",
+        "SELECT count(*) FROM client_pairing_requests WHERE status='pending' AND expires_at>?",
     )
     .bind(now)
     .fetch_one(&mut *tx)
@@ -281,7 +281,7 @@ pub async fn create_pairing(
     }
     let requested_host_id = Uuid::parse_str(&request.host.id)?;
     let pending_for_device: i64 = sqlx::query_scalar(
-        "SELECT count(*) FROM agent_pairing_requests \
+        "SELECT count(*) FROM client_pairing_requests \
          WHERE requested_host_id=? AND status='pending' AND expires_at>?",
     )
     .bind(requested_host_id)
@@ -296,8 +296,8 @@ pub async fn create_pairing(
     let created_at = Utc::now();
     let expires_at = created_at + chrono::Duration::minutes(15);
     let result = sqlx::query(
-        r#"INSERT INTO agent_pairing_requests(
-               request_id,requested_host_id,os,os_version,kernel_version,arch,agent_version,
+        r#"INSERT INTO client_pairing_requests(
+               request_id,requested_host_id,os,os_version,kernel_version,arch,client_version,
                token_hash,polling_secret_hash,expires_at,created_at)
            VALUES(?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING"#,
     )
@@ -307,7 +307,7 @@ pub async fn create_pairing(
     .bind(&request.host.os_version)
     .bind(&request.host.kernel_version)
     .bind(request.host.arch.trim())
-    .bind(request.host.agent_version.trim())
+    .bind(request.host.client_version.trim())
     .bind(&request.token_hash)
     .bind(&request.polling_secret_hash)
     .bind(expires_at)
@@ -329,17 +329,17 @@ pub async fn create_pairing(
 pub async fn pairing_public(
     pool: &SqlitePool,
     request_id: Uuid,
-) -> anyhow::Result<Option<AgentPairingPublicSummary>> {
+) -> anyhow::Result<Option<ClientPairingPublicSummary>> {
     let row = sqlx::query(
-        "SELECT request_id,os,arch,agent_version,expires_at,CASE WHEN status='pending' AND expires_at<=? THEN 'expired' ELSE CASE WHEN status='pending' THEN 'waiting' ELSE status END END AS status \
-         FROM agent_pairing_requests WHERE request_id=?",
+        "SELECT request_id,os,arch,client_version,expires_at,CASE WHEN status='pending' AND expires_at<=? THEN 'expired' ELSE CASE WHEN status='pending' THEN 'waiting' ELSE status END END AS status \
+         FROM client_pairing_requests WHERE request_id=?",
     ).bind(Utc::now()).bind(request_id).fetch_optional(pool).await?;
     row.map(|row| {
-        Ok(AgentPairingPublicSummary {
+        Ok(ClientPairingPublicSummary {
             request_id: row.try_get::<Uuid, _>("request_id")?.to_string(),
             os: row.try_get("os")?,
             arch: row.try_get("arch")?,
-            agent_version: row.try_get("agent_version")?,
+            client_version: row.try_get("client_version")?,
             status: row.try_get("status")?,
             expires_at: row.try_get("expires_at")?,
         })
@@ -354,7 +354,7 @@ pub async fn pairing_status(
 ) -> anyhow::Result<Option<(PairingStatus, Option<String>)>> {
     let row = sqlx::query(
         "SELECT instance_id,CASE WHEN status='pending' AND expires_at<=? THEN 'expired' WHEN status='pending' THEN 'waiting' ELSE status END AS status \
-         FROM agent_pairing_requests WHERE request_id=? AND polling_secret_hash=?",
+         FROM client_pairing_requests WHERE request_id=? AND polling_secret_hash=?",
     ).bind(Utc::now()).bind(request_id).bind(secret_hash).fetch_optional(pool).await?;
     row.map(|row| {
         let raw: String = row.try_get("status")?;
@@ -387,15 +387,15 @@ pub async fn activate(
 ) -> anyhow::Result<ActivateResult> {
     let mut tx = pool.begin().await?;
     let pairing = sqlx::query(
-        "SELECT request_id,os,os_version,kernel_version,arch,agent_version,token_hash,status,invite_id,instance_id,expires_at \
-         FROM agent_pairing_requests WHERE request_id=?",
+        "SELECT request_id,os,os_version,kernel_version,arch,client_version,token_hash,status,invite_id,instance_id,expires_at \
+         FROM client_pairing_requests WHERE request_id=?",
     ).bind(request_id).fetch_optional(&mut *tx).await?;
     let Some(pairing) = pairing else {
         tx.rollback().await?;
         return Ok(ActivateResult::NotFound);
     };
     let invite = sqlx::query(
-        "SELECT invite_id,instance_id,display_name,status FROM agent_instance_invites \
+        "SELECT invite_id,instance_id,display_name,status FROM client_instance_invites \
          WHERE activation_code_hash=?",
     )
     .bind(activation_hash)
@@ -413,7 +413,7 @@ pub async fn activate(
             && pairing.try_get::<Option<Uuid>, _>("instance_id")? == Some(instance_id);
         let token_hash: String = pairing.try_get("token_hash")?;
         let active: bool = sqlx::query_scalar(
-            "SELECT EXISTS(SELECT 1 FROM agent_credentials WHERE host_id=? AND token_hash=? AND revoked_at IS NULL)",
+            "SELECT EXISTS(SELECT 1 FROM client_credentials WHERE host_id=? AND token_hash=? AND revoked_at IS NULL)",
         ).bind(instance_id).bind(token_hash).fetch_one(&mut *tx).await?;
         tx.rollback().await?;
         return Ok(if same && active {
@@ -433,14 +433,14 @@ pub async fn activate(
     }
     let token_hash: String = pairing.try_get("token_hash")?;
     sqlx::query(
-        "INSERT INTO monitored_hosts(host_id,name,os,os_version,kernel_version,arch,agent_version,registered_at,last_seen_at) \
+        "INSERT INTO monitored_hosts(host_id,name,os,os_version,kernel_version,arch,client_version,registered_at,last_seen_at) \
          VALUES(?,?,?,?,?,?,?,?,?)",
     ).bind(instance_id).bind(invite.try_get::<String,_>("display_name")?)
       .bind(pairing.try_get::<String,_>("os")?).bind(pairing.try_get::<Option<String>,_>("os_version")?)
       .bind(pairing.try_get::<Option<String>,_>("kernel_version")?).bind(pairing.try_get::<String,_>("arch")?)
-      .bind(pairing.try_get::<String,_>("agent_version")?).bind(now).bind(now).execute(&mut *tx).await?;
+      .bind(pairing.try_get::<String,_>("client_version")?).bind(now).bind(now).execute(&mut *tx).await?;
     sqlx::query(
-        "INSERT INTO agent_credentials(credential_id,host_id,token_hash,issued_at) VALUES(?,?,?,?)",
+        "INSERT INTO client_credentials(credential_id,host_id,token_hash,issued_at) VALUES(?,?,?,?)",
     )
     .bind(Uuid::new_v4())
     .bind(instance_id)
@@ -448,10 +448,10 @@ pub async fn activate(
     .bind(now)
     .execute(&mut *tx)
     .await?;
-    sqlx::query("UPDATE agent_pairing_requests SET status='active',invite_id=?,instance_id=?,activated_at=? WHERE request_id=?")
+    sqlx::query("UPDATE client_pairing_requests SET status='active',invite_id=?,instance_id=?,activated_at=? WHERE request_id=?")
         .bind(invite_id).bind(instance_id).bind(now).bind(request_id).execute(&mut *tx).await?;
     sqlx::query(
-        "UPDATE agent_instance_invites SET status='active',activated_at=? WHERE invite_id=?",
+        "UPDATE client_instance_invites SET status='active',activated_at=? WHERE invite_id=?",
     )
     .bind(now)
     .bind(invite_id)
@@ -459,7 +459,7 @@ pub async fn activate(
     .await?;
     audit(
         &mut tx,
-        "monitoring.agent_instance.activate",
+        "monitoring.client_instance.activate",
         &instance_id.to_string(),
         Some(&format!("request_id={request_id}; invite_id={invite_id}")),
         actor,
@@ -471,7 +471,7 @@ pub async fn activate(
 
 pub async fn host_for_token(pool: &SqlitePool, token_hash: &str) -> anyhow::Result<Option<Uuid>> {
     Ok(sqlx::query_scalar(
-        "SELECT c.host_id FROM agent_credentials c JOIN monitored_hosts h ON h.host_id=c.host_id WHERE c.token_hash=? AND c.revoked_at IS NULL AND h.lifecycle_status='active'",
+        "SELECT c.host_id FROM client_credentials c JOIN monitored_hosts h ON h.host_id=c.host_id WHERE c.token_hash=? AND c.revoked_at IS NULL AND h.lifecycle_status='active'",
     )
     .bind(token_hash)
     .fetch_optional(pool)
@@ -490,13 +490,13 @@ pub enum ReportStoreError {
 /// hash is intentionally private and this type does not implement `Debug`, so
 /// telemetry credentials cannot be included accidentally in writer logs.
 pub struct ReportWrite {
-    report: AgentReport,
+    report: ClientReport,
     token_hash: String,
     metrics: MetricSummary,
 }
 
 impl ReportWrite {
-    pub fn new(report: AgentReport, token_hash: String, metrics: MetricSummary) -> Self {
+    pub fn new(report: ClientReport, token_hash: String, metrics: MetricSummary) -> Self {
         Self {
             report,
             token_hash,
@@ -507,7 +507,7 @@ impl ReportWrite {
 
 pub async fn store_report(
     pool: &SqlitePool,
-    report: &AgentReport,
+    report: &ClientReport,
     token_hash: &str,
     metrics: &MetricSummary,
 ) -> anyhow::Result<(bool, DateTime<Utc>)> {
@@ -565,7 +565,7 @@ pub async fn store_report_batch(
 
 async fn store_report_in_transaction(
     tx: &mut Transaction<'_, Sqlite>,
-    report: &AgentReport,
+    report: &ClientReport,
     token_hash: &str,
     metrics: &MetricSummary,
 ) -> anyhow::Result<(bool, DateTime<Utc>)> {
@@ -573,7 +573,7 @@ async fn store_report_in_transaction(
     let report_id = Uuid::parse_str(&report.report_id)?;
     let current = sqlx::query(
         "SELECT latest_report_id,latest_collected_at FROM monitored_hosts h \
-         WHERE host_id=? AND h.lifecycle_status='active' AND EXISTS(SELECT 1 FROM agent_credentials c WHERE c.host_id=h.host_id AND c.token_hash=? AND c.revoked_at IS NULL)",
+         WHERE host_id=? AND h.lifecycle_status='active' AND EXISTS(SELECT 1 FROM client_credentials c WHERE c.host_id=h.host_id AND c.token_hash=? AND c.revoked_at IS NULL)",
     ).bind(host_id).bind(token_hash).fetch_optional(&mut **tx).await?;
     let Some(current) = current else {
         return Err(ReportStoreError::Unauthorized.into());
@@ -588,7 +588,7 @@ async fn store_report_in_transaction(
     let payload = becomes_latest.then(|| Json(report.clone()));
     let received_at = Utc::now();
     let inserted = sqlx::query(
-        r#"INSERT INTO agent_metric_reports(
+        r#"INSERT INTO client_metric_reports(
              report_id,host_id,schema_version,collected_at,received_at,interval_seconds,payload,
              cpu_usage_percent,memory_usage_percent,network_received_bytes_per_second,
              network_transmitted_bytes_per_second,disk_read_bytes_per_second,disk_written_bytes_per_second,
@@ -604,7 +604,7 @@ async fn store_report_in_transaction(
       .fetch_optional(&mut **tx).await?;
     let Some(row) = inserted else {
         let existing: Option<(Uuid, DateTime<Utc>)> = sqlx::query_as(
-            "SELECT host_id,received_at FROM agent_metric_reports WHERE report_id=?",
+            "SELECT host_id,received_at FROM client_metric_reports WHERE report_id=?",
         )
         .bind(report_id)
         .fetch_optional(&mut **tx)
@@ -618,7 +618,7 @@ async fn store_report_in_transaction(
     if becomes_latest {
         sqlx::query(
             r#"UPDATE monitored_hosts SET
-                 os=?,os_version=?,kernel_version=?,arch=?,agent_version=?,capabilities=?,
+                 os=?,os_version=?,kernel_version=?,arch=?,client_version=?,capabilities=?,
                  last_seen_at=CASE WHEN last_seen_at > ? THEN last_seen_at ELSE ? END,latest_report_id=?,
                  latest_collected_at=?,latest_interval_seconds=? WHERE host_id=?"#,
         )
@@ -626,7 +626,7 @@ async fn store_report_in_transaction(
         .bind(&report.host.os_version)
         .bind(&report.host.kernel_version)
         .bind(report.host.arch.trim())
-        .bind(report.host.agent_version.trim())
+        .bind(report.host.client_version.trim())
         .bind(Json(&report.capabilities))
         .bind(stored_received)
         .bind(stored_received)
@@ -637,13 +637,13 @@ async fn store_report_in_transaction(
         .execute(&mut **tx)
         .await?;
         if let Some(previous) = previous_report.filter(|previous| *previous != report_id) {
-            sqlx::query("UPDATE agent_metric_reports SET payload=NULL WHERE report_id=?")
+            sqlx::query("UPDATE client_metric_reports SET payload=NULL WHERE report_id=?")
                 .bind(previous)
                 .execute(&mut **tx)
                 .await?;
         }
     }
-    sqlx::query("UPDATE agent_credentials SET last_used_at=? WHERE token_hash=?")
+    sqlx::query("UPDATE client_credentials SET last_used_at=? WHERE token_hash=?")
         .bind(stored_received)
         .bind(token_hash)
         .execute(&mut **tx)
@@ -659,7 +659,7 @@ struct HostRow {
     os_version: Option<String>,
     kernel_version: Option<String>,
     arch: String,
-    agent_version: String,
+    client_version: String,
     capabilities: Json<Vec<Capability>>,
     registered_at: DateTime<Utc>,
     last_seen_at: DateTime<Utc>,
@@ -676,12 +676,12 @@ struct HostRow {
     gpu_memory_usage_percent: Option<f64>,
 }
 
-const HOST_SELECT: &str = r#"SELECT h.host_id,h.name,h.os,h.os_version,h.kernel_version,h.arch,h.agent_version,
+const HOST_SELECT: &str = r#"SELECT h.host_id,h.name,h.os,h.os_version,h.kernel_version,h.arch,h.client_version,
  h.capabilities,h.registered_at,h.last_seen_at,h.latest_collected_at,h.latest_interval_seconds,
  r.cpu_usage_percent,r.memory_usage_percent,r.network_received_bytes_per_second,
  r.network_transmitted_bytes_per_second,r.disk_read_bytes_per_second,r.disk_written_bytes_per_second,
  r.max_temperature_celsius,r.gpu_utilization_percent,r.gpu_memory_usage_percent
- FROM monitored_hosts h LEFT JOIN agent_metric_reports r ON r.report_id=h.latest_report_id"#;
+ FROM monitored_hosts h LEFT JOIN client_metric_reports r ON r.report_id=h.latest_report_id"#;
 
 fn summarize(row: HostRow) -> HostSummary {
     HostSummary {
@@ -691,7 +691,7 @@ fn summarize(row: HostRow) -> HostSummary {
         os_version: row.os_version,
         kernel_version: row.kernel_version,
         arch: row.arch,
-        agent_version: row.agent_version,
+        client_version: row.client_version,
         registered_at: row.registered_at,
         last_seen_at: row.last_seen_at,
         latest_collected_at: row.latest_collected_at,
@@ -734,7 +734,7 @@ pub async fn list_hosts(
 pub async fn get_host(
     pool: &SqlitePool,
     host_id: Uuid,
-) -> anyhow::Result<Option<(HostSummary, Option<AgentReport>)>> {
+) -> anyhow::Result<Option<(HostSummary, Option<ClientReport>)>> {
     let sql = format!("{HOST_SELECT} WHERE h.host_id=? AND h.lifecycle_status='active'");
     let row: Option<HostRow> = sqlx::query_as(&sql)
         .bind(host_id)
@@ -743,8 +743,8 @@ pub async fn get_host(
     let Some(row) = row else {
         return Ok(None);
     };
-    let payload: Option<Json<AgentReport>> = sqlx::query_scalar(
-        "SELECT r.payload FROM monitored_hosts h LEFT JOIN agent_metric_reports r ON r.report_id=h.latest_report_id WHERE h.host_id=?",
+    let payload: Option<Json<ClientReport>> = sqlx::query_scalar(
+        "SELECT r.payload FROM monitored_hosts h LEFT JOIN client_metric_reports r ON r.report_id=h.latest_report_id WHERE h.host_id=?",
     ).bind(host_id).fetch_one(pool).await?;
     Ok(Some((summarize(row), payload.map(|json| json.0))))
 }
@@ -785,7 +785,7 @@ pub async fn history(
         r#"SELECT report_id,collected_at,received_at,cpu_usage_percent,memory_usage_percent,
          network_received_bytes_per_second,network_transmitted_bytes_per_second,disk_read_bytes_per_second,
          disk_written_bytes_per_second,max_temperature_celsius,gpu_utilization_percent,gpu_memory_usage_percent
-         FROM agent_metric_reports WHERE host_id=?1
+         FROM client_metric_reports WHERE host_id=?1
            AND (?2 IS NULL OR collected_at >= ?2)
            AND (?3 IS NULL OR collected_at <= ?3)
          ORDER BY collected_at DESC,report_id DESC LIMIT ?4"#,
@@ -862,9 +862,9 @@ pub async fn delete_host(pool: &SqlitePool, host_id: Uuid, actor: &str) -> anyho
         actor,
     )
     .await?;
-    sqlx::query("DELETE FROM agent_pairing_requests WHERE instance_id=? OR (requested_host_id=? AND status IN ('pending','denied'))")
+    sqlx::query("DELETE FROM client_pairing_requests WHERE instance_id=? OR (requested_host_id=? AND status IN ('pending','denied'))")
         .bind(host_id).bind(host_id).execute(&mut *tx).await?;
-    sqlx::query("DELETE FROM agent_instance_invites WHERE instance_id=?")
+    sqlx::query("DELETE FROM client_instance_invites WHERE instance_id=?")
         .bind(host_id)
         .execute(&mut *tx)
         .await?;
