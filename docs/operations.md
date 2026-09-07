@@ -36,11 +36,11 @@ manifest、生成 deterministic archive/checksum，随后解包、重定位、�
 篡改拒绝。已有归档或 checksum 不会被覆盖。`build.rs` 还会拒绝非目标编译，二进制在读取配置、打开
 SQLite 或监听端口前通过 `uname` 再确认 Linux/x86_64；三层检查均为 fail-closed。
 
-当前工作区通过本地路径联调 Foundation Rust 和八个 Web 包（contracts、http-client、admin-web、admin-ui、
-admin-shell、design-tokens、web-fonts、web-toolchain）。尚未满足独立发行条件，不能标记为已发布版本。
-React/Vite/TypeScript 基线与配置由 web-toolchain 维护；登录、Session、退出、诊断、主题和全局错误由共享 Shell 维护。
-P13 正式发行必须发布新的不可变 Foundation revision，不改写既有 tag；统一 Rust 精确来源、npm tarball URL
-及 SHA-512 integrity，并更新 gate 后在无 sibling Foundation 的干净 checkout 验收。
+当前 Server Rust 固定 Foundation 0.7.0 / `77e7ad7af8e1bf62432bd6bdd8fa9aff54cb39d1`，八个 Web 包使用
+同版正式 Release tarball 与 SHA-512 integrity，无相邻 Foundation 路径依赖；独立 CI 已通过，
+见[消费者证据](https://github.com/isarmg/sarmg-foundation-server/blob/main/consumers/axum-0.7.0-evidence.md)。Agent Foundation 是另一个独立上游，其版本不随 Server 包改写。
+React/Vite/TypeScript 基线与配置由 web-toolchain 维护；登录、Session、退出、主题和全局错误由共享 Shell 维护，诊断管理功能已移除。
+独立构建通过不等于当前主分支改动已进入产品 Release；发行仍须核对精确 tag、源码和全部门禁，不改写旧资产。
 Foundation 变更必须显式发布新版本并替换当前合同，同时通过 Host 的 Rust 全矩阵、Web clean build、
 SQLite reopen 与 Router→Agent 合同测试；不保留旧版本 fallback。
 
