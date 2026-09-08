@@ -161,12 +161,11 @@ Argon2id hash；Schema trigger 同时提升 `session_version`、撤销该账户�
 
 当前 reset CLI 的密码是 argv 参数，不支持 stdin/文件 Secret provider；这是明确的运维限制。不要把真实
 密码字面量写进可持久 Shell history、脚本、工单或日志，并限制同机进程列表与维护终端的访问。首次创建
-完成后从长期环境文件移除 bootstrap 明文密码。项目没有管理员创建/列表/禁用 Web API；不要把
-`_sarmg_administrators` 表可容纳多行误写成完整账户管理功能。
+完成后从长期环境文件移除 bootstrap 明文密码。管理 Web 只允许一个管理员，不提供创建管理员入口。账号名称与密码通过右上角人物图标修改；历史管理员记录不代表当前允许多个管理员。
 
 ## 5. Client 配置与诊断
 
-`config/host-monitor.json.example` 是当前完整字段样例；`application_version` 必须等于 `0.9.5`。默认采集
+`config/host-monitor.json.example` 是当前完整字段样例；Client 配置的 `application_version` 必须等于冻结格式 `0.9.4`，与 Server 程序版本独立。默认采集
 10 秒、慢速采集 30 秒、请求超时 10 秒、jitter 10%、spool 64 MiB。配对端点只接受 HTTPS；仅 debug
 构建另允许 loopback HTTP，release 拒绝。远程明文 HTTP 已删除；正式投递固定使用 HTTPS。自定义 CA 和客户端身份仍会执行正常证书、
 主机名与有效期验证。

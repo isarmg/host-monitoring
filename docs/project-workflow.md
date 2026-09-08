@@ -75,7 +75,7 @@ Session 与 CSRF 仅保存在该 client 的内存闭包。当前页面只请求 
 
 ## 4. Client 采集与投递
 
-长驻 Client 读取严格 `application_version=0.8.0` 配置并锁定 state directory，初始化 host identity、
+长驻 Client 读取严格 `application_version=0.9.4` 配置并锁定 state directory，初始化 host identity、
 采集器和 spool 后才报告服务 ready。按基础/慢速周期生成报告，周期加入受限 jitter；报告先入 spool，
 再通过当前 `/api/v2/host-monitor/report` 投递。关机信号停止新采集，并尽力收敛已拥有工作。
 
