@@ -409,12 +409,15 @@ pub fn validate_host(host: &HostIdentity) -> Result<()> {
         host.kernel_version.as_deref().unwrap_or(""),
         CLIENT_REPORT_MAX_HOST_VERSION_BYTES,
     )?;
-    if host.client_version != env!("CARGO_PKG_VERSION") {
-        return Err(Error::BadRequest(format!(
-            "unsupported host.client_version; expected {}",
-            env!("CARGO_PKG_VERSION")
-        )));
+    // Release numbers are independent of the validated wire schema. Keep the
+    // shipped 0.9.x clients usable while deploying server and client separately.
+    if !matches!(
+        host.client_version.as_str(),
+        "0.9.3" | "0.9.4" | "0.9.5" | "0.9.6" | "0.9.7"
+    ) {
+        return Err(Error::BadRequest("unsupported host.client_version".into()));
     }
+
     Ok(())
 }
 
@@ -543,4 +546,23 @@ pub fn host_status(last_seen: DateTime<Utc>, interval: Option<f64>) -> String {
         "offline"
     }
     .into()
+}
+
+#[cfg(test)]
+mod client_release_tests {
+    use super::*;
+    #[test]
+    fn validates_supported_client_releases_independently_of_server_release() {
+        let mut host: HostIdentity = serde_json::from_value(serde_json::json!({
+            "id": "018f1f4b-7a5d-7b5f-8d31-123456789abc", "os": "windows",
+            "arch": "x86_64", "client_version": "0.9.7"
+        }))
+        .unwrap();
+        for version in ["0.9.3", "0.9.4", "0.9.5", "0.9.6", "0.9.7"] {
+            host.client_version = version.into();
+            assert!(validate_host(&host).is_ok());
+        }
+        host.client_version = "0.1.0".into();
+        assert!(validate_host(&host).is_err());
+    }
 }

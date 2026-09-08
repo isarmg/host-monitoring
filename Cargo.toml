@@ -6,7 +6,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.9.3"
+version = "0.9.4"
 edition = "2024"
 rust-version = "1.98"
 authors = ["sarmg <isarmg@163.com>"]
@@ -22,18 +22,18 @@ thiserror = "2"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 host-protocol = { path = "protocol" }
-sarmg-admin-auth = { git = "https://github.com/isarmg/sarmg-foundation-server.git", rev = "77e7ad7af8e1bf62432bd6bdd8fa9aff54cb39d1", version = "=0.7.0" }
-sarmg-admin-core = { git = "https://github.com/isarmg/sarmg-foundation-server.git", rev = "77e7ad7af8e1bf62432bd6bdd8fa9aff54cb39d1", version = "=0.7.0" }
-sarmg-admin-axum = { git = "https://github.com/isarmg/sarmg-foundation-server.git", rev = "77e7ad7af8e1bf62432bd6bdd8fa9aff54cb39d1", version = "=0.7.0" }
-sarmg-admin-sqlite = { git = "https://github.com/isarmg/sarmg-foundation-server.git", rev = "77e7ad7af8e1bf62432bd6bdd8fa9aff54cb39d1", version = "=0.7.0" }
-sarmg-contracts = { git = "https://github.com/isarmg/sarmg-foundation-server.git", rev = "77e7ad7af8e1bf62432bd6bdd8fa9aff54cb39d1", version = "=0.7.0" }
-sarmg-error = { git = "https://github.com/isarmg/sarmg-foundation-server.git", rev = "77e7ad7af8e1bf62432bd6bdd8fa9aff54cb39d1", version = "=0.7.0" }
-sarmg-fs-safety = { git = "https://github.com/isarmg/sarmg-foundation-server.git", rev = "77e7ad7af8e1bf62432bd6bdd8fa9aff54cb39d1", version = "=0.7.0" }
-sarmg-secure-http = { git = "https://github.com/isarmg/sarmg-foundation-server.git", rev = "77e7ad7af8e1bf62432bd6bdd8fa9aff54cb39d1", version = "=0.7.0" }
-sarmg-schema-identity = { git = "https://github.com/isarmg/sarmg-foundation-server.git", rev = "77e7ad7af8e1bf62432bd6bdd8fa9aff54cb39d1", version = "=0.7.0" }
-sarmg-server-runtime = { git = "https://github.com/isarmg/sarmg-foundation-server.git", rev = "77e7ad7af8e1bf62432bd6bdd8fa9aff54cb39d1", version = "=0.7.0" }
-sarmg-server-target = { git = "https://github.com/isarmg/sarmg-foundation-server.git", rev = "77e7ad7af8e1bf62432bd6bdd8fa9aff54cb39d1", version = "=0.7.0" }
-sarmg-sqlite = { git = "https://github.com/isarmg/sarmg-foundation-server.git", rev = "77e7ad7af8e1bf62432bd6bdd8fa9aff54cb39d1", version = "=0.7.0" }
+sarmg-admin-auth = { git = "https://github.com/isarmg/sarmg-foundation-server.git", rev = "8beed96c7145e071ff5cff36dd9e1418d7ac4228", version = "=0.7.2" }
+sarmg-admin-core = { git = "https://github.com/isarmg/sarmg-foundation-server.git", rev = "8beed96c7145e071ff5cff36dd9e1418d7ac4228", version = "=0.7.2" }
+sarmg-admin-axum = { git = "https://github.com/isarmg/sarmg-foundation-server.git", rev = "8beed96c7145e071ff5cff36dd9e1418d7ac4228", version = "=0.7.2" }
+sarmg-admin-sqlite = { git = "https://github.com/isarmg/sarmg-foundation-server.git", rev = "8beed96c7145e071ff5cff36dd9e1418d7ac4228", version = "=0.7.2" }
+sarmg-contracts = { git = "https://github.com/isarmg/sarmg-foundation-server.git", rev = "8beed96c7145e071ff5cff36dd9e1418d7ac4228", version = "=0.7.2" }
+sarmg-error = { git = "https://github.com/isarmg/sarmg-foundation-server.git", rev = "8beed96c7145e071ff5cff36dd9e1418d7ac4228", version = "=0.7.2" }
+sarmg-fs-safety = { git = "https://github.com/isarmg/sarmg-foundation-server.git", rev = "8beed96c7145e071ff5cff36dd9e1418d7ac4228", version = "=0.7.2" }
+sarmg-secure-http = { git = "https://github.com/isarmg/sarmg-foundation-server.git", rev = "8beed96c7145e071ff5cff36dd9e1418d7ac4228", version = "=0.7.2" }
+sarmg-schema-identity = { git = "https://github.com/isarmg/sarmg-foundation-server.git", rev = "8beed96c7145e071ff5cff36dd9e1418d7ac4228", version = "=0.7.2" }
+sarmg-server-runtime = { git = "https://github.com/isarmg/sarmg-foundation-server.git", rev = "8beed96c7145e071ff5cff36dd9e1418d7ac4228", version = "=0.7.2" }
+sarmg-server-target = { git = "https://github.com/isarmg/sarmg-foundation-server.git", rev = "8beed96c7145e071ff5cff36dd9e1418d7ac4228", version = "=0.7.2" }
+sarmg-sqlite = { git = "https://github.com/isarmg/sarmg-foundation-server.git", rev = "8beed96c7145e071ff5cff36dd9e1418d7ac4228", version = "=0.7.2" }
 uuid = { version = "1", features = ["serde", "v4"] }
 
 [profile.release]

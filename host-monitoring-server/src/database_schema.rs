@@ -17,6 +17,8 @@ use std::os::unix::fs::OpenOptionsExt;
 
 pub const APPLICATION: &str = "host-monitoring";
 pub const APPLICATION_VERSION: &str = env!("CARGO_PKG_VERSION");
+// Persisted schema identity changes only with a data-format migration.
+const SCHEMA_APPLICATION_VERSION: &str = "0.9.3";
 pub const SCHEMA_REVISION: i64 = 4;
 pub const SCHEMA_SHA256: &str = "138b1e3d3b2fa329d130a1ac646cf08d23ae69c8edb64f55f54fb070c2645dd0";
 
@@ -131,7 +133,7 @@ pub async fn initialize_empty(pool: &SqlitePool) -> anyhow::Result<()> {
          ) VALUES(1,?,?,?,?)",
     )
     .bind(APPLICATION)
-    .bind(APPLICATION_VERSION)
+    .bind(SCHEMA_APPLICATION_VERSION)
     .bind(SCHEMA_REVISION)
     .bind(SCHEMA_SHA256)
     .execute(&mut *transaction)
@@ -239,7 +241,7 @@ fn validate_connection_contract(connection: &Connection) -> anyhow::Result<()> {
 pub fn expected_identity() -> anyhow::Result<SchemaIdentity> {
     SchemaIdentity::new(
         APPLICATION,
-        APPLICATION_VERSION,
+        SCHEMA_APPLICATION_VERSION,
         u64::try_from(SCHEMA_REVISION).context("schema revision must not be negative")?,
         SCHEMA_SHA256,
     )
