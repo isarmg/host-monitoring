@@ -413,7 +413,7 @@ pub fn validate_host(host: &HostIdentity) -> Result<()> {
     // shipped 0.9.x clients usable while deploying server and client separately.
     if !matches!(
         host.client_version.as_str(),
-        "0.9.3" | "0.9.4" | "0.9.5" | "0.9.6" | "0.9.7"
+        "0.9.3" | "0.9.4" | "0.9.5" | "0.9.6" | "0.9.7" | "0.9.8"
     ) {
         return Err(Error::BadRequest("unsupported host.client_version".into()));
     }
@@ -558,7 +558,7 @@ mod client_release_tests {
             "arch": "x86_64", "client_version": "0.9.7"
         }))
         .unwrap();
-        for version in ["0.9.3", "0.9.4", "0.9.5", "0.9.6", "0.9.7"] {
+        for version in ["0.9.3", "0.9.4", "0.9.5", "0.9.6", "0.9.7", "0.9.8"] {
             host.client_version = version.into();
             assert!(validate_host(&host).is_ok());
         }
