@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import re
 import stat
 import tempfile
@@ -21,6 +22,24 @@ SPEC.loader.exec_module(PACKAGE)
 
 
 class ReleaseToolingTests(unittest.TestCase):
+    def test_manifest_writer_accepts_current_schema_and_rejects_old_schema(self) -> None:
+        script = SCRIPT.with_name("write-server-release-manifest.py")
+        spec = importlib.util.spec_from_file_location("manifest_writer", script)
+        assert spec is not None and spec.loader is not None
+        writer = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(writer)
+        identity = json.loads((SCRIPT.parent.parent / "host-monitoring-server/release.json").read_text())
+        identity["source_revision"] = "a" * 40
+        for revision, accepted in [(4, True), (3, False)]:
+            identity["schema_revision"] = revision
+            result = MagicMock(returncode=0, stderr=b"", stdout=(json.dumps(identity) + "\n").encode())
+            with patch.object(writer.subprocess, "run", return_value=result):
+                if accepted:
+                    self.assertEqual(writer.read_identity(Path("/unused/binary"))[0], identity)
+                else:
+                    with self.assertRaises(SystemExit):
+                        writer.read_identity(Path("/unused/binary"))
+
     def test_readiness_requires_current_endpoint_and_exact_ready_response(self) -> None:
         for status, body, expected in [
             (200, b'{"ready":true}', True),
@@ -49,7 +68,7 @@ class ReleaseToolingTests(unittest.TestCase):
         readme = repository / PACKAGE.RELEASE_README
         text = readme.read_text(encoding="utf-8")
         self.assertGreater(len(text.encode("utf-8")), 10_000)
-        self.assertIn("Host Monitoring Server 0.9.4 发行包部署手册", text)
+        self.assertIn("Host Monitoring Server 0.9.5 发行包部署手册", text)
         self.assertIn("bin/host-monitoring-server", text)
         self.assertIn("systemd/host-monitoring-server.service", text)
         self.assertIn("RELEASE-MANIFEST.json", text)
