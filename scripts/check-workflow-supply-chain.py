@@ -20,6 +20,7 @@ EXACT_DESKTOP_MATRIX = "os: [ubuntu-24.04, windows-2025, macos-26]"
 MAX_TIMEOUT_MINUTES = 60
 MAX_WORKFLOW_BYTES = 1024 * 1024
 PINNED_OFFICIAL_ACTIONS = {
+    "actions/download-artifact": "3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c",
     "actions/upload-artifact": "043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
     # Exact official commits already selected by this repository.
     "actions/checkout": "3d3c42e5aac5ba805825da76410c181273ba90b1",
@@ -197,12 +198,34 @@ def validate_job(source: str, header: Line, segment: list[Line]) -> None:
         len(segment),
     )
     entries = segment[permission_index + 1 : permission_end]
-    if len(entries) != 1 or entries[0].indent != 6 or entries[0].content != "contents: read":
+    is_release_publisher = (
+        source == ".github/workflows/release-build.yml"
+        and header.content == "publish:"
+    )
+    expected_permission = "contents: write" if is_release_publisher else "contents: read"
+    if (
+        len(entries) != 1
+        or entries[0].indent != 6
+        or entries[0].content != expected_permission
+    ):
         raise fail(
             source,
             entries[0] if entries else permissions[0],
-            "job permissions must contain only contents: read",
+            f"job permissions must contain only {expected_permission}",
         )
+
+    if is_release_publisher:
+        needs = [
+            line
+            for line in segment
+            if line.indent == 4 and line.content == "needs: build"
+        ]
+        if len(needs) != 1:
+            raise fail(
+                source,
+                header,
+                "the privileged publish job must depend directly on the read-only build job",
+            )
 
 
 def validate_checkout_credentials(
@@ -376,6 +399,19 @@ jobs:
           persist-credentials: false
 """
     validate_workflow("positive-fixture.yml", base)
+    publish = base.replace(
+        "  test:\n",
+        "  build:\n",
+    ) + f"""  publish:
+    needs: build
+    permissions:
+      contents: write
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/download-artifact@{PINNED_OFFICIAL_ACTIONS['actions/download-artifact']}
+"""
+    validate_workflow(".github/workflows/release-build.yml", publish)
     matrix = base.replace(
         "    runs-on: ubuntu-24.04\n",
         "    strategy:\n"
