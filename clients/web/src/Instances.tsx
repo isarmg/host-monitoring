@@ -52,7 +52,7 @@ export function Instances({ hostsChanged, openCreateSignal = 0, refreshSignal = 
     setActivation(null);
     if (window.location.pathname.startsWith("/activate/")) window.history.replaceState(null, "", "/#instances");
   }
-  return <section aria-labelledby="instances-heading"><h2 id="instances-heading">{t("实例配对状态", "Instance pairing status")}</h2>
+  return <section className="sarmg-content-stack" aria-labelledby="instances-heading"><h2 id="instances-heading">{t("实例配对状态", "Instance pairing status")}</h2>
     <p>{t("新建实例后获得配对码，不设有效期；成功配对后失效，也可在配对前自行取消。", "Creating an instance gives you a pairing code without an expiry. It is invalidated after successful pairing and can be cancelled before pairing.")}</p>
 
     {failure ? <ErrorState requestId={failure.requestId} onRetry={refresh}>{t("无法加载实例", "Unable to load instances")}</ErrorState>

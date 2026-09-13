@@ -2,7 +2,7 @@ name: Release build
 
 on:
   push:
-    tags: [v0.9.8]
+    tags: [v0.9.9]
 
 permissions: {}
 

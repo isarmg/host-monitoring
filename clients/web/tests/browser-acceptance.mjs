@@ -41,6 +41,19 @@ try {
       await page.goto(`http://127.0.0.1:${address.port}`);
       await page.getByRole("button", { name: "选择实例 Host-0", exact: true }).waitFor();
       await checkHeaderActions(page, "/monitoring/hosts");
+      const spacing = await page.evaluate(() => {
+        const header = document.querySelector(".sarmg-page-header");
+        const first = document.querySelector("#instances-heading");
+        const firstSection = first?.closest("section");
+        const second = [...document.querySelectorAll("h2")].find(node => node.textContent === "已配对主机");
+        if (!header || !first || !firstSection || !second) throw new Error("Host spacing fixture is incomplete");
+        return {
+          menuToFirst: first.getBoundingClientRect().top - header.getBoundingClientRect().bottom,
+          sectionToSubheading: second.getBoundingClientRect().top - firstSection.getBoundingClientRect().bottom,
+        };
+      });
+      assert.ok(Math.abs(spacing.menuToFirst - 16) < 2, JSON.stringify(spacing));
+      assert.ok(Math.abs(spacing.sectionToSubheading - 16) < 2, JSON.stringify(spacing));
       const sidebar = page.getByRole("region", { name: "监控实例" });
       const selectedStyle = await page.getByRole("banner").getByRole("button", { name: "实例", exact: true }).evaluate(button => {
         const style = getComputedStyle(button); return { shadow: style.boxShadow, decoration: style.textDecorationLine, background: style.backgroundColor };
